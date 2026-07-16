@@ -222,6 +222,30 @@ document.querySelectorAll("[data-mode]").forEach(button => button.addEventListen
 $("#open-forgot").addEventListener("click", () => mode("forgot"));
 $("#forgot-back").addEventListener("click", () => mode("login"));
 document.querySelectorAll("[data-login-method]").forEach(button => button.addEventListener("click", () => loginMethod(button.dataset.loginMethod)));
+function agentPlatform(name) {
+  document.querySelectorAll("[data-agent-platform]").forEach(button => {
+    const selected = button.dataset.agentPlatform === name;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  document.querySelectorAll("[data-agent-panel]").forEach(panel => panel.classList.toggle("hidden", panel.dataset.agentPanel !== name));
+  $("#copy-feedback").textContent = "";
+}
+const setupCommands = {
+  windows: ['Windows PowerShell', 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code'],
+  macos: ['macOS Terminal', 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code'],
+  linux: ['Linux Terminal', 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code'],
+};
+function agentOperatingSystem(name) {
+  const [label, command] = setupCommands[name] || setupCommands.linux;
+  $("#setup-command-label").textContent = `Perintah ${label}`;
+  $("#setup-code-command").textContent = command;
+  document.querySelectorAll("[data-agent-os]").forEach(link => link.classList.toggle("active", link.dataset.agentOs === name));
+}
+document.querySelectorAll("[data-agent-platform]").forEach(button => button.addEventListener("click", () => agentPlatform(button.dataset.agentPlatform)));
+document.querySelectorAll("[data-agent-os]").forEach(link => link.addEventListener("click", () => agentOperatingSystem(link.dataset.agentOs)));
+$("#use-companion-agent").addEventListener("click", () => agentPlatform("computer"));
+agentOperatingSystem(/Win/i.test(navigator.platform) ? "windows" : /Mac/i.test(navigator.platform) ? "macos" : "linux");
 document.querySelectorAll("[data-setup-back]").forEach(button => button.addEventListener("click", () => setSetupStep(onboarding.step - 1)));
 document.querySelectorAll("[data-setup-next], [data-setup-skip]").forEach(button => button.addEventListener("click", () => {
   setSetupStep(onboarding.step + 1);

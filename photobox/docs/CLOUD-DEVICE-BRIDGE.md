@@ -28,6 +28,12 @@ dipakai langsung oleh booth menggunakan `getUserMedia()`. Browser tetap akan
 menampilkan izin kamera untuk domain Photoslive pada pemakaian pertama. Kamera
 DSLR/mirrorless dan printer harus melalui Agent.
 
+Pada pemasangan pertama, halaman `/setup` menyediakan installer Agent terpisah
+untuk Windows, macOS, dan Linux. Android/iPad dapat menjalankan layar booth dan
+kamera browser, tetapi belum dapat menjadi Agent perangkat: printer USB,
+DSLR/mirrorless, telemetry mesin, dan pairing tetap memerlukan satu komputer
+pendamping Windows, macOS, atau Linux.
+
 ## Alur pairing mesin
 
 1. Admin membuka **Mesin > Hubungkan ke cloud** pada mini PC.

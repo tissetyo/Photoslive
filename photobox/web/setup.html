@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Setup Photoslive</title>
   <link rel="stylesheet" href="/platform.css?v=2">
-  <link rel="stylesheet" href="/setup.css?v=3">
+  <link rel="stylesheet" href="/setup.css?v=4">
 </head>
 <body>
   <div class="platform-shell">
@@ -128,17 +128,48 @@
         <aside class="agent-recovery" id="agent-recovery">
           <div class="recovery-heading">
             <span class="recovery-icon"><img src="/icons/terminal.svg" alt=""></span>
-            <div><b>Mesin sudah pernah dipasangkan?</b><p>Buat kode setup baru dari mini PC. Kode berlaku selama 15 menit.</p></div>
+            <div><b>Belum punya kode setup?</b><p>Pilih perangkat yang akan menjalankan Photoslive.</p></div>
           </div>
-          <div class="command-box">
-            <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code</code>
-            <button type="button" id="copy-setup-command" aria-label="Salin perintah"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
+
+          <div class="agent-platform-switch" role="group" aria-label="Jenis perangkat">
+            <button type="button" class="active" data-agent-platform="computer" aria-pressed="true"><img src="/icons/monitor.svg" alt="">Komputer</button>
+            <button type="button" data-agent-platform="tablet" aria-pressed="false"><img src="/icons/tablet.svg" alt="">Android / iPad</button>
+          </div>
+
+          <div class="agent-platform-panel" data-agent-panel="computer">
+            <ol class="install-steps">
+              <li><span>1</span><div><b>Pertama kali memasang</b><p>Download dan jalankan installer sesuai sistem operasi.</p></div></li>
+              <li><span>2</span><div><b>Buat kode setup</b><p>Setelah Agent aktif, jalankan perintah di bawah. Kode berlaku 15 menit.</p></div></li>
+            </ol>
+            <div class="installer-links" aria-label="Download Photoslive Agent">
+              <a href="/downloads/install-windows.ps1" download data-agent-os="windows"><img src="/icons/download.svg" alt="">Windows</a>
+              <a href="/downloads/install-macos.sh" download data-agent-os="macos"><img src="/icons/download.svg" alt="">macOS</a>
+              <a href="/downloads/install-linux.sh" download data-agent-os="linux"><img src="/icons/download.svg" alt="">Linux</a>
+            </div>
+            <b class="command-label" id="setup-command-label">Perintah Linux Terminal</b>
+            <div class="command-box">
+              <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code</code>
+              <button type="button" id="copy-setup-command" aria-label="Salin perintah"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
+            </div>
+            <p class="platform-hint">Sudah pernah memasang Agent? Lewati download dan langsung buat kode baru.</p>
+          </div>
+
+          <div class="agent-platform-panel hidden" data-agent-panel="tablet">
+            <div class="tablet-capability">
+              <span><img src="/icons/camera.svg" alt=""></span>
+              <div><b>Kamera tablet bisa langsung</b><p>Booth dapat memakai kamera Android atau iPad melalui izin kamera di browser.</p></div>
+            </div>
+            <div class="tablet-limit">
+              <img src="/icons/info.svg" alt="">
+              <p>Untuk printer USB, DSLR/mirrorless, monitoring storage, dan kode setup ini, hubungkan satu komputer Windows, macOS, atau Linux yang menjalankan Agent.</p>
+            </div>
+            <button type="button" class="btn use-companion-agent" id="use-companion-agent"><img src="/icons/monitor.svg" alt="">Siapkan komputer pendamping</button>
           </div>
           <p class="copy-feedback" id="copy-feedback" role="status"></p>
         </aside>
       </section>
     </main>
   </div>
-  <script src="/setup.js?v=5" defer></script>
+  <script src="/setup.js?v=6" defer></script>
 </body>
 </html>
