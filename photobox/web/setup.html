@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Setup Photoslive</title>
   <link rel="stylesheet" href="/platform.css?v=2">
-  <link rel="stylesheet" href="/setup.css?v=2">
+  <link rel="stylesheet" href="/setup.css?v=3">
 </head>
 <body>
   <div class="platform-shell">
@@ -25,18 +25,67 @@
           <button type="button" data-mode="login">Sudah punya akun</button>
         </div>
 
-        <form id="setup-form">
-          <div class="form-grid">
-            <label class="full">Kode setup<input id="pairing-code" maxlength="9" placeholder="ABCD-1234" required></label>
-            <label>Nama photobox<input id="booth-name" placeholder="Photoslive Booth 01" required></label>
-            <label>Lokasi<input id="booth-location" placeholder="Main Hall"></label>
-            <label class="full">Email pemilik<input id="owner-email" type="email" autocomplete="email" required></label>
-            <label>Password<input id="owner-password" type="password" minlength="8" autocomplete="new-password" required></label>
-            <label>Nama pengguna<input id="owner-name" placeholder="Pemilik"></label>
-            <label>PIN admin (6 angka)<input id="owner-pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label>
-            <label>Konfirmasi PIN<input id="owner-pin-confirm" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label>
-          </div>
-          <div class="form-actions"><button class="btn primary">Selesaikan setup</button></div>
+        <div class="wizard-progress" id="wizard-progress">
+          <div><span id="wizard-step-label">Langkah 1 dari 6</span><b id="wizard-step-name">Hubungkan mesin</b></div>
+          <div class="progress-track" aria-hidden="true"><i id="wizard-progress-bar"></i></div>
+        </div>
+
+        <form id="setup-form" novalidate>
+          <section class="setup-step" data-setup-step="1">
+            <div class="step-intro"><span><img src="/icons/terminal.svg" alt=""></span><div><h2>Masukkan kode setup</h2><p>Kode berasal dari Photoslive Agent dan berlaku selama 15 menit.</p></div></div>
+            <label>Kode setup<input id="pairing-code" maxlength="9" autocomplete="one-time-code" placeholder="ABCD-1234" required></label>
+            <div class="form-actions"><button class="btn primary">Periksa kode <img src="/icons/arrow-right.svg" alt=""></button></div>
+          </section>
+
+          <section class="setup-step hidden" data-setup-step="2">
+            <div class="step-intro"><span><img src="/icons/camera.svg" alt=""></span><div><h2>Kenali photobox ini</h2><p>Nama akan tampil di dashboard dan lokasi membantu saat memantau banyak mesin.</p></div></div>
+            <div class="form-grid">
+              <label class="full">Nama photobox<input id="booth-name" placeholder="Photoslive Booth 01" required></label>
+              <label class="full">Lokasi <small>Opsional</small><input id="booth-location" placeholder="Contoh: Main Hall"></label>
+            </div>
+            <div class="form-actions between"><button type="button" class="btn" data-setup-back>Kembali</button><button class="btn primary">Lanjutkan <img src="/icons/arrow-right.svg" alt=""></button></div>
+          </section>
+
+          <section class="setup-step hidden" data-setup-step="3">
+            <div class="step-intro"><span><img src="/icons/shield-check.svg" alt=""></span><div><h2>Buat akses pemilik</h2><p>Email dan PIN wajib. PIN enam angka menjadi cara tercepat masuk ke admin.</p></div></div>
+            <div class="form-grid">
+              <label class="full">Email pemilik<input id="owner-email" type="email" autocomplete="email" placeholder="nama@email.com" required></label>
+              <label>PIN admin<input id="owner-pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="new-password" placeholder="6 angka" required></label>
+              <label>Konfirmasi PIN<input id="owner-pin-confirm" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="new-password" placeholder="Ulangi PIN" required></label>
+            </div>
+            <div class="required-note"><img src="/icons/info.svg" alt="">Email dan PIN tidak dapat dilewati.</div>
+            <div class="form-actions between"><button type="button" class="btn" data-setup-back>Kembali</button><button class="btn primary">Buat photobox <img src="/icons/arrow-right.svg" alt=""></button></div>
+          </section>
+
+          <section class="setup-step hidden" data-setup-step="4">
+            <div class="step-intro"><span><img src="/icons/scan-line.svg" alt=""></span><div><h2>Sambungkan perangkat</h2><p>Nyalakan kamera dan printer. Photoslive Agent akan mendeteksinya otomatis.</p></div></div>
+            <div class="device-onboarding-grid">
+              <article id="onboarding-camera"><span><img src="/icons/camera.svg" alt=""></span><div><b>Kamera</b><small>Belum diperiksa</small></div><i></i></article>
+              <article id="onboarding-printer"><span><img src="/icons/printer.svg" alt=""></span><div><b>Printer</b><small>Belum diperiksa</small></div><i></i></article>
+            </div>
+            <p class="inline-status" id="device-onboarding-status" role="status"></p>
+            <div class="onboarding-tools"><button type="button" class="btn" id="refresh-onboarding-devices"><img src="/icons/refresh-cw.svg" alt="">Periksa perangkat</button></div>
+            <div class="form-actions between"><button type="button" class="text-button skip-step" data-setup-skip>Lewati dulu</button><button type="button" class="btn primary" data-setup-next>Lanjutkan <img src="/icons/arrow-right.svg" alt=""></button></div>
+          </section>
+
+          <section class="setup-step hidden" data-setup-step="5">
+            <div class="step-intro"><span><img src="/icons/layers-3.svg" alt=""></span><div><h2>Pilih frame pertama</h2><p>Gunakan desain bawaan atau upload background frame sendiri.</p></div></div>
+            <div class="starter-frame-grid" id="starter-frame-grid">
+              <button type="button" class="starter-frame active" data-frame-choice="clean-white"><span class="frame-mini clean"><i></i><i></i><i></i></span><b>Clean white</b><small>3 foto</small></button>
+              <button type="button" class="starter-frame" data-frame-choice="party-night"><span class="frame-mini night"><i></i><i></i><i></i></span><b>Party night</b><small>3 foto</small></button>
+              <button type="button" class="starter-frame upload" id="upload-starter-frame"><span><img src="/icons/image-plus.svg" alt=""></span><b>Upload frame</b><small>PNG, JPG, atau WebP</small></button>
+            </div>
+            <input class="hidden" id="starter-frame-file" type="file" accept="image/png,image/jpeg,image/webp">
+            <p class="inline-status" id="frame-onboarding-status" role="status"></p>
+            <div class="form-actions between"><button type="button" class="text-button skip-step" data-setup-skip>Gunakan bawaan</button><button type="button" class="btn primary" id="save-onboarding-frame">Lanjutkan <img src="/icons/arrow-right.svg" alt=""></button></div>
+          </section>
+
+          <section class="setup-step hidden" data-setup-step="6">
+            <div class="ready-mark"><img src="/icons/circle-check.svg" alt=""></div>
+            <div class="ready-copy"><h2>Photobox siap digunakan</h2><p>Pengaturan dasar selesai. Anda bisa menyempurnakan tampilan, pembayaran, dan sesi dari admin.</p></div>
+            <div class="ready-checklist" id="ready-checklist"></div>
+            <div class="form-actions"><button type="button" class="btn primary wide-action" id="finish-onboarding">Buka admin <img src="/icons/arrow-right.svg" alt=""></button></div>
+          </section>
         </form>
 
         <form id="login-form" class="hidden">
@@ -90,6 +139,6 @@
       </section>
     </main>
   </div>
-  <script src="/setup.js?v=4" defer></script>
+  <script src="/setup.js?v=5" defer></script>
 </body>
 </html>

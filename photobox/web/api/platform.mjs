@@ -69,10 +69,32 @@ async function resolveBooth(redis, code) {
   return { boothCode, machineId, name: machine.name, location: machine.location || "", enabled: machine.accessEnabled !== false, online: Boolean(lastSeen && Date.now() - lastSeen < 90_000), agentVersion: machine.agentVersion };
 }
 
+async function validateSetupCode(redis, payload) {
+  const code = String(payload.pairingCode || "").trim().toUpperCase();
+  if (!code) return json({ error: "Masukkan kode setup dari Photoslive Agent" }, 400);
+  const machineId = await redis.get(`photoslive:pairing:${code}`);
+  if (!machineId) return json({ error: "Kode setup tidak ditemukan atau sudah kedaluwarsa. Buat kode baru dari Agent." }, 404);
+  const machine = await redis.get(machineKey(machineId));
+  if (!machine) return json({ error: "Mesin tidak ditemukan" }, 404);
+  const lastSeen = machine.lastSeenAt ? Date.parse(machine.lastSeenAt) : 0;
+  return json({
+    valid: true,
+    machine: {
+      id: machine.id,
+      name: machine.name || "Photoslive Booth",
+      location: machine.location || "",
+      platform: machine.platform || "Unknown",
+      agentVersion: machine.agentVersion || "",
+      online: Boolean(lastSeen && Date.now() - lastSeen < 90_000),
+      devices: Array.isArray(machine.devices) ? machine.devices : [],
+    },
+  });
+}
+
 async function setupBooth(redis, payload) {
   const code = String(payload.pairingCode || "").trim().toUpperCase();
   const email = normalizeEmail(payload.email);
-  if (!code || !email || String(payload.password || "").length < 8) return json({ error: "Kode setup, email, dan password minimal 8 karakter wajib diisi" }, 400);
+  if (!code || !email) return json({ error: "Kode setup dan email wajib diisi" }, 400);
   if (!/^\d{6}$/.test(String(payload.pin || "")) || payload.pin !== payload.confirmPin) return json({ error: "PIN harus 6 angka dan konfirmasinya harus sama" }, 400);
   const machineId = await redis.get(`photoslive:pairing:${code}`);
   if (!machineId) return json({ error: "Kode setup tidak ditemukan atau sudah kedaluwarsa. Jalankan Agent dengan --setup-code." }, 404);
@@ -90,7 +112,7 @@ async function setupBooth(redis, payload) {
   machine.pairedAt ||= now();
   machine.setupAt = now();
   delete machine.pairingCode;
-  const user = { id: randomId("user"), boothCode, machineId, email, name: String(payload.userName || "Pemilik").slice(0, 80), role: "owner", passwordHash: await hashCredential(payload.password), pinHash: await hashCredential(payload.pin), createdAt: now(), active: true };
+  const user = { id: randomId("user"), boothCode, machineId, email, name: "Pemilik", role: "owner", passwordHash: payload.password ? await hashCredential(payload.password) : "", pinHash: await hashCredential(payload.pin), createdAt: now(), active: true };
   await redis.set(machineKey(machineId), machine);
   await redis.set(boothKey(boothCode), machineId);
   await redis.set(userKey(user.id), user);
@@ -269,6 +291,7 @@ async function handler(request) {
     if (action === "health") return json({ status: "ok", time: now() });
     const redis = getRedis();
     if (action === "resolve_booth" && request.method === "GET") { const booth = await resolveBooth(redis, payload.booth); return booth ? json({ booth }) : json({ error: "Photobox tidak ditemukan" }, 404); }
+    if (action === "validate_setup" && request.method === "POST") return validateSetupCode(redis, payload);
     if (action === "setup" && request.method === "POST") return setupBooth(redis, payload);
     if (action === "login" && request.method === "POST") return login(redis, payload);
     if (action === "superadmin_login" && request.method === "POST") return superadminLogin(redis, payload);

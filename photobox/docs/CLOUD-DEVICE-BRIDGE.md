@@ -32,13 +32,17 @@ DSLR/mirrorless dan printer harus melalui Agent.
 
 1. Admin membuka **Mesin > Hubungkan ke cloud** pada mini PC.
 2. Agent membuat kode pairing/setup sekali pakai yang berlaku 15 menit.
-3. Admin memasukkan kode pada `/setup` dan membuat akun pemilik serta PIN.
-4. Setelah berhasil, kode sekali pakai dihapus (`pairingCode` menjadi `null`)
+3. Admin memasukkan kode pada `/setup`. Cloud memvalidasi kode tanpa menghapusnya,
+   lalu wizard meminta nama, lokasi, email, dan PIN pemilik.
+4. Setelah email dan PIN berhasil disimpan, kode sekali pakai dihapus
+   (`pairingCode` menjadi `null`)
    dan `boothCode` permanen digunakan untuk URL tenant.
-5. Cloud menerbitkan `machine_id` dan credential khusus mesin.
-6. Credential disimpan oleh service lokal dengan permission file terbatas,
+5. Wizard memeriksa kamera/printer dari heartbeat Agent dan menawarkan frame
+   awal. Kedua langkah ini boleh dilewati dan diselesaikan dari admin.
+6. Cloud menerbitkan `machine_id` dan credential khusus mesin.
+7. Credential disimpan oleh service lokal dengan permission file terbatas,
    tidak di localStorage dan tidak pernah dikirim ke browser pelanggan.
-7. Agent mengirim heartbeat berkala. Dashboard menampilkan status *online*,
+8. Agent mengirim heartbeat berkala. Dashboard menampilkan status *online*,
    waktu terakhir terhubung, perangkat aktif, dan versi Agent.
 
 Credential harus dapat dicabut dan dirotasi dari admin. Satu credential hanya
