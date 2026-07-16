@@ -1,14 +1,15 @@
 $ErrorActionPreference = "Stop"
 $InstallDir = Join-Path $env:LOCALAPPDATA "Photoslive"
-$Archive = Join-Path $env:TEMP "photoslive-main.zip"
+$Archive = Join-Path $env:TEMP "photoslive-agent.zip"
 $Extract = Join-Path $InstallDir "source"
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "Install Python 3 terlebih dahulu dan aktifkan Add Python to PATH." }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Invoke-WebRequest -Uri "https://github.com/tissetyo/Photoslive/archive/refs/heads/main.zip" -OutFile $Archive
+Invoke-WebRequest -Uri "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -OutFile $Archive
 Remove-Item -Recurse -Force $Extract -ErrorAction SilentlyContinue
 Expand-Archive -Path $Archive -DestinationPath $Extract -Force
-$SourceDir = Join-Path (Get-ChildItem $Extract -Directory | Select-Object -First 1).FullName "photobox"
+$SourceDir = Join-Path $Extract "photobox"
+if (-not (Test-Path (Join-Path $SourceDir "agent.py"))) { throw "Paket Photoslive Agent tidak valid." }
 $Python = (Get-Command python).Source
 
 schtasks /Delete /TN "Photoslive Controller" /F 2>$null | Out-Null

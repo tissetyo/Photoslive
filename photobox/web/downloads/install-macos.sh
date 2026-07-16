@@ -3,13 +3,14 @@ set -euo pipefail
 
 INSTALL_DIR="${HOME}/Library/Application Support/Photoslive"
 LAUNCH_DIR="${HOME}/Library/LaunchAgents"
-ARCHIVE="${TMPDIR:-/tmp}/photoslive-main.zip"
+ARCHIVE="${TMPDIR:-/tmp}/photoslive-agent.zip"
 
 mkdir -p "${INSTALL_DIR}" "${LAUNCH_DIR}"
-curl -fL "https://github.com/tissetyo/Photoslive/archive/refs/heads/main.zip" -o "${ARCHIVE}"
+curl -fL "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -o "${ARCHIVE}"
 rm -rf "${INSTALL_DIR}/source"
 unzip -q "${ARCHIVE}" -d "${INSTALL_DIR}/source"
-SOURCE_DIR="$(find "${INSTALL_DIR}/source" -maxdepth 1 -type d -name 'Photoslive-*' | head -n 1)/photobox"
+SOURCE_DIR="${INSTALL_DIR}/source/photobox"
+test -f "${SOURCE_DIR}/agent.py" || { echo "Paket Photoslive Agent tidak valid."; exit 1; }
 PYTHON="$(command -v python3)"
 
 cat > "${LAUNCH_DIR}/app.photoslive.controller.plist" <<EOF
