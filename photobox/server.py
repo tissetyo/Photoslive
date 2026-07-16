@@ -1351,6 +1351,9 @@ class ApiHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("X-Content-Type-Options", "nosniff")
         super().end_headers()
 
     def send_json(self, payload: Any, status: int = HTTPStatus.OK) -> None:
