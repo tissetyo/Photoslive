@@ -41,13 +41,26 @@ $("#forgot-back").addEventListener("click", () => mode("login"));
 $("#copy-setup-command").addEventListener("click", async () => {
   const command = $("#setup-code-command").textContent;
   try {
-    await navigator.clipboard.writeText(command);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(command);
+    } else {
+      const temporary = document.createElement("textarea");
+      temporary.value = command;
+      temporary.setAttribute("readonly", "");
+      temporary.style.position = "fixed";
+      temporary.style.opacity = "0";
+      document.body.appendChild(temporary);
+      temporary.select();
+      const copied = document.execCommand("copy");
+      temporary.remove();
+      if (!copied) throw new Error("Copy tidak didukung");
+    }
     $("#copy-feedback").textContent = "Perintah berhasil disalin.";
     $("#copy-setup-command span").textContent = "Tersalin";
     setTimeout(() => {
       $("#copy-feedback").textContent = "";
       $("#copy-setup-command span").textContent = "Salin";
-    }, 2400);
+    }, 5000);
   } catch {
     $("#copy-feedback").textContent = "Tidak dapat menyalin otomatis. Blok perintah lalu salin manual.";
   }
