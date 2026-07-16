@@ -183,10 +183,29 @@ async function forgotPassword(redis, payload) {
   return json({ request: { id: request.id, status: request.status } }, 201);
 }
 
+async function indexedMachineIds(redis) {
+  const ids = new Set(await redis.smembers("photoslive:machines"));
+  let cursor = "0";
+  let rounds = 0;
+  // Backfill machines created by Agent versions that predate the global set.
+  // SCAN is cursor-based and bounded so the superadmin page remains lightweight.
+  do {
+    const [nextCursor, keys] = await redis.scan(cursor, { match: "photoslive:machine:machine_*", count: 100 });
+    for (const key of keys) {
+      const match = String(key).match(/^photoslive:machine:(machine_[^:]+)$/);
+      if (match) ids.add(match[1]);
+    }
+    cursor = String(nextCursor);
+    rounds += 1;
+  } while (cursor !== "0" && rounds < 100);
+  if (ids.size) await redis.sadd("photoslive:machines", ...ids);
+  return [...ids];
+}
+
 async function superadminOverview(redis, request) {
   const auth = await authenticate(redis, request);
   if (auth?.role !== "superadmin") return json({ error: "Akses superadmin diperlukan" }, 403);
-  const machineIds = await redis.smembers("photoslive:machines");
+  const machineIds = await indexedMachineIds(redis);
   const machines = [];
   for (const id of machineIds) {
     const machine = await redis.get(machineKey(id));
