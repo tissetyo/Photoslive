@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
 CONFIG_DIR = Path(os.environ.get("PHOTOSLIVE_CONFIG_DIR", Path.home() / ".config" / "photoslive"))
@@ -224,6 +224,9 @@ def execute_job(config: dict[str, Any], job: dict[str, Any]) -> None:
 
 def cycle(config: dict[str, Any]) -> bool:
     heartbeat = request_json(cloud_url(config, "heartbeat"), "POST", snapshot(config), config["agentToken"])
+    if heartbeat.get("boothCode") and config.get("boothCode") != heartbeat["boothCode"]:
+        config["boothCode"] = heartbeat["boothCode"]
+        save_config(config)
     if heartbeat.get("paired") and config.pop("pairingCode", None):
         save_config(config)
         print("Mesin berhasil dipasangkan dengan Photoslive Cloud.", flush=True)
@@ -240,8 +243,16 @@ def main() -> int:
     parser.add_argument("--controller", default=os.environ.get("PHOTOSLIVE_CONTROLLER_URL", DEFAULT_CONTROLLER))
     parser.add_argument("--once", action="store_true", help="Jalankan satu heartbeat lalu berhenti")
     parser.add_argument("--status", action="store_true", help="Tampilkan konfigurasi/status lokal")
+    parser.add_argument("--setup-code", action="store_true", help="Buat kode setup baru untuk mesin yang sudah pernah dipasangkan")
     arguments = parser.parse_args()
     config = load_config(arguments.cloud, arguments.controller)
+    if arguments.setup_code:
+        config = ensure_pairing(config)
+        response = request_json(cloud_url(config, "create_setup_code"), "POST", {"machineId": config["machineId"]}, config["agentToken"])
+        config.update({"pairingCode": response["pairingCode"], "boothCode": response.get("boothCode")})
+        save_config(config)
+        print(f"Kode setup baru: {response['pairingCode']}\nBerlaku 15 menit. Buka {config['cloud']}/setup", flush=True)
+        return 0
     if arguments.status:
         print(json.dumps({"config": {**config, "agentToken": "***" if config.get("agentToken") else None}, "status": json.loads(STATUS_PATH.read_text()) if STATUS_PATH.exists() else {}}, indent=2))
         return 0

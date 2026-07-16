@@ -1,6 +1,8 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+const routeParts = location.pathname.split("/").filter(Boolean);
+const routeBoothCode = new URLSearchParams(location.search).get("booth") || (routeParts[0] && !["booth","setup","superadmin"].includes(routeParts[0]) ? routeParts[0] : "");
 
 const boothState = {
   config: null,
@@ -58,7 +60,18 @@ async function boothBridge(action, payload = {}, method = "POST") {
 }
 
 async function boothCloudControllerApi(path, options = {}) {
-  const machineId = localStorage.getItem("photoslive.machineId");
+  let machineId = localStorage.getItem("photoslive.machineId");
+  // The route is authoritative. This prevents a tablet that previously opened
+  // another booth from reusing that machine id for the current customer flow.
+  if (routeBoothCode) {
+    const response = await fetch(`/api/platform?action=resolve_booth&booth=${encodeURIComponent(routeBoothCode)}`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Photobox tidak ditemukan");
+    if (!result.booth.enabled) throw new Error("Akses photobox sedang dinonaktifkan");
+    machineId = result.booth.machineId;
+    localStorage.setItem("photoslive.machineId", machineId);
+    localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
+  }
   if (!machineId) throw new Error("Mesin photobox belum dipasangkan melalui halaman admin Photoslive Agent");
   let requestBody = null;
   let bodyBase64 = null;
@@ -319,6 +332,11 @@ async function createSession() {
     $("#frame-continue").disabled = true;
     const { session } = await boothApi("/api/booth/sessions", { method: "POST", body: JSON.stringify({ frameId: boothState.selectedFrame.url }) });
     boothState.session = session; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false;
+    const boothCode = routeBoothCode || localStorage.getItem("photoslive.boothCode");
+    if (boothCode && session.shareToken) {
+      fetch("/api/platform?action=register_session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ boothCode, machineId: localStorage.getItem("photoslive.machineId"), shareCode: session.shareToken, localSessionId: session.id, status: session.status, frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }) }).catch(() => {});
+      history.replaceState(null, "", `/${boothCode}/${session.shareToken}`);
+    }
     setScreen("capture"); $(".capture-screen").classList.add("is-waiting"); $("#capture-ready-overlay").hidden = false;
     $("#camera-start").firstChild.textContent = "Ketuk untuk mulai ";
     renderSlotStrip(); startSessionTimer(); startCameraPreview();
@@ -490,6 +508,7 @@ function resetBooth() {
   $("#session-countdown").textContent = formatTimer(boothState.config.booth.sessionTimeoutSeconds); $("#session-time").classList.remove("urgent");
   $("#photo-review").hidden = true; $("#countdown-overlay").hidden = true; $("#capture-ready-overlay").hidden = false; $(".capture-screen").classList.remove("is-waiting");
   updateFrameSelection(); setScreen("welcome");
+  if (routeBoothCode) history.replaceState(null, "", `/${routeBoothCode}`);
 }
 
 function bindEvents() {
@@ -512,6 +531,10 @@ function bindEvents() {
 }
 
 async function initBooth() {
+  if (routeBoothCode) {
+    localStorage.setItem("photoslive.boothCode", routeBoothCode);
+    $("#booth-admin-entry").href = `/setup?mode=login&booth=${encodeURIComponent(routeBoothCode)}`;
+  }
   bindEvents();
   try {
     boothState.config = await boothApi("/api/booth/config");

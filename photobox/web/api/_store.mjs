@@ -38,6 +38,18 @@ export function machineKey(id) {
   return `photoslive:machine:${id}`;
 }
 
+export function boothKey(code) {
+  return `photoslive:booth:${String(code || "").toLowerCase()}`;
+}
+
+export function userKey(id) {
+  return `photoslive:user:${id}`;
+}
+
+export function sessionKey(id) {
+  return `photoslive:session:${id}`;
+}
+
 export function jobKey(id) {
   return `photoslive:job:${id}`;
 }

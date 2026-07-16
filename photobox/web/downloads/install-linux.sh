@@ -47,7 +47,9 @@ WantedBy=default.target
 EOF
 
 systemctl --user daemon-reload
-systemctl --user enable --now photoslive-controller.service photoslive-agent.service
+systemctl --user enable photoslive-controller.service photoslive-agent.service
+systemctl --user restart photoslive-controller.service photoslive-agent.service
 sleep 3
 python3 "${SOURCE_DIR}/agent.py" --status
-echo "Photoslive terpasang. Kode pairing juga tersedia di: ${HOME}/.config/photoslive/agent-status.json"
+echo "Photoslive Agent diperbarui dan service sudah direstart."
+echo "Untuk setup/pairing ulang: python3 \"${SOURCE_DIR}/agent.py\" --setup-code"
