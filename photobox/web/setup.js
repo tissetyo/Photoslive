@@ -18,6 +18,8 @@ const status = (message, success = false) => {
 function mode(name) {
   document.querySelectorAll("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === name));
   ["setup", "login", "forgot"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
+  $("#setup-modes").classList.toggle("hidden", name === "forgot");
+  $("#agent-recovery").classList.toggle("hidden", name !== "setup");
   const labels = {
     setup: ["Hubungkan photobox", "Instal Agent, masukkan kode setup, lalu buat akun pemilik."],
     login: ["Masuk ke admin", "Gunakan email/password atau PIN enam angka."],
@@ -34,6 +36,22 @@ function mode(name) {
 }
 
 document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => mode(button.dataset.mode)));
+$("#open-forgot").addEventListener("click", () => mode("forgot"));
+$("#forgot-back").addEventListener("click", () => mode("login"));
+$("#copy-setup-command").addEventListener("click", async () => {
+  const command = $("#setup-code-command").textContent;
+  try {
+    await navigator.clipboard.writeText(command);
+    $("#copy-feedback").textContent = "Perintah berhasil disalin.";
+    $("#copy-setup-command span").textContent = "Tersalin";
+    setTimeout(() => {
+      $("#copy-feedback").textContent = "";
+      $("#copy-setup-command span").textContent = "Salin";
+    }, 2400);
+  } catch {
+    $("#copy-feedback").textContent = "Tidak dapat menyalin otomatis. Blok perintah lalu salin manual.";
+  }
+});
 
 $("#setup-form").addEventListener("submit", async event => {
   event.preventDefault();
