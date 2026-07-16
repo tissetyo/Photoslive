@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import platform
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
 CONFIG_DIR = Path(os.environ.get("PHOTOSLIVE_CONFIG_DIR", Path.home() / ".config" / "photoslive"))
@@ -99,6 +100,35 @@ def controller_request(config: dict[str, Any], path: str, method: str = "GET", p
     return request_json(f"{config['controller'].rstrip('/')}{path}", method, payload, timeout=20)
 
 
+def controller_raw_request(config: dict[str, Any], path: str, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = None
+    headers = {"Accept": "application/json, image/*, text/html", "User-Agent": f"Photoslive-Agent/{VERSION}"}
+    safe_headers = {"content-type", "x-slot-index", "x-filename", "x-client-id"}
+    for name, value in (payload.get("headers") or {}).items():
+        if str(name).lower() in safe_headers:
+            headers[str(name)] = str(value)[:512]
+    if payload.get("bodyBase64"):
+        body = base64.b64decode(str(payload["bodyBase64"]), validate=True)
+    elif isinstance(payload.get("body"), dict):
+        body = json.dumps(payload["body"]).encode("utf-8")
+        headers.setdefault("Content-Type", "application/json")
+    request = urllib.request.Request(f"{config['controller'].rstrip('/')}{path}", data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        raw = error.read()
+        try:
+            message = json.loads(raw.decode("utf-8")).get("error")
+        except (ValueError, UnicodeDecodeError, AttributeError):
+            message = None
+        raise RuntimeError(message or f"Controller HTTP {error.code}") from error
+    if "application/json" in content_type:
+        return json.loads(raw.decode("utf-8") or "{}")
+    return {"contentType": content_type, "bodyBase64": base64.b64encode(raw).decode("ascii")}
+
+
 def memory_metrics() -> dict[str, int]:
     try:
         if os.name == "nt":
@@ -153,6 +183,16 @@ JOB_ROUTES = {
 }
 
 
+def execute_controller_request(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    path = str(payload.get("path") or "")
+    method = str(payload.get("method") or "GET").upper()
+    if not path.startswith("/api/") or path.startswith("/api/bridge"):
+        raise ValueError("Path controller tidak diizinkan")
+    if method not in {"GET", "POST", "PATCH", "PUT", "DELETE"}:
+        raise ValueError("Method controller tidak diizinkan")
+    return controller_raw_request(config, path, method, payload)
+
+
 def update_job(config: dict[str, Any], job: dict[str, Any], status: str, result: dict[str, Any] | None = None, error: str | None = None) -> None:
     request_json(
         cloud_url(config, "update_job"),
@@ -163,6 +203,13 @@ def update_job(config: dict[str, Any], job: dict[str, Any], status: str, result:
 
 
 def execute_job(config: dict[str, Any], job: dict[str, Any]) -> None:
+    if job.get("type") == "controller.request":
+        update_job(config, job, "running")
+        try:
+            update_job(config, job, "completed", result=execute_controller_request(config, job.get("payload") or {}))
+        except Exception as error:
+            update_job(config, job, "failed", error=str(error))
+        return
     route = JOB_ROUTES.get(job.get("type"))
     if not route:
         update_job(config, job, "failed", error="Jenis job tidak didukung Agent ini")

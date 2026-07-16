@@ -42,10 +42,50 @@ const FONT_FAMILIES = {
 };
 
 async function boothApi(path, options = {}) {
+  if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") return boothCloudControllerApi(path, options);
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || payload.message || `Permintaan gagal (${response.status})`);
   return payload;
+}
+
+async function boothBridge(action, payload = {}, method = "POST") {
+  const query = method === "GET" ? `&${new URLSearchParams(payload)}` : "";
+  const response = await fetch(`/api/bridge?action=${encodeURIComponent(action)}${query}`, { method, headers: { "Content-Type": "application/json" }, body: method === "GET" ? undefined : JSON.stringify(payload) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Cloud bridge gagal (${response.status})`);
+  return result;
+}
+
+async function boothCloudControllerApi(path, options = {}) {
+  const machineId = localStorage.getItem("photoslive.machineId");
+  if (!machineId) throw new Error("Mesin photobox belum dipasangkan melalui halaman admin Photoslive Agent");
+  let requestBody = null;
+  let bodyBase64 = null;
+  if (typeof options.body === "string" && options.body) requestBody = JSON.parse(options.body);
+  else if (options.body instanceof Blob) bodyBase64 = await boothBlobToBase64(options.body);
+  const headers = Object.fromEntries(Object.entries(options.headers || {}).filter(([name]) => ["content-type", "x-slot-index", "x-filename", "x-client-id"].includes(name.toLowerCase())));
+  const { job } = await boothBridge("enqueue_job", { machineId, type: "controller.request", payload: { path, method: String(options.method || "GET").toUpperCase(), body: requestBody, bodyBase64, headers } });
+  const deadline = Date.now() + 35000;
+  while (Date.now() < deadline) {
+    await wait(600);
+    const status = await boothBridge("job_status", { machineId, jobId: job.id }, "GET");
+    if (status.job.status === "completed") return status.job.result || {};
+    if (status.job.status === "failed") throw new Error(status.job.error || "Perintah gagal dijalankan Agent");
+  }
+  throw new Error("Agent tidak merespons dalam 35 detik");
+}
+
+function boothBlobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1] || ""); reader.onerror = reject; reader.readAsDataURL(blob);
+  });
+}
+
+function boothBinaryUrl(result) {
+  if (!result?.bodyBase64) throw new Error("Agent tidak mengirim preview kamera");
+  const bytes = Uint8Array.from(atob(result.bodyBase64), character => character.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes], { type: result.contentType || "application/octet-stream" }));
 }
 
 function notice(message, kind = "default") {
@@ -155,9 +195,13 @@ function updateFrameSelection() {
 
 async function refreshCameraPreview() {
   try {
-    const response = await fetch(`/api/devices/camera/preview.jpg?t=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || "Kamera belum tersedia"); }
-    const url = URL.createObjectURL(await response.blob());
+    let url;
+    if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") url = boothBinaryUrl(await boothCloudControllerApi(`/api/devices/camera/preview.jpg?t=${Date.now()}`));
+    else {
+      const response = await fetch(`/api/devices/camera/preview.jpg?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || "Kamera belum tersedia"); }
+      url = URL.createObjectURL(await response.blob());
+    }
     [$("#frame-camera-image"), $("#capture-camera-image")].forEach(image => {
       image.src = url; image.classList.add("has-image");
       const rotation = Number(boothState.config.devices.cameraRotation || 0);
@@ -186,7 +230,7 @@ async function reportClientCapabilities(cameraLabels = []) {
     standalone: window.matchMedia("(display-mode: standalone)").matches,
     cameras: cameraLabels,
   };
-  fetch("/api/booth/client", { method: "POST", headers: { "Content-Type": "application/json", "X-Client-Id": clientId }, body: JSON.stringify(payload) }).catch(() => {});
+  boothApi("/api/booth/client", { method: "POST", headers: { "X-Client-Id": clientId }, body: JSON.stringify(payload) }).catch(() => {});
 }
 
 async function startBrowserCamera() {
@@ -236,9 +280,7 @@ async function captureBrowserFrame() {
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .92));
   if (!blob) throw new Error("Browser gagal membuat file foto");
-  const response = await fetch(`/api/sessions/${boothState.session.id}/capture-upload`, { method: "POST", headers: { "Content-Type": "image/jpeg", "X-Slot-Index": String(boothState.currentSlot) }, body: blob });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || `Upload foto gagal (${response.status})`);
+  const payload = await boothApi(`/api/sessions/${boothState.session.id}/capture-upload`, { method: "POST", headers: { "Content-Type": "image/jpeg", "X-Slot-Index": String(boothState.currentSlot) }, body: blob });
   return payload.file;
 }
 
