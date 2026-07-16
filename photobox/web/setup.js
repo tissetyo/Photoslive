@@ -19,11 +19,11 @@ function mode(name) {
   document.querySelectorAll("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === name));
   ["setup", "login", "forgot"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
   $("#setup-modes").classList.toggle("hidden", name === "forgot");
-  $("#agent-recovery").classList.toggle("hidden", name !== "setup");
+  $("#agent-recovery").classList.toggle("hidden", name === "forgot");
   const labels = {
-    setup: ["Hubungkan photobox", "Instal Agent, masukkan kode setup, lalu buat akun pemilik."],
-    login: ["Masuk ke admin", "Gunakan email/password atau PIN enam angka."],
-    forgot: ["Minta bantuan password", "Permintaan hanya diteruskan jika email memang terdaftar."],
+    setup: ["Setup photobox", "Hubungkan mesin dan buat akun pemilik."],
+    login: ["Masuk", "Pilih cara masuk ke admin photobox."],
+    forgot: ["Bantuan password", "Kirim permintaan kepada superadmin."],
   };
   $("#setup-title").textContent = labels[name][0];
   $("#setup-copy").textContent = labels[name][1];
@@ -35,9 +35,29 @@ function mode(name) {
   status("");
 }
 
+function loginMethod(name) {
+  document.querySelectorAll("[data-login-method]").forEach(button => {
+    const selected = button.dataset.loginMethod === name;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  document.querySelectorAll("[data-method-panel]").forEach(panel => panel.classList.toggle("hidden", panel.dataset.methodPanel !== name));
+  $("#login-form").classList.toggle("password-login", name === "password");
+  $("#login-pin").required = name === "pin";
+  $("#login-email").required = name === "password";
+  $("#login-password").required = name === "password";
+  if (name === "pin") {
+    $("#login-email").value = "";
+    $("#login-password").value = "";
+  } else {
+    $("#login-pin").value = "";
+  }
+}
+
 document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => mode(button.dataset.mode)));
 $("#open-forgot").addEventListener("click", () => mode("forgot"));
 $("#forgot-back").addEventListener("click", () => mode("login"));
+document.querySelectorAll("[data-login-method]").forEach(button => button.addEventListener("click", () => loginMethod(button.dataset.loginMethod)));
 $("#copy-setup-command").addEventListener("click", async () => {
   const command = $("#setup-code-command").textContent;
   try {
@@ -122,4 +142,5 @@ $("#forgot-form").addEventListener("submit", async event => {
 
 const params = new URLSearchParams(location.search);
 if (params.get("booth")) $("#login-booth").value = params.get("booth");
+loginMethod("pin");
 mode(params.get("mode") || "setup");

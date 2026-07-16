@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Setup Photoslive</title>
   <link rel="stylesheet" href="/platform.css?v=2">
-  <link rel="stylesheet" href="/setup.css?v=1">
+  <link rel="stylesheet" href="/setup.css?v=2">
 </head>
 <body>
   <div class="platform-shell">
@@ -16,7 +16,6 @@
     <main class="auth-layout">
       <section class="auth-card">
         <header class="auth-head">
-          <p class="eyebrow">SETUP CEPAT</p>
           <h1 id="setup-title">Hubungkan photobox</h1>
           <p id="setup-copy">Instal Agent, masukkan kode setup, lalu buat akun pemilik.</p>
         </header>
@@ -43,9 +42,22 @@
         <form id="login-form" class="hidden">
           <div class="form-grid">
             <label class="full">Kode/nama photobox<input id="login-booth" placeholder="abcd-1234" required></label>
-            <label>Email<input id="login-email" type="email" autocomplete="email"></label>
-            <label>Password<input id="login-password" type="password" autocomplete="current-password"></label>
-            <label class="full">Atau masuk cepat dengan PIN<input id="login-pin" inputmode="numeric" maxlength="6" placeholder="6 angka"></label>
+          </div>
+          <fieldset class="login-methods">
+            <legend>Pilih cara masuk</legend>
+            <div class="method-switch" role="group" aria-label="Cara masuk">
+              <button type="button" class="active" data-login-method="pin" aria-pressed="true"><img src="/icons/shield-check.svg" alt="">PIN</button>
+              <button type="button" data-login-method="password" aria-pressed="false"><img src="/icons/user-round.svg" alt="">Email &amp; password</button>
+            </div>
+          </fieldset>
+          <div class="login-method-panel" data-method-panel="pin">
+            <label>PIN admin<input id="login-pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Masukkan 6 angka"></label>
+          </div>
+          <div class="login-method-panel hidden" data-method-panel="password">
+            <div class="form-grid">
+              <label class="full">Email<input id="login-email" type="email" autocomplete="email" placeholder="nama@email.com"></label>
+              <label class="full">Password<input id="login-password" type="password" autocomplete="current-password" placeholder="Masukkan password"></label>
+            </div>
           </div>
           <div class="login-actions">
             <button type="button" class="text-button" id="open-forgot">Lupa password?</button>
@@ -78,6 +90,6 @@
       </section>
     </main>
   </div>
-  <script src="/setup.js?v=3" defer></script>
+  <script src="/setup.js?v=4" defer></script>
 </body>
 </html>
