@@ -53,10 +53,62 @@ const formatUptime = (seconds = 0) => { const days = Math.floor(seconds / 86400)
 const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 
 async function api(path, options = {}) {
+  if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost" && !path.startsWith("/api/bridge")) {
+    return cloudControllerApi(path, options);
+  }
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || payload.message || `Request failed (${response.status})`);
   return payload;
+}
+
+async function directBridge(action, payload = {}, method = "POST") {
+  const query = method === "GET" ? `&${new URLSearchParams(payload)}` : "";
+  const response = await fetch(`/api/bridge?action=${encodeURIComponent(action)}${query}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: method === "GET" ? undefined : JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Cloud bridge gagal (${response.status})`);
+  return result;
+}
+
+async function cloudControllerApi(path, options = {}) {
+  const machineId = localStorage.getItem("photoslive.machineId");
+  if (!machineId) throw new Error("Mesin belum terhubung. Buka Photoslive Agent dan masukkan kode pairing.");
+  let requestBody = null;
+  let bodyBase64 = null;
+  if (typeof options.body === "string" && options.body) {
+    try { requestBody = JSON.parse(options.body); } catch { throw new Error("Format data tidak dapat dikirim melalui Agent"); }
+  } else if (options.body instanceof Blob) {
+    bodyBase64 = await blobToBase64(options.body);
+  }
+  const headers = Object.fromEntries(Object.entries(options.headers || {}).filter(([name]) => ["content-type", "x-slot-index", "x-filename", "x-client-id"].includes(name.toLowerCase())));
+  const { job } = await directBridge("enqueue_job", { machineId, type: "controller.request", payload: { path, method: String(options.method || "GET").toUpperCase(), body: requestBody, bodyBase64, headers } });
+  const deadline = Date.now() + 35000;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const status = await directBridge("job_status", { machineId, jobId: job.id }, "GET");
+    if (status.job.status === "completed") return status.job.result || {};
+    if (status.job.status === "failed") throw new Error(status.job.error || "Perintah gagal dijalankan Agent");
+  }
+  throw new Error("Agent tidak merespons dalam 35 detik. Pastikan service Agent masih aktif.");
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error("File tidak dapat dibaca"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function cloudBinaryUrl(result) {
+  if (!result?.bodyBase64) throw new Error("Agent tidak mengirim data file");
+  const bytes = Uint8Array.from(atob(result.bodyBase64), character => character.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes], { type: result.contentType || "application/octet-stream" }));
 }
 
 function toast(message, kind = "default") {
@@ -863,9 +915,13 @@ async function createVoucherEvent() {
   } catch (error) { toast(`Gagal membuat event: ${error.message}`, "error"); }
 }
 
-function printVouchers(eventId = null) {
+async function printVouchers(eventId = null) {
   const url = `/api/vouchers/print${eventId ? `?eventId=${encodeURIComponent(eventId)}` : ""}`;
-  window.open(url, "_blank", "noopener");
+  if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return window.open(url, "_blank", "noopener");
+  try {
+    const result = await cloudControllerApi(url);
+    window.open(cloudBinaryUrl(result), "_blank", "noopener");
+  } catch (error) { toast(`Voucher tidak dapat dibuka: ${error.message}`, "error"); }
 }
 
 async function testDevice(kind) {
@@ -884,12 +940,14 @@ function setCameraPreviewMessage(title, detail) {
 async function loadCameraPreview() {
   if (!state.cameraPreviewEnabled) return;
   try {
-    const response = await fetch(`/api/devices/camera/preview.jpg?t=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || "Preview kamera tidak tersedia");
+    let url;
+    if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
+      url = cloudBinaryUrl(await cloudControllerApi(`/api/devices/camera/preview.jpg?t=${Date.now()}`));
+    } else {
+      const response = await fetch(`/api/devices/camera/preview.jpg?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || "Preview kamera tidak tersedia"); }
+      url = URL.createObjectURL(await response.blob());
     }
-    const url = URL.createObjectURL(await response.blob());
     if (state.cameraPreviewUrl) URL.revokeObjectURL(state.cameraPreviewUrl);
     state.cameraPreviewUrl = url;
     const image = $("#camera-preview-image");

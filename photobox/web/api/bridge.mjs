@@ -101,7 +101,7 @@ async function enqueueJob(redis, payload) {
   const machineId = String(payload.machineId || "");
   const machine = await redis.get(machineKey(machineId));
   if (!machine?.paired) return json({ error: "Mesin belum dipasangkan" }, 409);
-  const allowed = new Set(["devices.refresh", "camera.test", "camera.capture", "printer.test", "printer.print", "storage.cleanup", "service.restart"]);
+  const allowed = new Set(["devices.refresh", "camera.test", "camera.capture", "printer.test", "printer.print", "storage.cleanup", "service.restart", "controller.request"]);
   const type = String(payload.type || "");
   if (!allowed.has(type)) return json({ error: "Jenis job tidak didukung" }, 400);
   const id = randomId("job");
@@ -150,6 +150,13 @@ async function updateJob(redis, request, payload) {
   return json({ job });
 }
 
+async function jobStatus(redis, payload) {
+  const machineId = String(payload.machineId || "");
+  const job = await redis.get(jobKey(String(payload.jobId || "")));
+  if (!job || job.machineId !== machineId) return json({ error: "Job tidak ditemukan" }, 404);
+  return json({ job });
+}
+
 async function handler(request) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type", "access-control-allow-methods": "GET, POST, OPTIONS" } });
   try {
@@ -165,6 +172,7 @@ async function handler(request) {
     if (action === "enqueue_job" && request.method === "POST") return enqueueJob(redis, payload);
     if (action === "claim_job" && request.method === "POST") return claimJob(redis, request, payload);
     if (action === "update_job" && request.method === "POST") return updateJob(redis, request, payload);
+    if (action === "job_status" && request.method === "GET") return jobStatus(redis, payload);
     return json({ error: "Endpoint tidak ditemukan" }, 404);
   } catch (error) {
     console.error(error);
