@@ -1,0 +1,16 @@
+{
+  "name": "photoslive-cloud",
+  "version": "0.1.0",
+  "description": "Photoslive production UI and hardware bridge API",
+  "main": "app.js",
+  "scripts": {
+    "test": "node --check app.js && node --check api/bridge.mjs && node --check api/_store.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@upstash/redis": "^1.38.0"
+  }
+}

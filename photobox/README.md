@@ -56,3 +56,24 @@ Alur pelanggan, aturan slot foto, retake, komposisi photo strip, struktur file, 
 kontrak endpoint dijelaskan di [docs/SESSION-FLOW.md](docs/SESSION-FLOW.md).
 Dokumen tersebut menjadi acuan ketika membangun UI pelanggan dan service capture
 agar perilakunya selalu sama dengan konfigurasi admin.
+
+Arsitektur domain publik, pairing mini PC, pembagian tanggung jawab Vercel dan
+Photoslive Agent, kontrak job perangkat, keamanan, serta checklist production
+dijelaskan di [docs/CLOUD-DEVICE-BRIDGE.md](docs/CLOUD-DEVICE-BRIDGE.md). Vercel
+tidak boleh dianggap dapat mengakses USB atau CUPS secara langsung; akses
+hardware produksi selalu dijalankan Agent pada mesin tempat perangkat terpasang.
+
+## Photoslive Agent
+
+Agent bridge tersedia di `photobox/agent.py`. Agent membuat pairing code,
+mengirim heartbeat/telemetry, mengambil job dari cloud, lalu meneruskannya ke
+controller lokal di `http://127.0.0.1:8080`.
+
+```bash
+python3 photobox/server.py
+python3 photobox/agent.py
+```
+
+Installer production dapat diunduh dari halaman **Photoslive Agent** pada admin
+cloud atau langsung melalui `/downloads/install-linux.sh`,
+`/downloads/install-macos.sh`, dan `/downloads/install-windows.ps1`.

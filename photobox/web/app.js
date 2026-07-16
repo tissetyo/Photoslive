@@ -4,6 +4,7 @@ const titles = {
   content: ["Tampilan photobox", "Pengaturan / Tampilan", "Atur logo, background, frame, teks, font, dan warna yang dilihat pelanggan."],
   access: ["Sesi & pembayaran", "Pengaturan / Sesi dan pembayaran", "Atur waktu sesi, harga, QRIS, dan voucher."],
   devices: ["Kamera & printer", "Mesin / Kamera dan printer", "Sambungkan, pilih, dan periksa perangkat yang akan digunakan."],
+  agent: ["Photoslive Agent", "Mesin / Photoslive Agent", "Download, pasangkan, dan monitor controller hardware lokal."],
   storage: ["Penyimpanan foto", "Mesin / Penyimpanan", "Atur penghapusan foto lokal dan tujuan upload cloud."],
   system: ["Pengaturan mesin", "Mesin / Pengaturan", "Ubah identitas mesin atau unduh laporan untuk teknisi."],
 };
@@ -78,6 +79,83 @@ function showView(name) {
   currentUrl.searchParams.set("view", name);
   window.history.replaceState(null, "", currentUrl);
   if (name === "storage" && state.settings) loadStorageData(false);
+  if (name === "agent") loadAgentStatus();
+}
+
+const agentState = { machineId: localStorage.getItem("photoslive.machineId") || "", timer: null };
+
+async function bridgeApi(action, options = {}) {
+  const separator = options.query ? `&${new URLSearchParams(options.query)}` : "";
+  return api(`/api/bridge?action=${encodeURIComponent(action)}${separator}`, options);
+}
+
+function renderAgentMachine(machine) {
+  const empty = $("#agent-machine-empty"), content = $("#agent-machine-content");
+  if (!machine) {
+    empty.hidden = false; content.hidden = true;
+    $("#agent-overall-state").textContent = agentState.machineId ? "TIDAK DITEMUKAN" : "BELUM TERHUBUNG";
+    $("#agent-overall-state").className = "device-state attention";
+    return;
+  }
+  empty.hidden = true; content.hidden = false;
+  const online = Boolean(machine.online);
+  $("#agent-overall-state").textContent = online ? "ONLINE" : "OFFLINE";
+  $("#agent-overall-state").className = `device-state ${online ? "connected" : "attention"}`;
+  setText("#agent-status-value", online ? "Online" : "Offline");
+  setText("#agent-version-value", `Agent ${machine.agentVersion || "—"} · ${machine.name || "Mesin"}`);
+  setText("#agent-last-seen", machine.lastSeenAt ? `TERAKHIR ${new Date(machine.lastSeenAt).toLocaleString("id-ID")}` : "BELUM ADA HEARTBEAT");
+  setText("#agent-platform-value", machine.platform || "Platform belum dilaporkan");
+  const devices = Array.isArray(machine.devices) ? machine.devices : [];
+  const camera = devices.find(device => device.kind === "camera" && device.status === "connected");
+  const printer = devices.find(device => device.kind === "printer" && device.status === "connected");
+  setText("#agent-camera-value", camera ? "Tersambung" : "Terputus");
+  setText("#agent-camera-detail", camera?.name || "Tidak ada kamera aktif");
+  setText("#agent-printer-value", printer ? "Tersambung" : "Terputus");
+  setText("#agent-printer-detail", printer?.name || "Tidak ada printer aktif");
+  setText("#agent-disk-value", formatBytes(machine.telemetry?.disk?.freeBytes || 0));
+  $("#agent-device-list").innerHTML = devices.length ? devices.map(device => `<article class="device-card"><span class="device-glyph"><img src="/icons/${device.kind === "printer" ? "printer" : "camera"}.svg" alt="" /></span><div><b>${escapeHtml(device.name)}</b><p>${escapeHtml(device.detail || device.id || "Perangkat lokal")}</p></div><span class="device-state ${device.status === "connected" ? "connected" : "attention"}">${escapeHtml(device.status || "unknown")}</span></article>`).join("") : '<p class="empty">Agent belum melaporkan kamera atau printer.</p>';
+}
+
+async function loadAgentStatus(showNotice = false) {
+  clearTimeout(agentState.timer);
+  if (!agentState.machineId) { renderAgentMachine(null); return; }
+  try {
+    const { machine } = await bridgeApi("machine_status", { query: { machineId: agentState.machineId } });
+    renderAgentMachine(machine);
+    if (showNotice) toast("Status Agent diperbarui");
+  } catch (error) {
+    renderAgentMachine(null);
+    $("#agent-pair-message").textContent = `Cloud belum siap: ${error.message}`;
+    if (showNotice) toast(error.message, "error");
+  }
+  if ($("#agent-view")?.classList.contains("active")) agentState.timer = setTimeout(loadAgentStatus, 15000);
+}
+
+async function claimAgent(event) {
+  event.preventDefault();
+  const button = $("#agent-pair-form button");
+  button.disabled = true;
+  $("#agent-pair-message").textContent = "Menghubungkan mesin…";
+  try {
+    const { machine } = await bridgeApi("claim_pairing", { method: "POST", body: JSON.stringify({ code: $("#agent-pair-code").value, name: $("#agent-machine-name").value, location: $("#agent-machine-location").value }) });
+    agentState.machineId = machine.id;
+    localStorage.setItem("photoslive.machineId", machine.id);
+    $("#agent-pair-message").textContent = `Berhasil terhubung ke ${machine.name}. Agent akan online dalam beberapa detik.`;
+    $("#agent-pair-code").value = "";
+    renderAgentMachine(machine);
+    await loadAgentStatus();
+  } catch (error) {
+    $("#agent-pair-message").textContent = error.message;
+  } finally { button.disabled = false; }
+}
+
+async function queueAgentJob(type) {
+  if (!agentState.machineId) return toast("Hubungkan mesin terlebih dahulu", "error");
+  try {
+    await bridgeApi("enqueue_job", { method: "POST", body: JSON.stringify({ machineId: agentState.machineId, type, payload: {} }) });
+    toast("Perintah dikirim ke Agent");
+    setTimeout(() => loadAgentStatus(), 2500);
+  } catch (error) { toast(error.message, "error"); }
 }
 
 function hydrateSettings() {
@@ -997,6 +1075,9 @@ function bindEvents() {
   $("#print-general-vouchers").addEventListener("click", () => printVouchers());
   $("#create-voucher-event").addEventListener("click", () => { $("#voucher-event-form").reset(); $("#voucher-event-print").checked = true; $("#voucher-event-dialog").showModal(); });
   $("#submit-voucher-event").addEventListener("click", event => { event.preventDefault(); createVoucherEvent(); });
+  $("#agent-pair-form").addEventListener("submit", claimAgent);
+  $("#refresh-agent").addEventListener("click", () => loadAgentStatus(true));
+  $$('[data-agent-job]').forEach(button => button.addEventListener("click", () => queueAgentJob(button.dataset.agentJob)));
   $("#scan-devices").addEventListener("click", async () => { try { const result = await api("/api/devices/refresh", { method: "POST" }); renderDevices(result.devices); toast("Pencarian perangkat selesai"); } catch (error) { toast(error.message, "error"); } });
   $("#test-camera").addEventListener("click", () => testDevice("camera"));
   $("#test-printer").addEventListener("click", () => testDevice("printer"));
