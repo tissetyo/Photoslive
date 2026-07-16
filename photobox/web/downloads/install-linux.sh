@@ -3,17 +3,18 @@ set -euo pipefail
 
 INSTALL_DIR="${HOME}/.local/share/photoslive"
 SERVICE_DIR="${HOME}/.config/systemd/user"
-ARCHIVE="${TMPDIR:-/tmp}/photoslive-main.zip"
+ARCHIVE="${TMPDIR:-/tmp}/photoslive-agent.zip"
 
 command -v python3 >/dev/null || { echo "Python 3 wajib tersedia."; exit 1; }
 command -v curl >/dev/null || { echo "curl wajib tersedia."; exit 1; }
 command -v unzip >/dev/null || { echo "unzip wajib tersedia."; exit 1; }
 
 mkdir -p "${INSTALL_DIR}" "${SERVICE_DIR}"
-curl -fL "https://github.com/tissetyo/Photoslive/archive/refs/heads/main.zip" -o "${ARCHIVE}"
+curl -fL "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -o "${ARCHIVE}"
 rm -rf "${INSTALL_DIR}/source"
 unzip -q "${ARCHIVE}" -d "${INSTALL_DIR}/source"
-SOURCE_DIR="$(find "${INSTALL_DIR}/source" -maxdepth 1 -type d -name 'Photoslive-*' | head -n 1)/photobox"
+SOURCE_DIR="${INSTALL_DIR}/source/photobox"
+test -f "${SOURCE_DIR}/agent.py" || { echo "Paket Photoslive Agent tidak valid."; exit 1; }
 
 cat > "${SERVICE_DIR}/photoslive-controller.service" <<EOF
 [Unit]
