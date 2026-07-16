@@ -1,0 +1,111 @@
+.login-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.text-button,
+.back-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #5147d9;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.text-button:hover,
+.back-link:hover { text-decoration: underline; }
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 22px;
+  color: #3d4350;
+}
+
+.back-link img { width: 17px; height: 17px; }
+.forgot-page { padding-top: 4px; }
+
+.agent-recovery {
+  margin-top: 26px;
+  padding: 18px;
+  border: 1px solid #d9daf0;
+  border-radius: 14px;
+  background: #f7f7ff;
+}
+
+.recovery-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.recovery-heading b { display: block; font-size: 13px; color: #17191f; }
+.recovery-heading p { margin: 4px 0 0; color: #676d79; font-size: 12px; line-height: 1.55; }
+
+.recovery-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  height: 34px;
+  border: 1px solid #d6d7e8;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.recovery-icon img { width: 17px; height: 17px; }
+
+.command-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  margin-top: 14px;
+  border: 1px solid #ced1dc;
+  border-radius: 10px;
+  background: #111318;
+  overflow: hidden;
+}
+
+.command-box code {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 13px 14px;
+  color: #f5f7fb;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.command-box button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-left: 1px solid #343740;
+  padding: 0 14px;
+  background: #20232a;
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.command-box button:hover { background: #2b2e37; }
+.command-box button img { width: 15px; height: 15px; filter: invert(1); }
+.copy-feedback { min-height: 16px; margin: 8px 0 0; color: #18794e; font-size: 11px; font-weight: 800; }
+
+@media (max-width: 520px) {
+  .login-actions { align-items: stretch; flex-direction: column-reverse; }
+  .login-actions .btn { width: 100%; }
+  .command-box { grid-template-columns: 1fr; }
+  .command-box button { justify-content: center; border-left: 0; border-top: 1px solid #343740; padding: 11px; }
+}
