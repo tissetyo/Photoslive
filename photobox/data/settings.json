@@ -1,0 +1,105 @@
+{
+  "booth": {
+    "name": "Photoslive Booth 01",
+    "location": "Main Hall",
+    "dailySessionLimit": 120,
+    "sessionTimeoutSeconds": 150,
+    "countdownSeconds": 15,
+    "retakeLimit": 1,
+    "unlimitedRetakes": true,
+    "photoSlotsPerSession": 3,
+    "printsPerSession": 1,
+    "localRetentionHours": 24,
+    "cloudRetentionDays": 7,
+    "maintenanceMode": false
+  },
+  "payment": {
+    "qrisEnabled": true,
+    "voucherEnabled": true,
+    "price": 35000,
+    "currency": "IDR",
+    "provider": "Not configured",
+    "paidPrintEnabled": false,
+    "printPrice": 10000
+  },
+  "appearance": {
+    "activeBackground": "default-gradient",
+    "activeFrame": "party-night",
+    "activeLogo": "text-logo",
+    "welcomeTitle": "Abadikan momenmu",
+    "touchPrompt": "Sentuh layar untuk memulai",
+    "startButtonLabel": "Mulai foto",
+    "fontFamily": "system",
+    "screenPreset": "1080x1920",
+    "screenSizeInches": 15.6,
+    "logoSizePercent": 28,
+    "headingFontSize": 48,
+    "helperFontSize": 18,
+    "buttonFontSize": 16,
+    "accentColor": "#6d5dfc",
+    "headingTextColor": "#ffffff",
+    "helperTextColor": "#ffffff",
+    "buttonBackgroundColor": "#ffffff",
+    "buttonTextColor": "#7c3049",
+    "frameFormat": "photo-strip-vertical",
+    "framePhotoSlots": {
+      "clean-white": 3,
+      "party-night": 3
+    },
+    "framePhotoWidths": {
+      "clean-white": 86,
+      "party-night": 86
+    },
+    "frameBackgroundTransforms": {},
+    "frameSlotTransforms": {},
+    "frameStickers": {},
+    "frameLayoutModes": {
+      "clean-white": "auto",
+      "party-night": "auto"
+    },
+    "frameSizePresets": {
+      "clean-white": "custom",
+      "party-night": "custom"
+    },
+    "frameCanvasSizes": {
+      "clean-white": {
+        "width": 800,
+        "height": 1600
+      },
+      "party-night": {
+        "width": 800,
+        "height": 1600
+      }
+    },
+    "frameOriginalCanvasSizes": {
+      "clean-white": {
+        "width": 1200,
+        "height": 1600
+      },
+      "party-night": {
+        "width": 1200,
+        "height": 1600
+      }
+    },
+    "frameAspectRatio": "3:4",
+    "frameCanvasWidth": 1200,
+    "frameCanvasHeight": 1600,
+    "frameBottomMarginPercent": 20
+  },
+  "storage": {
+    "cloudEnabled": false,
+    "provider": "Cloudflare R2",
+    "uploadFinalOnly": true,
+    "deleteOnlyAfterUpload": true
+  },
+  "devices": {
+    "preferredCamera": "auto",
+    "preferredPrinter": "auto",
+    "paperSize": "4x6",
+    "printLayout": "photo-strip-vertical",
+    "stripsPerSheet": 2,
+    "borderless": true,
+    "cameraMirror": false,
+    "cameraRotation": "0"
+  }
+}

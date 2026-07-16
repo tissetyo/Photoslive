@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#11131a" />
+    <title>Photoslive Booth</title>
+    <link rel="icon" href="/icons/camera.svg" />
+    <link rel="stylesheet" href="/booth.css?v=2" />
+  </head>
+  <body>
+    <div class="booth-app" id="booth-app" data-screen="welcome">
+      <header class="session-bar" id="session-bar" hidden>
+        <div class="mini-brand"><span class="mini-brand-mark"><img id="session-logo-image" alt="" hidden /></span><b id="session-brand-text">PHOTOSLIVE</b></div>
+        <div class="session-step"><small id="session-step-label">PERSIAPAN</small><b id="session-step-title">Pilih desain foto</b></div>
+        <div class="session-time" id="session-time"><small>WAKTU SESI</small><b id="session-countdown">02:30</b></div>
+      </header>
+
+      <main>
+        <section class="booth-screen welcome-screen is-active" data-booth-screen="welcome" aria-labelledby="welcome-title">
+          <div class="welcome-background" id="welcome-background"></div>
+          <div class="welcome-vignette"></div>
+          <div class="welcome-content">
+            <div class="customer-logo" id="customer-logo"><img id="customer-logo-image" alt="Logo photobox" hidden /><span id="customer-logo-text">PHOTOSLIVE</span></div>
+            <div class="welcome-copy"><p class="eyebrow">YOUR MOMENT, YOUR STORY</p><h1 id="welcome-title">Abadikan momenmu</h1><p id="welcome-prompt">Sentuh layar untuk memulai</p></div>
+            <button class="touch-button primary-touch" id="welcome-start"><span id="welcome-button-label">Mulai foto</span><img src="/icons/arrow-right.svg" alt="" /></button>
+          </div>
+          <p class="welcome-footnote">Dengan melanjutkan, kamu menyetujui foto diproses untuk sesi ini.</p>
+        </section>
+
+        <section class="booth-screen frame-screen" data-booth-screen="frames" aria-label="Pilih desain foto">
+          <div class="live-camera-layer"><video class="live-camera-image" id="frame-camera-video" autoplay muted playsinline aria-label="Preview kamera perangkat"></video><img class="live-camera-image" id="frame-camera-image" alt="Preview kamera controller" /><div class="camera-fallback" id="frame-camera-fallback"><img src="/icons/camera.svg" alt="" /><b>Menghubungkan kamera…</b><span id="frame-camera-status">Izinkan akses kamera saat diminta</span></div></div>
+          <div class="frame-screen-shade"></div>
+          <div class="frame-picker-content">
+            <div class="frame-picker-panel">
+              <div class="frame-picker-head"><div><small>PILIH DESAIN FOTO</small><b id="frame-choice-label">Pilih satu frame</b></div><div class="frame-head-actions"><span class="frame-page-count" id="frame-page-count">1 dari 1</span><span class="live-pill" id="camera-live-pill"><i></i><span id="camera-live-label">MENGHUBUNGKAN</span></span></div></div>
+              <div class="frame-browser"><button class="frame-page-button" id="frame-page-prev" aria-label="Halaman frame sebelumnya"><img src="/icons/chevron-left.svg" alt="" /></button><div class="frame-list" id="frame-list"></div><button class="frame-page-button" id="frame-page-next" aria-label="Halaman frame berikutnya"><img src="/icons/chevron-right.svg" alt="" /></button></div>
+              <button class="touch-button primary-touch frame-continue" id="frame-continue" disabled>Lanjutkan dengan frame ini <img src="/icons/arrow-right.svg" alt="" /></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="booth-screen capture-screen" data-booth-screen="capture" aria-labelledby="capture-heading">
+          <div class="capture-camera"><video class="live-camera-image" id="capture-camera-video" autoplay muted playsinline aria-label="Preview kamera perangkat"></video><img class="live-camera-image" id="capture-camera-image" alt="Preview kamera controller" /><div class="camera-fallback dark" id="capture-camera-fallback"><img src="/icons/camera.svg" alt="" /><b>Kamera belum tersedia</b><span id="capture-camera-status">Izinkan akses kamera saat diminta</span></div></div>
+          <div class="capture-gradient"></div>
+
+          <div class="capture-ready-overlay" id="capture-ready-overlay">
+            <div class="ready-card"><span class="ready-icon"><img src="/icons/camera.svg" alt="" /></span><p class="eyebrow">LANGKAH 2 DARI 3</p><h1 id="capture-heading">Sudah siap?</h1><p>Pastikan semua orang terlihat. Setelah ditekan, hitung mundur akan langsung dimulai.</p><button class="touch-button primary-touch" id="camera-start">Ketuk untuk mulai <img src="/icons/arrow-right.svg" alt="" /></button></div>
+          </div>
+
+          <div class="countdown-overlay" id="countdown-overlay" hidden><small>SIAPKAN GAYA TERBAIKMU</small><strong id="shot-countdown">15</strong><span id="countdown-slot-label">Foto 1 dari 3</span></div>
+
+          <div class="capture-hud">
+            <div class="slot-progress"><div><small>HASIL FOTO</small><b id="capture-progress-label">Foto 1 dari 3</b></div><div class="slot-strip" id="slot-strip"></div></div>
+            <div class="capture-instruction" id="capture-instruction"><span><img src="/icons/camera.svg" alt="" /></span><div><b>Bersiap untuk foto pertama</b><small>Timer akan berjalan setelah kamu menekan mulai.</small></div></div>
+          </div>
+
+          <div class="photo-review" id="photo-review" hidden><div class="review-photo"><img id="review-photo-image" alt="Hasil foto terbaru" /></div><div class="review-copy"><p class="eyebrow">HASIL FOTO <span id="review-slot-number">1</span></p><h2>Suka dengan foto ini?</h2><p id="review-attempt-detail">Kamu masih bisa mengambil ulang foto ini.</p><div class="review-actions"><button class="touch-button secondary-touch" id="retake-photo"><img src="/icons/refresh-cw.svg" alt="" />Ambil ulang</button><button class="touch-button primary-touch" id="accept-photo">Pakai foto ini <img src="/icons/circle-check.svg" alt="" /></button></div></div></div>
+        </section>
+
+        <section class="booth-screen result-screen" data-booth-screen="result" aria-labelledby="result-title">
+          <div class="result-background"></div><div class="result-glow"></div>
+          <div class="celebration-animation" aria-label="Animasi perayaan"><span>✦</span><span>●</span><span>✧</span><span>●</span><span>✦</span></div>
+          <div class="result-layout"><div class="result-copy"><p class="eyebrow">LANGKAH 3 DARI 3 · SELESAI</p><h1 id="result-title">Hasilmu keren!</h1><p>Frame sudah dipasang dan hasil siap dicetak. Periksa sekali lagi sebelum menyelesaikan sesi.</p><div class="result-actions"><button class="touch-button primary-touch" id="print-result"><img src="/icons/printer.svg" alt="" />Cetak hasil</button><button class="touch-button secondary-touch light" id="finish-session">Selesai tanpa cetak</button></div><div class="result-note"><img src="/icons/clock.svg" alt="" /><span>Selesaikan sebelum timer sesi berakhir.</span></div></div><div class="final-photo-wrap"><div class="final-frame" id="final-frame"><div class="final-slots" id="final-slots"></div></div><span class="frame-name" id="result-frame-name">Frame pilihanmu</span></div></div>
+        </section>
+      </main>
+
+      <div class="booth-notice" id="booth-notice" role="status" aria-live="polite"></div>
+    </div>
+
+    <dialog class="customer-dialog access-dialog" id="access-dialog"><div class="access-shell"><button class="dialog-close access-close" id="close-access-dialog" aria-label="Kembali"><img src="/icons/x.svg" alt="" /></button><header><p class="eyebrow">BUKA SESI PHOTOBOX</p><h2>Pilih cara masuk</h2><p>Bayar dengan QRIS atau masukkan satu voucher yang belum pernah dipakai.</p></header><div class="access-methods"><section class="access-method" id="access-qris-section"><span class="dialog-icon"><img src="/icons/scan-line.svg" alt="" /></span><h3>Bayar dengan QRIS</h3><p>Pindai QR berikut dari aplikasi pembayaranmu.</p><div class="payment-box compact-payment"><div class="payment-loading" id="access-payment-loading"><span></span><b>Menyiapkan QRIS…</b></div><div class="payment-error" id="access-payment-error" hidden><img src="/icons/triangle-alert.svg" alt="" /><b>QRIS belum tersedia</b><p id="access-payment-error-message">Hubungi operator photobox.</p></div><div class="payment-qr" id="access-payment-qr" hidden><img id="access-payment-qr-image" alt="QR pembayaran sesi" /><small>JUMLAH PEMBAYARAN</small><b id="access-payment-amount">Rp0</b></div></div></section><section class="access-method" id="access-voucher-section"><span class="dialog-icon"><img src="/icons/ticket-check.svg" alt="" /></span><h3>Pakai voucher</h3><p>Setiap kode hanya bisa digunakan satu kali.</p><label class="voucher-field">Kode voucher<input id="access-voucher-code" autocomplete="off" autocapitalize="characters" placeholder="Contoh: EVENT-8XK2" /></label><button class="touch-button primary-touch full-touch" id="redeem-access-voucher">Gunakan voucher <img src="/icons/arrow-right.svg" alt="" /></button><p class="access-status" id="access-voucher-status" aria-live="polite"></p></section></div></div></dialog>
+
+    <dialog class="customer-dialog print-dialog" id="print-dialog"><div class="dialog-body"><button class="dialog-close" id="close-print-dialog" aria-label="Tutup"><img src="/icons/x.svg" alt="" /></button><span class="dialog-icon"><img src="/icons/printer.svg" alt="" /></span><p class="eyebrow">CETAK HASIL</p><h2 id="print-dialog-title">Bayar untuk mencetak</h2><p id="print-dialog-copy">Pindai QRIS dan selesaikan pembayaran sebelum timer berakhir.</p><div class="payment-box" id="payment-box"><div class="payment-loading" id="payment-loading"><span></span><b>Menyiapkan QRIS…</b></div><div class="payment-error" id="payment-error" hidden><img src="/icons/triangle-alert.svg" alt="" /><b>QRIS belum tersedia</b><p id="payment-error-message">Hubungi operator photobox.</p></div><div class="payment-qr" id="payment-qr" hidden><img id="payment-qr-image" alt="QR pembayaran" /><small>JUMLAH PEMBAYARAN</small><b id="payment-amount">Rp0</b></div></div><button class="touch-button primary-touch full-touch" id="confirm-direct-print" hidden><img src="/icons/printer.svg" alt="" />Kirim ke printer</button></div></dialog>
+
+    <dialog class="customer-dialog goodbye-dialog" id="goodbye-dialog"><div class="dialog-body goodbye-body"><div class="goodbye-animation"><span>✦</span><span>♥</span><span>✦</span></div><p class="eyebrow">TERIMA KASIH</p><h2 id="goodbye-title">Sampai jumpa lagi!</h2><p id="goodbye-copy">Hasilmu sedang diproses. Jangan lupa ambil cetakanmu.</p><div class="goodbye-timer"><span>Kembali ke layar utama dalam</span><b id="goodbye-countdown">15</b><small>detik</small></div><button class="touch-button secondary-touch light full-touch goodbye-skip" id="skip-goodbye">Lewati dan kembali sekarang</button></div></dialog>
+
+    <script src="/booth.js?v=2" defer></script>
+  </body>
+</html>
