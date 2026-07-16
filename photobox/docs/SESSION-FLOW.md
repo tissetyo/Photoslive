@@ -200,7 +200,8 @@ sama secara bersamaan.
 
 ## User flow pelanggan
 
-UI pelanggan tersedia di `/booth` dan dibagi menjadi empat screen utama. Screen
+UI pelanggan kanonis tersedia di `/{boothCode}` (`/booth` hanya alias legacy)
+dan dibagi menjadi empat screen utama. Screen
 kamera memakai beberapa state agar perpindahan tetap cepat dan preview kamera
 tidak perlu dimatikan lalu dinyalakan ulang.
 

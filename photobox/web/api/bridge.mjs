@@ -1,5 +1,6 @@
 import {
   getRedis,
+  boothKey,
   jobKey,
   machineKey,
   now,
@@ -42,6 +43,11 @@ function publicMachine(machine) {
   return safe;
 }
 
+function persistentBoothCode(machine, preferred = "") {
+  const clean = String(preferred || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+  return clean || machine.boothCode || `pl-${String(machine.id).replace(/^machine_/, "").slice(0, 8)}`;
+}
+
 async function createPairing(redis, payload) {
   const machineId = randomId("machine");
   const agentToken = payload.agentToken || randomId("agent");
@@ -55,6 +61,7 @@ async function createPairing(redis, payload) {
     status: "waiting_pairing",
     paired: false,
     pairingCode: code,
+    boothCode: code.toLowerCase(),
     agentTokenHash: await sha256(agentToken),
     createdAt,
     lastSeenAt: null,
@@ -77,10 +84,25 @@ async function claimPairing(redis, payload) {
   machine.name = String(payload.name || machine.name).slice(0, 80);
   machine.location = String(payload.location || "").slice(0, 120);
   machine.pairedAt = now();
+  machine.boothCode = persistentBoothCode(machine, machine.boothCode || code);
   delete machine.pairingCode;
   await redis.set(machineKey(machineId), machine);
+  await redis.set(boothKey(machine.boothCode), machineId);
   await redis.del(`photoslive:pairing:${code}`);
   return json({ machine: publicMachine(machine) });
+}
+
+
+async function createSetupCode(redis, request, payload) {
+  const machine = await authenticateAgent(redis, request, payload.machineId);
+  if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
+  const code = pairingCode();
+  machine.pairingCode = code;
+  machine.boothCode = persistentBoothCode(machine);
+  await redis.set(machineKey(machine.id), machine);
+  await redis.set(`photoslive:pairing:${code}`, machine.id, { ex: 900 });
+  await redis.set(boothKey(machine.boothCode), machine.id);
+  return json({ pairingCode: code, boothCode: machine.boothCode, expiresInSeconds: 900 });
 }
 
 async function heartbeat(redis, request, payload) {
@@ -93,14 +115,18 @@ async function heartbeat(redis, request, payload) {
   machine.telemetry = payload.telemetry && typeof payload.telemetry === "object" ? payload.telemetry : {};
   machine.devices = Array.isArray(payload.devices) ? payload.devices.slice(0, 24) : [];
   machine.controller = payload.controller && typeof payload.controller === "object" ? payload.controller : {};
+  machine.boothCode = persistentBoothCode(machine);
   await redis.set(machineKey(machine.id), machine);
-  return json({ ok: true, paired: machine.paired, serverTime: now() });
+  await redis.sadd("photoslive:machines", machine.id);
+  if (machine.paired) await redis.set(boothKey(machine.boothCode), machine.id);
+  return json({ ok: true, paired: machine.paired, boothCode: machine.boothCode, serverTime: now() });
 }
 
 async function enqueueJob(redis, payload) {
   const machineId = String(payload.machineId || "");
   const machine = await redis.get(machineKey(machineId));
   if (!machine?.paired) return json({ error: "Mesin belum dipasangkan" }, 409);
+  if (machine.accessEnabled === false) return json({ error: "Akses photobox dinonaktifkan oleh superadmin" }, 403);
   const allowed = new Set(["devices.refresh", "camera.test", "camera.capture", "printer.test", "printer.print", "storage.cleanup", "service.restart", "controller.request"]);
   const type = String(payload.type || "");
   if (!allowed.has(type)) return json({ error: "Jenis job tidak didukung" }, 400);
@@ -167,6 +193,7 @@ async function handler(request) {
     const redis = getRedis();
     if (action === "create_pairing" && request.method === "POST") return json(await createPairing(redis, payload), 201);
     if (action === "claim_pairing" && request.method === "POST") return claimPairing(redis, payload);
+    if (action === "create_setup_code" && request.method === "POST") return createSetupCode(redis, request, payload);
     if (action === "heartbeat" && request.method === "POST") return heartbeat(redis, request, payload);
     if (action === "machine_status" && request.method === "GET") return json({ machine: publicMachine(await redis.get(machineKey(String(payload.machineId || "")))) });
     if (action === "enqueue_job" && request.method === "POST") return enqueueJob(redis, payload);

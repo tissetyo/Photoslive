@@ -1,4 +1,5 @@
 const state = { settings: null, status: null, assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, dirtySections: new Set(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, pendingFrameUpload: null };
+const adminBoothCode = new URLSearchParams(location.search).get("booth") || location.pathname.split("/").filter(Boolean)[0] || localStorage.getItem("photoslive.boothCode") || "";
 const titles = {
   overview: ["Kondisi photobox", "Mesin / Ringkasan", "Lihat apakah mesin siap dipakai dan periksa jika ada masalah."],
   content: ["Tampilan photobox", "Pengaturan / Tampilan", "Atur logo, background, frame, teks, font, dan warna yang dilihat pelanggan."],
@@ -7,6 +8,7 @@ const titles = {
   agent: ["Photoslive Agent", "Mesin / Photoslive Agent", "Download, pasangkan, dan monitor controller hardware lokal."],
   storage: ["Penyimpanan foto", "Mesin / Penyimpanan", "Atur penghapusan foto lokal dan tujuan upload cloud."],
   system: ["Pengaturan mesin", "Mesin / Pengaturan", "Ubah identitas mesin atau unduh laporan untuk teknisi."],
+  users: ["Pengguna admin", "Akun / Pengguna", "Kelola email, password, PIN, serta pengguna yang boleh mengakses mesin ini."],
 };
 const defaults = {
   background: [
@@ -75,7 +77,18 @@ async function directBridge(action, payload = {}, method = "POST") {
 }
 
 async function cloudControllerApi(path, options = {}) {
-  const machineId = localStorage.getItem("photoslive.machineId");
+  let machineId = localStorage.getItem("photoslive.machineId");
+  // A browser can administer more than one booth. Always resolve the machine
+  // from the booth in the current URL so an old localStorage value never sends
+  // settings, uploads, or device commands to a different photobox.
+  if (adminBoothCode) {
+    const response = await fetch(`/api/platform?action=resolve_booth&booth=${encodeURIComponent(adminBoothCode)}`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Photobox tidak ditemukan");
+    machineId = result.booth.machineId;
+    localStorage.setItem("photoslive.machineId", machineId);
+    localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
+  }
   if (!machineId) throw new Error("Mesin belum terhubung. Buka Photoslive Agent dan masukkan kode pairing.");
   let requestBody = null;
   let bodyBase64 = null;
@@ -132,6 +145,23 @@ function showView(name) {
   window.history.replaceState(null, "", currentUrl);
   if (name === "storage" && state.settings) loadStorageData(false);
   if (name === "agent") loadAgentStatus();
+  if (name === "users") loadUsers();
+}
+
+async function platformApi(action, options = {}) {
+  const response = await fetch(`/api/platform?action=${encodeURIComponent(action)}`, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Request gagal (${response.status})`);
+  return payload;
+}
+
+async function loadUsers() {
+  try {
+    const [{ users }, me] = await Promise.all([platformApi("users"), platformApi("me")]);
+    setText("#user-count", users.length);
+    $("#user-rows").innerHTML = users.map(user => `<tr><td>${escapeHtml(user.name)}</td><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.role)}</td><td><span class="device-state ${user.active ? "connected" : "attention"}">${user.active ? "AKTIF" : "NONAKTIF"}</span></td></tr>`).join("") || '<tr><td colspan="4">Belum ada pengguna.</td></tr>';
+    $("#profile-name").value = me.user?.name || ""; $("#profile-email").value = me.user?.email || "";
+  } catch (error) { toast(error.message, "error"); }
 }
 
 const agentState = { machineId: localStorage.getItem("photoslive.machineId") || "", timer: null };
@@ -1146,9 +1176,21 @@ function bindEvents() {
   $("#refresh-storage").addEventListener("click", () => loadStorageData(true));
   $("#download-diagnostics").addEventListener("click", downloadDiagnostics);
   $("#restart-service").addEventListener("click", async () => { try { const result = await api("/api/system/restart", { method: "POST" }); toast(result.message); } catch (error) { toast(error.message, "error"); } });
+  $("#profile-form").addEventListener("submit", async event => { event.preventDefault(); try { await platformApi("profile", { method: "POST", body: JSON.stringify({ name: $("#profile-name").value, email: $("#profile-email").value, password: $("#profile-password").value, pin: $("#profile-pin").value }) }); $("#profile-password").value = ""; $("#profile-pin").value = ""; toast("Profil berhasil diperbarui"); await loadUsers(); } catch (error) { toast(error.message, "error"); } });
+  $("#add-user-form").addEventListener("submit", async event => { event.preventDefault(); try { await platformApi("users", { method: "POST", body: JSON.stringify({ name: $("#new-user-name").value, email: $("#new-user-email").value, password: $("#new-user-password").value, pin: $("#new-user-pin").value, role: $("#new-user-role").value }) }); event.target.reset(); toast("Pengguna berhasil ditambahkan"); await loadUsers(); } catch (error) { toast(error.message, "error"); } });
 }
 
 async function boot() {
+  if (!adminBoothCode || ["setup","superadmin","booth"].includes(adminBoothCode)) { location.replace("/setup?mode=login"); return; }
+  const authResponse = await fetch("/api/platform?action=me");
+  const auth = await authResponse.json().catch(() => ({}));
+  if (!authResponse.ok || (auth.user?.role !== "superadmin" && auth.user?.boothCode !== adminBoothCode)) { location.replace(`/setup?mode=login&booth=${encodeURIComponent(adminBoothCode)}`); return; }
+  localStorage.setItem("photoslive.boothCode", adminBoothCode);
+  if (auth.booth?.machineId) {
+    agentState.machineId = auth.booth.machineId;
+    localStorage.setItem("photoslive.machineId", auth.booth.machineId);
+  }
+  $("#customer-screen-link").href = `/${adminBoothCode}`;
   bindEvents();
   const requestedView = new URLSearchParams(window.location.search).get("view");
   if (requestedView && titles[requestedView]) showView(requestedView);

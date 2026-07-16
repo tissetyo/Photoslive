@@ -3,7 +3,12 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/booth", "destination": "/booth.html" }
+    { "source": "/setup", "destination": "/setup.html" },
+    { "source": "/superadmin", "destination": "/superadmin.html" },
+    { "source": "/booth", "destination": "/booth.html" },
+    { "source": "/:booth/admin", "destination": "/admin.html?booth=:booth" },
+    { "source": "/:booth/:session", "destination": "/session.html?booth=:booth&session=:session" },
+    { "source": "/:booth", "destination": "/booth.html?booth=:booth" }
   ],
   "headers": [
     {
@@ -20,6 +25,10 @@
         {
           "key": "Referrer-Policy",
           "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         }
       ]
     }

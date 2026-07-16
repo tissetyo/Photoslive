@@ -1,10 +1,10 @@
 {
   "name": "photoslive-cloud",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Photoslive production UI and hardware bridge API",
   "main": "app.js",
   "scripts": {
-    "test": "node --check app.js && node --check api/bridge.mjs && node --check api/_store.mjs"
+    "test": "node --check app.js && node --check booth.js && node --check setup.js && node --check superadmin.js && node --check session.js && node --check api/bridge.mjs && node --check api/platform.mjs && node --check api/_store.mjs"
   },
   "keywords": [],
   "author": "",

@@ -15,6 +15,7 @@
 .capture-ready-overlay[hidden]~.capture-hud{opacity:1}
 body [hidden]{display:none!important}
 .live-pill.is-offline{background:rgba(199,55,71,.18);color:#ff9ba6}.live-pill.is-offline i{background:#ff6d7c;box-shadow:0 0 0 6px rgba(255,109,124,.12)}
+.booth-admin-entry{position:fixed;z-index:70;right:14px;bottom:14px;width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.16);border-radius:11px;background:rgba(8,10,15,.4);opacity:.38;backdrop-filter:blur(12px);transition:.2s}.booth-admin-entry:hover,.booth-admin-entry:focus{opacity:1}.booth-admin-entry img{width:16px;height:16px;filter:invert(1)}
 .frame-thumb{display:block}
 
 /* Customer frame browser: full-width, image-first, and paginated for large libraries. */
