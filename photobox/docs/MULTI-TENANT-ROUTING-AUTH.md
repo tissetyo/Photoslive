@@ -5,7 +5,7 @@
 | URL | Fungsi |
 | --- | --- |
 | `/` | Landing page Photoslive |
-| `/setup` | Onboarding Agent, mesin, akun pemilik, dan PIN |
+| `/setup` | Wizard onboarding Agent, identitas mesin, akun pemilik, perangkat, dan frame |
 | `/superadmin` | Control center semua mesin dan request pemulihan |
 | `/{boothCode}` | Layar pelanggan untuk satu photobox |
 | `/{boothCode}/admin` | Dashboard admin tenant |
@@ -42,9 +42,28 @@ token Agent, atau konfigurasi controller.
 - `admin`: dapat mengelola konfigurasi dan menambahkan operator.
 - `operator`: akses operasional mesin.
 
-Password dan PIN di-hash menggunakan PBKDF2-SHA256 dengan salt individual.
+Owner pertama dibuat dengan email dan PIN enam angka; password tidak diwajibkan
+pada onboarding. Password dapat ditambahkan kemudian dari halaman pengguna
+admin. Password dan PIN yang tersedia di-hash menggunakan PBKDF2-SHA256 dengan salt individual.
 Session browser ditandatangani HMAC dan disimpan pada cookie `HttpOnly`, `Secure`,
 `SameSite=Lax` selama tujuh hari.
+
+## Wizard onboarding mesin baru
+
+1. **Kode setup (wajib):** cloud memvalidasi kode dari Agent tanpa langsung
+   mengklaim atau menghapusnya.
+2. **Identitas:** owner mengisi nama photobox; lokasi boleh dikosongkan.
+3. **Akses pemilik (wajib):** owner mengisi email, PIN enam angka, dan konfirmasi
+   PIN. Pada tahap ini mesin diklaim dan session owner dibuat.
+4. **Kamera dan printer (boleh dilewati):** UI membaca heartbeat Agent dan
+   menunjukkan perangkat yang terdeteksi.
+5. **Frame pertama (boleh dilewati):** owner memilih frame bawaan atau mengunggah
+   frame melalui Agent ketika mesin online.
+6. **Siap digunakan:** UI merangkum bagian yang sudah siap dan bagian yang masih
+   perlu diselesaikan dari admin.
+
+Kode setup baru dihapus hanya setelah langkah akses pemilik berhasil. Refresh
+pada langkah sebelum klaim tidak boleh menghabiskan kode tersebut.
 
 Environment production wajib berisi `SESSION_SECRET` minimal 32 karakter,
 `SUPERADMIN_EMAIL`, dan `SUPERADMIN_PASSWORD_HASH`.
