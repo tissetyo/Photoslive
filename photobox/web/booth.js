@@ -411,7 +411,23 @@ async function loadAccessQris() {
   }
 }
 
-function openAccessGate() {
+async function openAccessGate() {
+  const startButton = $("#welcome-start");
+  if (!boothState.config) {
+    startButton.disabled = true;
+    $("#welcome-button-label").textContent = "Menghubungkan mesin…";
+    try {
+      boothState.config = await boothApi("/api/booth/config");
+      localStorage.setItem("photoslive.boothConfig", JSON.stringify(boothState.config));
+      applyConfiguration();
+    } catch (error) {
+      notice(`Belum dapat memulai: ${error.message}`, "error");
+      return;
+    } finally {
+      startButton.disabled = false;
+      $("#welcome-button-label").textContent = boothState.config?.appearance?.startButtonLabel || "Mulai foto";
+    }
+  }
   const qrisEnabled = Boolean(boothState.config.payment.qrisEnabled);
   const voucherEnabled = Boolean(boothState.config.payment.voucherEnabled);
   if (!qrisEnabled && !voucherEnabled) { enterFrameSelection(); return; }
@@ -496,12 +512,25 @@ function bindEvents() {
 }
 
 async function initBooth() {
+  bindEvents();
   try {
     boothState.config = await boothApi("/api/booth/config");
-    applyConfiguration(); bindEvents(); resetBooth(); reportClientCapabilities();
+    localStorage.setItem("photoslive.boothConfig", JSON.stringify(boothState.config));
+    applyConfiguration(); resetBooth(); reportClientCapabilities();
     setInterval(() => reportClientCapabilities(boothState.cameraLabels), 30000);
     if (boothState.config.booth.maintenanceMode) { $("#welcome-start").disabled = true; $("#welcome-button-label").textContent = "Sedang dalam perawatan"; }
-  } catch (error) { notice(`Layar pelanggan tidak dapat dimuat: ${error.message}`, "error"); }
+  } catch (error) {
+    try {
+      const cached = JSON.parse(localStorage.getItem("photoslive.boothConfig") || "null");
+      if (cached?.appearance && cached?.booth && cached?.payment) {
+        boothState.config = cached;
+        applyConfiguration(); resetBooth();
+        notice(`Mode sementara: Agent belum merespons. ${error.message}`, "error");
+        return;
+      }
+    } catch { localStorage.removeItem("photoslive.boothConfig"); }
+    notice(`Mesin belum siap. Tekan Mulai foto untuk mencoba lagi. ${error.message}`, "error");
+  }
 }
 
 initBooth();
