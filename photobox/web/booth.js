@@ -249,7 +249,11 @@ async function reportClientCapabilities(cameraLabels = []) {
 async function startBrowserCamera() {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("Browser ini tidak menyediakan akses kamera");
   if (!boothState.cameraStream) {
-    boothState.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+    const configuredId = boothState.config?.devices?.browserCameraId;
+    const video = configuredId
+      ? { deviceId: { exact: configuredId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      : { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } };
+    boothState.cameraStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
   }
   const videos = [$("#frame-camera-video"), $("#capture-camera-video")];
   videos.forEach(video => { video.srcObject = boothState.cameraStream; video.classList.add("has-image"); });

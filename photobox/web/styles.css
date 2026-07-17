@@ -20,8 +20,8 @@
   --space-8: 32px;
   --space-10: 40px;
   --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
   --control-height: 48px;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
@@ -526,6 +526,14 @@ dialog form { gap: var(--space-5); padding: var(--space-6); }
 .storage-measurement i u { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width .25s ease; }
 .storage-measurement p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .storage-measurement .button { justify-self: start; }
+.local-storage-panel { margin-bottom: var(--space-5); }
+.local-storage-controls { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: var(--space-5); align-items: start; }
+.local-storage-controls > label { margin: 0; }
+.local-storage-controls > label small { display: block; margin-top: var(--space-2); color: var(--muted); font-size: 11px; line-height: 1.45; }
+.local-storage-current { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-sm); background: #f8f9fb; }
+.local-storage-current span { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.local-storage-current code { overflow-wrap: anywhere; font-size: 12px; font-weight: 700; }
+.local-storage-current small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .session-storage-panel { margin-top: 0; }
 .session-table { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .session-table-head, .session-row { display: grid; grid-template-columns: minmax(170px, 1.3fr) 1fr .45fr .65fr .65fr 110px; gap: var(--space-4); align-items: center; padding: 0 var(--space-4); }
@@ -684,7 +692,7 @@ dialog .dialog-switch { min-height: 66px; padding: var(--space-2) 0; }
   .topbar { align-items: flex-start; }
   .topbar h1 { font-size: 21px; }
   .button.secondary#refresh-button { display: none; }
-  .kpi-grid, .storage-kpi-grid, .admin-kpi-grid, .dashboard-grid, .form-grid, .form-row, .asset-grid, .color-config-grid, .text-size-grid, .frame-simple-controls, .frame-result { grid-template-columns: 1fr; }
+  .kpi-grid, .storage-kpi-grid, .admin-kpi-grid, .dashboard-grid, .form-grid, .form-row, .asset-grid, .color-config-grid, .text-size-grid, .frame-simple-controls, .frame-result, .local-storage-controls { grid-template-columns: 1fr; }
   .frame-simple-controls { padding-left: 0; }
   .active-frame-preview-wrap { max-width: 220px; }
   .dashboard-grid .span-2 { grid-column: auto; }

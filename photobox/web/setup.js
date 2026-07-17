@@ -5,6 +5,7 @@ const onboarding = {
   machine: null,
   booth: null,
   devices: [],
+  browserCameraStream: null,
   selectedFrame: "clean-white",
   frameFile: null,
   framePreviewUrl: null,
@@ -78,12 +79,14 @@ function updateRecoveryVisibility(activeMode) {
 }
 
 function setSetupStep(step) {
+  if (onboarding.step === 4 && Number(step) !== 4) stopSetupCameraPreview();
   onboarding.step = Math.max(1, Math.min(6, Number(step) || 1));
   document.querySelectorAll("[data-setup-step]").forEach(panel => panel.classList.toggle("hidden", Number(panel.dataset.setupStep) !== onboarding.step));
   const [name, help] = setupSteps[onboarding.step - 1];
   $("#wizard-step-label").textContent = `Langkah ${onboarding.step} dari 6`;
   $("#wizard-step-name").textContent = name;
   $("#wizard-progress-bar").style.width = `${(onboarding.step / 6) * 100}%`;
+  $(".auth-card").style.setProperty("--progress-angle", `${(onboarding.step / 6) * 360}deg`);
   $("#setup-title").textContent = name;
   $("#setup-copy").textContent = help;
   $("#setup-modes").classList.toggle("hidden", onboarding.step > 1);
@@ -147,6 +150,55 @@ function connectedDevices(kind) {
   ));
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / (1024 ** index)).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
+}
+
+function renderMachineSummary(machine, storage = null) {
+  const telemetry = machine?.telemetry || {};
+  const memory = storage?.memory || telemetry.memory || {};
+  const disk = storage?.disk || telemetry.disk || {};
+  $("#setup-machine-summary").hidden = !machine;
+  $("#setup-machine-name").textContent = telemetry.hostname || machine?.name || "Komputer Agent";
+  $("#setup-machine-platform").textContent = machine?.platform || "Sistem belum dilaporkan";
+  $("#setup-machine-memory").textContent = memory.totalBytes ? formatBytes(memory.totalBytes) : "Belum tersedia";
+  $("#setup-machine-memory-detail").textContent = memory.usedBytes != null ? `${formatBytes(memory.usedBytes)} digunakan` : "Menunggu Agent";
+  $("#setup-machine-disk").textContent = disk.freeBytes ? `${formatBytes(disk.freeBytes)} bebas` : "Belum tersedia";
+  $("#setup-machine-disk-detail").textContent = disk.totalBytes ? `dari ${formatBytes(disk.totalBytes)}` : "Menunggu Agent";
+  if (storage?.localPath && !$("#setup-storage-path").value) $("#setup-storage-path").value = storage.localPath;
+}
+
+async function browserCameras(requestPermission = false) {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  let temporaryStream = null;
+  try {
+    if (requestPermission) temporaryStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter(device => device.kind === "videoinput").map((device, index) => ({
+      id: `browser:${device.deviceId || index}`,
+      name: device.label || `Webcam browser ${index + 1}`,
+      kind: "camera",
+      status: "connected",
+      detail: "Kamera browser",
+    }));
+  } finally {
+    temporaryStream?.getTracks().forEach(track => track.stop());
+  }
+}
+
+function stopSetupCameraPreview() {
+  onboarding.browserCameraStream?.getTracks().forEach(track => track.stop());
+  onboarding.browserCameraStream = null;
+  const video = $("#setup-camera-preview");
+  video.srcObject = null;
+  video.hidden = true;
+  $("#test-setup-camera").textContent = "Tes kamera";
+}
+
 function renderDevicePicker(kind, devices) {
   const card = $(`#onboarding-${kind}`);
   const select = $(`#setup-${kind}-select`);
@@ -171,33 +223,48 @@ function renderDevicePicker(kind, devices) {
   testButton.disabled = !connected;
 }
 
-async function refreshOnboardingDevices() {
+async function refreshOnboardingDevices(requestBrowserPermission = false) {
   const message = $("#device-onboarding-status");
   message.textContent = "Mencari perangkat…";
+  const browserCameraPromise = browserCameras(requestBrowserPermission).catch(error => ({ error }));
   try {
     const { machine } = await bridgeApi("machine_status", { machineId: onboarding.machine.id }, "GET");
     onboarding.machine = { ...onboarding.machine, ...machine };
     if (!machine?.online) throw new Error("Agent offline");
-    const refreshed = await controllerRequest("/api/devices/refresh", "POST");
-    onboarding.devices = Array.isArray(refreshed?.devices) ? refreshed.devices : Array.isArray(machine?.devices) ? machine.devices : [];
+    const [refreshed, storage] = await Promise.all([
+      controllerRequest("/api/devices/refresh", "POST"),
+      controllerRequest("/api/storage/overview", "GET").catch(() => null),
+    ]);
+    const browserResult = await browserCameraPromise;
+    const localDevices = Array.isArray(refreshed?.devices) ? refreshed.devices : Array.isArray(machine?.devices) ? machine.devices : [];
+    const browserDevices = Array.isArray(browserResult) ? browserResult : [];
+    onboarding.devices = [...browserDevices, ...localDevices];
+    renderMachineSummary(onboarding.machine, storage);
     const cameras = connectedDevices("camera");
     const printers = connectedDevices("printer");
     renderDevicePicker("camera", cameras);
     renderDevicePicker("printer", printers);
     message.textContent = cameras.length || printers.length ? "Pilih perangkat yang akan dipakai." : "Tidak ada perangkat terhubung.";
+    if (browserResult?.error) message.textContent += ` Izin webcam: ${browserResult.error.message}.`;
   } catch (error) {
-    onboarding.devices = [];
-    renderDevicePicker("camera", []);
+    const browserResult = await browserCameraPromise;
+    onboarding.devices = Array.isArray(browserResult) ? browserResult : [];
+    renderMachineSummary(onboarding.machine);
+    renderDevicePicker("camera", connectedDevices("camera"));
     renderDevicePicker("printer", []);
-    message.textContent = `${error.message}. Periksa Agent atau lewati.`;
+    message.textContent = connectedDevices("camera").length ? `Webcam browser terdeteksi. ${error.message}.` : `${error.message}. Periksa Agent atau izin kamera browser.`;
   }
 }
 
 async function selectOnboardingDevice(kind) {
   const select = $(`#setup-${kind}-select`);
   if (!select.value) return;
+  if (kind === "camera" && select.value.startsWith("browser:")) {
+    await controllerRequest("/api/settings", "PATCH", { devices: { cameraSource: "browser", browserCameraId: select.value.slice(8) } });
+    return;
+  }
   const key = kind === "camera" ? "preferredCamera" : "preferredPrinter";
-  await controllerRequest("/api/settings", "PATCH", { devices: { [key]: select.value } });
+  await controllerRequest("/api/settings", "PATCH", { devices: { [key]: select.value, ...(kind === "camera" ? { cameraSource: "controller" } : {}) } });
 }
 
 async function testOnboardingDevice(kind) {
@@ -206,6 +273,23 @@ async function testOnboardingDevice(kind) {
   button.disabled = true;
   message.textContent = kind === "camera" ? "Menguji kamera…" : "Mengirim halaman tes…";
   try {
+    if (kind === "camera" && $("#setup-camera-select").value.startsWith("browser:")) {
+      if (onboarding.browserCameraStream) {
+        stopSetupCameraPreview();
+        message.textContent = "Preview kamera dimatikan.";
+        return;
+      }
+      const deviceId = $("#setup-camera-select").value.slice(8);
+      onboarding.browserCameraStream = await navigator.mediaDevices.getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false });
+      const video = $("#setup-camera-preview");
+      video.srcObject = onboarding.browserCameraStream;
+      video.hidden = false;
+      await video.play();
+      button.textContent = "Matikan preview";
+      message.textContent = "Webcam browser siap.";
+      await selectOnboardingDevice(kind);
+      return;
+    }
     await selectOnboardingDevice(kind);
     const result = await controllerRequest(kind === "camera" ? "/api/devices/camera/test" : "/api/devices/printer/test-page", "POST");
     message.textContent = result.message || (kind === "camera" ? "Kamera siap." : "Halaman tes dikirim.");
@@ -378,11 +462,27 @@ $("#setup-form").addEventListener("submit", async event => {
   }
 });
 
-$("#refresh-onboarding-devices").addEventListener("click", refreshOnboardingDevices);
+$("#refresh-onboarding-devices").addEventListener("click", () => refreshOnboardingDevices(true));
 $("#setup-camera-select").addEventListener("change", () => selectOnboardingDevice("camera").catch(error => { $("#device-onboarding-status").textContent = error.message; }));
 $("#setup-printer-select").addEventListener("change", () => selectOnboardingDevice("printer").catch(error => { $("#device-onboarding-status").textContent = error.message; }));
 $("#test-setup-camera").addEventListener("click", () => testOnboardingDevice("camera"));
 $("#test-setup-printer").addEventListener("click", () => testOnboardingDevice("printer"));
+$("#save-device-onboarding").addEventListener("click", async () => {
+  const button = $("#save-device-onboarding");
+  button.disabled = true;
+  $("#device-onboarding-status").textContent = "Menyimpan perangkat dan folder…";
+  try {
+    const localPhotoPath = $("#setup-storage-path").value.trim();
+    await Promise.all([
+      $("#setup-camera-select").value ? selectOnboardingDevice("camera") : Promise.resolve(),
+      $("#setup-printer-select").value ? selectOnboardingDevice("printer") : Promise.resolve(),
+      controllerRequest("/api/settings", "PATCH", { storage: { localPhotoPath } }),
+    ]);
+    setSetupStep(5);
+  } catch (error) {
+    $("#device-onboarding-status").textContent = error.message;
+  } finally { button.disabled = false; }
+});
 document.querySelectorAll("[data-frame-choice]").forEach(button => button.addEventListener("click", () => {
   onboarding.frameFile = null;
   if (onboarding.framePreviewUrl) URL.revokeObjectURL(onboarding.framePreviewUrl);
