@@ -9,6 +9,8 @@ const onboarding = {
   selectedFrame: "clean-white",
   frameFile: null,
   framePreviewUrl: null,
+  frameDesign: null,
+  frameEditor: null,
 };
 
 const setupSteps = [
@@ -309,18 +311,112 @@ function fileToBase64(file) {
   });
 }
 
+function setupDefaultSlotTransforms(slots) {
+  const count = Math.max(1, Math.min(8, Number(slots || 1)));
+  const gap = 1.5;
+  const slotHeight = Math.min(28, (84 - gap * (count - 1)) / count);
+  const slotWidth = Math.min(88, slotHeight * 3);
+  return Array.from({ length: count }, (_, index) => ({ x: 50, y: 3 + slotHeight / 2 + index * (slotHeight + gap), width: slotWidth, rotation: 0, opacity: 100, z: index + 1 }));
+}
+
+function setupFrameElementStyle(item = {}, sticker = false) {
+  const width = sticker ? Number(item.size || 28) : Number(item.width || 84);
+  return `left:${Number(item.x ?? 50)}%;top:${Number(item.y ?? 15)}%;width:${width}%;opacity:${Number(item.opacity ?? 100) / 100};z-index:${Number(item.z || 1)};transform:translate(-50%,-50%) rotate(${Number(item.rotation || 0)}deg)`;
+}
+
+function setupSelectedFrameElements(editor = onboarding.frameEditor) {
+  if (!editor?.selected) return [];
+  if (editor.selected.type === "all-slots") return editor.slotTransforms;
+  if (editor.selected.type === "sticker") return [editor.stickers[editor.selected.index]].filter(Boolean);
+  return [editor.slotTransforms[editor.selected.index]].filter(Boolean);
+}
+
+function setupFrameLayers(editor = onboarding.frameEditor) {
+  if (!editor) return [];
+  return [
+    ...editor.slotTransforms.map((item, index) => ({ type: "slot", index, name: `Foto ${index + 1}`, z: Number(item.z || index + 1) })),
+    ...editor.stickers.map((item, index) => ({ type: "sticker", index, name: `Logo / stiker ${index + 1}`, z: Number(item.z || 10 + index) })),
+  ].sort((a, b) => b.z - a.z);
+}
+
+function setSetupFrameTab(name) {
+  document.querySelectorAll("[data-setup-frame-tab]").forEach(button => {
+    const active = button.dataset.setupFrameTab === name;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-setup-frame-panel]").forEach(panel => { panel.hidden = panel.dataset.setupFramePanel !== name; });
+}
+
+function renderSetupFrameEditor() {
+  const editor = onboarding.frameEditor;
+  if (!editor) return;
+  const preview = $("#setup-frame-upload-preview");
+  preview.style.aspectRatio = "3 / 4";
+  const slots = editor.slotTransforms.map((item, index) => `<span class="setup-frame-element ${((editor.selected?.type === "slot" && editor.selected.index === index) || editor.selected?.type === "all-slots") ? "selected" : ""}" data-setup-editor-type="slot" data-setup-editor-index="${index}" style="${setupFrameElementStyle(item)}"><b>${index + 1}</b><img src="/icons/image.svg" alt="Area foto ${index + 1}"></span>`).join("");
+  const stickers = editor.stickers.map((item, index) => `<span class="setup-frame-element setup-frame-sticker ${(editor.selected?.type === "sticker" && editor.selected.index === index) ? "selected" : ""}" data-setup-editor-type="sticker" data-setup-editor-index="${index}" style="${setupFrameElementStyle(item, true)}"><img src="${item.previewUrl || item.url}" alt="Logo atau stiker ${index + 1}"></span>`).join("");
+  preview.innerHTML = `<div class="setup-frame-artwork" style="background:${editor.backgroundCss};transform:scale(${editor.zoom / 100});transform-origin:${editor.x}% ${editor.y}%"></div>${slots}${stickers}`;
+  $("#setup-frame-crop-stage").style.setProperty("--setup-editor-art", editor.backgroundCss);
+  $("#setup-frame-zoom-value").textContent = `${editor.zoom}%`;
+  const selected = setupSelectedFrameElements(editor)[0] || {};
+  const isSticker = editor.selected?.type === "sticker";
+  const allSlots = editor.selected?.type === "all-slots";
+  $("#setup-frame-selected-label").textContent = isSticker ? `Logo / stiker ${editor.selected.index + 1} dipilih` : allSlots ? `Semua ${editor.slots} foto dipilih` : `Area foto ${(editor.selected?.index || 0) + 1} dipilih`;
+  $("#setup-frame-selected-help").textContent = allSlots ? "Geser satu area untuk memindahkan semuanya" : "Geser pada preview untuk memindahkan";
+  $("#setup-select-all-slots").classList.toggle("active", allSlots);
+  $("#setup-frame-rotation").value = Number(selected.rotation || 0);
+  $("#setup-frame-rotation-value").textContent = `${Number(selected.rotation || 0)}°`;
+  $("#setup-frame-size").value = isSticker ? Number(selected.size || 28) : Math.round(Number(selected.width || 84) / .84);
+  $("#setup-frame-size-value").textContent = `${Math.round(Number($("#setup-frame-size").value))}%`;
+  $("#setup-frame-opacity").value = Number(selected.opacity ?? 100);
+  $("#setup-frame-opacity-value").textContent = `${Number(selected.opacity ?? 100)}%`;
+  $("#setup-remove-frame-element").hidden = !isSticker;
+  const layers = setupFrameLayers(editor);
+  $("#setup-frame-layer-count").textContent = String(layers.length);
+  $("#setup-frame-layer-list").innerHTML = layers.map((layer, position) => `<div class="setup-frame-layer-row ${(editor.selected?.type === layer.type && editor.selected.index === layer.index) ? "selected" : ""}" data-layer-type="${layer.type}" data-layer-index="${layer.index}"><button type="button" class="setup-layer-select"><img src="/icons/${layer.type === "sticker" ? "image-plus" : "image"}.svg" alt=""><b>${layer.name}</b></button><div><button type="button" class="setup-layer-up" aria-label="Naikkan ${layer.name}" ${position === 0 ? "disabled" : ""}><img src="/icons/chevron-up.svg" alt=""></button><button type="button" class="setup-layer-down" aria-label="Turunkan ${layer.name}" ${position === layers.length - 1 ? "disabled" : ""}><img src="/icons/chevron-down.svg" alt=""></button></div></div>`).join("");
+}
+
+function openSetupFrameEditor(file) {
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran frame maksimal 10 MB."; return; }
+  const previewUrl = URL.createObjectURL(file);
+  onboarding.frameEditor = { file, previewUrl, backgroundCss: `center / cover no-repeat url('${previewUrl}')`, slots: 3, zoom: 100, x: 50, y: 50, slotTransforms: setupDefaultSlotTransforms(3), stickers: [], selected: { type: "slot", index: 0 } };
+  $("#setup-frame-slots").value = "3";
+  $("#setup-frame-zoom").value = "100";
+  setSetupFrameTab("design");
+  renderSetupFrameEditor();
+  $("#setup-frame-editor-dialog").showModal();
+}
+
+function renderStarterUploadPreview() {
+  const design = onboarding.frameDesign;
+  const container = $("#upload-starter-frame > span");
+  if (!design) return;
+  const slots = design.slotTransforms.map(item => `<span style="${setupFrameElementStyle(item)};--rotation:${Number(item.rotation || 0)}deg">${design.slotTransforms.indexOf(item) + 1}</span>`).join("");
+  const stickers = design.stickers.map(item => `<img src="${item.previewUrl || item.url}" alt="" style="left:${item.x}%;top:${item.y}%;width:${item.size || 28}%;opacity:${Number(item.opacity ?? 100) / 100};z-index:${Number(item.z || 10)};--rotation:${Number(item.rotation || 0)}deg">`).join("");
+  container.innerHTML = `<div class="starter-frame-render" style="--setup-frame-art:${design.backgroundCss}">${slots}${stickers}</div>`;
+}
+
 function selectStarterFrame(value) {
   onboarding.selectedFrame = value;
+  onboarding.frameFile = null;
+  (onboarding.frameDesign?.stickers || []).forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); });
+  onboarding.frameDesign = null;
+  $("#upload-starter-frame").classList.remove("active", "has-preview");
+  $("#upload-starter-frame > span").innerHTML = '<img src="/icons/image-plus.svg" alt="">';
+  $("#upload-starter-frame small").textContent = "PNG, JPG, atau WebP";
   document.querySelectorAll("[data-frame-choice]").forEach(button => button.classList.toggle("active", button.dataset.frameChoice === value));
 }
 
 async function saveStarterFrame() {
   const message = $("#frame-onboarding-status");
+  const button = $("#save-onboarding-frame");
+  button.disabled = true;
   message.textContent = "Menyimpan pilihan frame…";
   let activeFrame = onboarding.selectedFrame;
   try {
     if (onboarding.frameFile) {
-      if (!onboarding.machine?.online) throw new Error("Agent harus online untuk upload frame");
+      if (!onboarding.machine?.id) throw new Error("Mesin belum terhubung");
       const uploaded = await controllerRequest("/api/assets/frame", "PUT", null, {
         bodyBase64: await fileToBase64(onboarding.frameFile),
         headers: { "content-type": onboarding.frameFile.type, "x-filename": onboarding.frameFile.name },
@@ -329,15 +425,23 @@ async function saveStarterFrame() {
       if (!activeFrame) throw new Error("Agent tidak mengembalikan file frame");
       onboarding.selectedFrame = activeFrame;
     }
-    if (onboarding.machine?.online) {
-      await controllerRequest("/api/settings", "PATCH", { appearance: { activeFrame }, booth: { name: $("#booth-name").value.trim() } });
-    }
+    const design = onboarding.frameDesign || { slots: 3, zoom: 100, x: 50, y: 50, slotTransforms: setupDefaultSlotTransforms(3), stickers: [] };
+    await controllerRequest("/api/settings", "PATCH", {
+      appearance: {
+        activeFrame,
+        framePhotoSlots: { [activeFrame]: design.slots },
+        frameBackgroundTransforms: { [activeFrame]: { zoom: design.zoom, x: design.x, y: design.y } },
+        frameSlotTransforms: { [activeFrame]: design.slotTransforms },
+        frameStickers: { [activeFrame]: design.stickers.map(({ previewUrl, ...item }) => item) },
+      },
+      booth: { name: $("#booth-name").value.trim(), photoSlotsPerSession: design.slots },
+    });
     message.textContent = "Frame pertama siap digunakan.";
     setSetupStep(6);
     renderReadyChecklist();
   } catch (error) {
-    message.textContent = `${error.message}. Pilih frame bawaan atau gunakan tombol lewati.`;
-  }
+    message.textContent = error.message;
+  } finally { button.disabled = false; }
 }
 
 function renderReadyChecklist() {
@@ -496,25 +600,131 @@ $("#save-device-onboarding").addEventListener("click", async () => {
   } finally { button.disabled = false; }
 });
 document.querySelectorAll("[data-frame-choice]").forEach(button => button.addEventListener("click", () => {
-  onboarding.frameFile = null;
   if (onboarding.framePreviewUrl) URL.revokeObjectURL(onboarding.framePreviewUrl);
   onboarding.framePreviewUrl = null;
-  $("#upload-starter-frame").style.removeProperty("--frame-preview");
   selectStarterFrame(button.dataset.frameChoice);
 }));
 $("#upload-starter-frame").addEventListener("click", () => $("#starter-frame-file").click());
 $("#starter-frame-file").addEventListener("change", event => {
   const file = event.target.files[0];
-  if (!file) return;
-  if (file.size > 10 * 1024 * 1024) return $("#frame-onboarding-status").textContent = "Ukuran frame maksimal 10 MB.";
+  event.target.value = "";
+  openSetupFrameEditor(file);
+});
+document.querySelectorAll("[data-setup-frame-tab]").forEach(button => button.addEventListener("click", () => setSetupFrameTab(button.dataset.setupFrameTab)));
+$("#setup-frame-slots").addEventListener("change", event => {
+  if (!onboarding.frameEditor) return;
+  onboarding.frameEditor.slots = Number(event.target.value);
+  onboarding.frameEditor.slotTransforms = setupDefaultSlotTransforms(onboarding.frameEditor.slots);
+  onboarding.frameEditor.selected = { type: "slot", index: 0 };
+  renderSetupFrameEditor();
+});
+$("#setup-frame-zoom").addEventListener("input", event => { if (onboarding.frameEditor) { onboarding.frameEditor.zoom = Number(event.target.value); renderSetupFrameEditor(); } });
+$("#setup-frame-rotation").addEventListener("input", event => { setupSelectedFrameElements().forEach(item => { item.rotation = Number(event.target.value); }); renderSetupFrameEditor(); });
+$("#setup-frame-size").addEventListener("input", event => {
+  if (!onboarding.frameEditor?.selected) return;
+  const sticker = onboarding.frameEditor.selected.type === "sticker";
+  setupSelectedFrameElements().forEach(item => { if (sticker) item.size = Number(event.target.value); else item.width = Number(event.target.value) * .84; });
+  renderSetupFrameEditor();
+});
+$("#setup-frame-opacity").addEventListener("input", event => { setupSelectedFrameElements().forEach(item => { item.opacity = Number(event.target.value); }); renderSetupFrameEditor(); });
+$("#setup-select-all-slots").addEventListener("click", () => { if (onboarding.frameEditor) { onboarding.frameEditor.selected = { type: "all-slots", index: 0 }; renderSetupFrameEditor(); } });
+$("#setup-remove-frame-element").addEventListener("click", () => {
+  if (onboarding.frameEditor?.selected?.type !== "sticker") return;
+  const [removed] = onboarding.frameEditor.stickers.splice(onboarding.frameEditor.selected.index, 1);
+  if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+  onboarding.frameEditor.selected = { type: "slot", index: 0 };
+  renderSetupFrameEditor();
+});
+$("#setup-add-frame-sticker").addEventListener("click", () => { $("#setup-frame-sticker-file").value = ""; $("#setup-frame-sticker-file").click(); });
+$("#setup-frame-sticker-file").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file || !onboarding.frameEditor) return;
+  if (file.size > 10 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran logo atau stiker maksimal 10 MB."; return; }
+  try {
+    const uploaded = await controllerRequest("/api/assets/sticker", "PUT", null, { bodyBase64: await fileToBase64(file), headers: { "content-type": file.type, "x-filename": file.name } });
+    const url = uploaded.asset?.url || uploaded.body?.asset?.url;
+    if (!url) throw new Error("Agent tidak mengembalikan file stiker");
+    const top = Math.max(0, ...setupFrameLayers().map(layer => layer.z));
+    onboarding.frameEditor.stickers.push({ url, previewUrl: URL.createObjectURL(file), x: 50, y: 88, size: 28, rotation: 0, opacity: 100, z: top + 1 });
+    onboarding.frameEditor.selected = { type: "sticker", index: onboarding.frameEditor.stickers.length - 1 };
+    renderSetupFrameEditor();
+  } catch (error) { $("#frame-onboarding-status").textContent = error.message; }
+});
+$("#setup-frame-layer-list").addEventListener("click", event => {
+  const row = event.target.closest(".setup-frame-layer-row");
+  if (!row || !onboarding.frameEditor) return;
+  const type = row.dataset.layerType;
+  const index = Number(row.dataset.layerIndex);
+  onboarding.frameEditor.selected = { type, index };
+  const layers = setupFrameLayers();
+  const position = layers.findIndex(layer => layer.type === type && layer.index === index);
+  const direction = event.target.closest(".setup-layer-up") ? -1 : event.target.closest(".setup-layer-down") ? 1 : 0;
+  if (direction && layers[position + direction]) {
+    const current = type === "sticker" ? onboarding.frameEditor.stickers[index] : onboarding.frameEditor.slotTransforms[index];
+    const adjacentLayer = layers[position + direction];
+    const adjacent = adjacentLayer.type === "sticker" ? onboarding.frameEditor.stickers[adjacentLayer.index] : onboarding.frameEditor.slotTransforms[adjacentLayer.index];
+    const currentZ = Number(current.z || 1); current.z = Number(adjacent.z || 1); adjacent.z = currentZ;
+  }
+  renderSetupFrameEditor();
+});
+const setupFramePreview = $("#setup-frame-upload-preview");
+let setupFrameDrag = null;
+setupFramePreview.addEventListener("pointerdown", event => {
+  if (!onboarding.frameEditor) return;
+  const element = event.target.closest(".setup-frame-element");
+  if (element && !(onboarding.frameEditor.selected?.type === "all-slots" && element.dataset.setupEditorType === "slot")) onboarding.frameEditor.selected = { type: element.dataset.setupEditorType, index: Number(element.dataset.setupEditorIndex) };
+  const selected = onboarding.frameEditor.selected;
+  const target = element ? setupSelectedFrameElements()[0] : onboarding.frameEditor;
+  setupFrameDrag = { kind: element ? "element" : "artwork", clientX: event.clientX, clientY: event.clientY, x: target.x, y: target.y, group: selected.type === "all-slots" ? onboarding.frameEditor.slotTransforms.map(item => ({ x: item.x, y: item.y })) : null };
+  setupFramePreview.setPointerCapture(event.pointerId);
+  setupFramePreview.classList.add("dragging");
+  renderSetupFrameEditor();
+});
+setupFramePreview.addEventListener("pointermove", event => {
+  if (!setupFrameDrag || !onboarding.frameEditor) return;
+  const bounds = setupFramePreview.getBoundingClientRect();
+  const direction = setupFrameDrag.kind === "element" ? 1 : -1;
+  const x = Math.max(0, Math.min(100, setupFrameDrag.x + direction * ((event.clientX - setupFrameDrag.clientX) / bounds.width) * 100));
+  const y = Math.max(0, Math.min(100, setupFrameDrag.y + direction * ((event.clientY - setupFrameDrag.clientY) / bounds.height) * 100));
+  if (setupFrameDrag.kind === "element") {
+    if (onboarding.frameEditor.selected.type === "all-slots") {
+      const dx = x - setupFrameDrag.x, dy = y - setupFrameDrag.y;
+      onboarding.frameEditor.slotTransforms.forEach((item, index) => { item.x = Math.max(0, Math.min(100, setupFrameDrag.group[index].x + dx)); item.y = Math.max(0, Math.min(100, setupFrameDrag.group[index].y + dy)); });
+    } else { const target = setupSelectedFrameElements()[0]; if (target) { target.x = x; target.y = y; } }
+  } else { onboarding.frameEditor.x = x; onboarding.frameEditor.y = y; }
+  renderSetupFrameEditor();
+});
+const endSetupFrameDrag = event => {
+  if (!setupFrameDrag) return;
+  setupFrameDrag = null;
+  setupFramePreview.classList.remove("dragging");
+  if (setupFramePreview.hasPointerCapture(event.pointerId)) setupFramePreview.releasePointerCapture(event.pointerId);
+};
+setupFramePreview.addEventListener("pointerup", endSetupFrameDrag);
+setupFramePreview.addEventListener("pointercancel", endSetupFrameDrag);
+$("#save-setup-frame-design").addEventListener("click", event => {
+  event.preventDefault();
+  if (!onboarding.frameEditor) return;
+  const editor = onboarding.frameEditor;
   if (onboarding.framePreviewUrl) URL.revokeObjectURL(onboarding.framePreviewUrl);
-  onboarding.frameFile = file;
-  onboarding.framePreviewUrl = URL.createObjectURL(file);
+  onboarding.framePreviewUrl = editor.previewUrl;
+  onboarding.frameFile = editor.file;
+  onboarding.frameDesign = { backgroundCss: editor.backgroundCss, slots: editor.slots, zoom: editor.zoom, x: editor.x, y: editor.y, slotTransforms: structuredClone(editor.slotTransforms), stickers: structuredClone(editor.stickers) };
   onboarding.selectedFrame = "upload";
   document.querySelectorAll("[data-frame-choice]").forEach(button => button.classList.remove("active"));
   $("#upload-starter-frame").classList.add("active", "has-preview");
-  $("#upload-starter-frame").style.setProperty("--frame-preview", `url('${onboarding.framePreviewUrl}')`);
-  $("#upload-starter-frame small").textContent = file.name;
+  $("#upload-starter-frame small").textContent = editor.file.name;
+  renderStarterUploadPreview();
+  onboarding.frameEditor = null;
+  $("#setup-frame-editor-dialog").close();
+  $("#frame-onboarding-status").textContent = "Desain siap. Tekan Lanjutkan untuk menyimpan.";
+});
+$("#setup-frame-editor-dialog").addEventListener("close", () => {
+  if (onboarding.frameEditor) {
+    if (onboarding.frameEditor.previewUrl) URL.revokeObjectURL(onboarding.frameEditor.previewUrl);
+    (onboarding.frameEditor.stickers || []).forEach(item => { if (item.previewUrl) URL.revokeObjectURL(item.previewUrl); });
+  }
+  onboarding.frameEditor = null;
 });
 $("#save-onboarding-frame").addEventListener("click", saveStarterFrame);
 $("#finish-onboarding").addEventListener("click", () => {
