@@ -55,8 +55,11 @@ Session browser ditandatangani HMAC dan disimpan pada cookie `HttpOnly`, `Secure
 2. **Identitas:** owner mengisi nama photobox; lokasi boleh dikosongkan.
 3. **Akses pemilik (wajib):** owner mengisi email, PIN enam angka, dan konfirmasi
    PIN. Pada tahap ini mesin diklaim dan session owner dibuat.
-4. **Kamera dan printer (boleh dilewati):** UI membaca heartbeat Agent dan
-   menunjukkan perangkat yang terdeteksi.
+4. **Perangkat dan penyimpanan (boleh dilewati):** UI membaca heartbeat Agent,
+   menampilkan hostname/platform/RAM/disk, dan menunjukkan kamera serta printer
+   nyata yang terdeteksi. Webcam browser ditambahkan lewat `MediaDevices` setelah
+   tindakan pengguna memberi izin. Owner juga dapat menentukan path absolut
+   folder foto lokal pada komputer Agent.
 5. **Frame pertama (boleh dilewati):** owner memilih frame bawaan atau mengunggah
    frame melalui Agent ketika mesin online.
 6. **Siap digunakan:** UI merangkum bagian yang sudah siap dan bagian yang masih
@@ -64,6 +67,9 @@ Session browser ditandatangani HMAC dan disimpan pada cookie `HttpOnly`, `Secure
 
 Kode setup baru dihapus hanya setelah langkah akses pemilik berhasil. Refresh
 pada langkah sebelum klaim tidak boleh menghabiskan kode tersebut.
+
+Kartu wizard tetap di posisi yang sama pada semua langkah. Progres ditampilkan
+sebagai border di sekeliling kartu; hanya orb warna di background yang berpindah.
 
 Environment production wajib berisi `SESSION_SECRET` minimal 32 karakter,
 `SUPERADMIN_EMAIL`, dan `SUPERADMIN_PASSWORD_HASH`.

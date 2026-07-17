@@ -107,12 +107,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "frameBottomMarginPercent": 20,
     },
     "storage": {
+        "localPhotoPath": "",
         "cloudEnabled": False,
         "provider": "Cloudflare R2",
         "uploadFinalOnly": True,
         "deleteOnlyAfterUpload": True,
     },
     "devices": {
+        "cameraSource": "auto",
+        "browserCameraId": "",
         "preferredCamera": "auto",
         "preferredPrinter": "auto",
         "paperSize": "4x6",
@@ -259,6 +262,52 @@ def load_settings() -> dict[str, Any]:
     return settings
 
 
+def photo_root(settings: dict[str, Any] | None = None) -> Path:
+    current = settings or load_settings()
+    raw = str(current.get("storage", {}).get("localPhotoPath") or "").strip()
+    if not raw:
+        return PHOTO_ROOT.resolve()
+    expanded = Path(os.path.expandvars(os.path.expanduser(raw)))
+    if not expanded.is_absolute():
+        raise ValueError("Folder foto lokal harus memakai path absolut")
+    resolved = expanded.resolve()
+    if resolved == Path(resolved.anchor):
+        raise ValueError("Folder root sistem tidak boleh dipakai untuk menyimpan foto")
+    return resolved
+
+
+def validate_photo_root(settings: dict[str, Any]) -> Path:
+    target = photo_root(settings)
+    target.mkdir(parents=True, exist_ok=True)
+    probe = target / f".photoslive-write-{uuid.uuid4().hex[:8]}"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as error:
+        raise ValueError(f"Folder foto tidak dapat ditulis: {error}") from error
+    return target
+
+
+def migrate_photo_root(source: Path, target: Path) -> None:
+    if source == target or not source.exists():
+        return
+    entries = list(source.iterdir())
+    conflicts = [entry.name for entry in entries if (target / entry.name).exists()]
+    if conflicts:
+        raise ValueError(f"Folder tujuan sudah memiliki nama yang sama: {', '.join(conflicts[:3])}")
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for entry in entries:
+            destination = target / entry.name
+            shutil.move(str(entry), str(destination))
+            moved.append((entry, destination))
+    except OSError as error:
+        for original, destination in reversed(moved):
+            if destination.exists() and not original.exists():
+                shutil.move(str(destination), str(original))
+        raise ValueError(f"Foto lama gagal dipindahkan: {error}") from error
+
+
 def deep_merge(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     result = dict(base)
     for key, value in incoming.items():
@@ -270,10 +319,17 @@ def deep_merge(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]
 
 
 def save_settings(incoming: dict[str, Any]) -> dict[str, Any]:
-    updated = deep_merge(load_settings(), incoming)
+    current = load_settings()
+    updated = deep_merge(current, incoming)
+    old_root = photo_root(current)
+    new_root = validate_photo_root(updated)
+    migrate_photo_root(old_root, new_root)
     temp = SETTINGS_PATH.with_suffix(".tmp")
     temp.write_text(json.dumps(updated, indent=2), encoding="utf-8")
     temp.replace(SETTINGS_PATH)
+    with STORAGE_CACHE_LOCK:
+        STORAGE_CACHE["createdAt"] = 0.0
+        STORAGE_CACHE["payload"] = None
     add_event("settings", "Pengaturan booth diperbarui")
     return updated
 
@@ -457,8 +513,8 @@ def safe_asset_name(value: str) -> str:
     return clean
 
 
-def disk_metrics() -> dict[str, Any]:
-    usage = shutil.disk_usage(ROOT)
+def disk_metrics(path: Path | None = None) -> dict[str, Any]:
+    usage = shutil.disk_usage(path or ROOT)
     return {
         "totalBytes": usage.total,
         "usedBytes": usage.used,
@@ -546,17 +602,18 @@ def memory_metrics() -> dict[str, Any]:
 
 
 def photo_library_metrics() -> dict[str, int]:
+    root = photo_root()
     files = 0
     total_bytes = 0
     session_folders: set[str] = set()
-    pending = [PHOTO_ROOT]
+    pending = [root]
     while pending:
         folder = pending.pop()
         try:
             for entry in os.scandir(folder):
                 if entry.is_dir(follow_symlinks=False):
                     pending.append(Path(entry.path))
-                    if folder == PHOTO_ROOT:
+                    if folder == root:
                         session_folders.add(entry.name)
                 elif entry.is_file(follow_symlinks=False):
                     files += 1
@@ -575,7 +632,8 @@ def storage_snapshot(force: bool = False) -> dict[str, Any]:
             return {**cached, "cached": True, "cacheAgeSeconds": int(now - created_at)}
         payload = {
             "measuredAt": utc_now(),
-            "disk": disk_metrics(),
+            "localPath": str(photo_root()),
+            "disk": disk_metrics(photo_root()),
             "memory": memory_metrics(),
             "library": photo_library_metrics(),
             "cacheSeconds": STORAGE_CACHE_SECONDS,
@@ -588,6 +646,7 @@ def storage_snapshot(force: bool = False) -> dict[str, Any]:
 
 
 def recent_photo_sessions(hours: int = 24) -> list[dict[str, Any]]:
+    root = photo_root()
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, min(hours, 168)))).isoformat()
     with sqlite3.connect(DB_PATH) as db:
         rows = db.execute(
@@ -610,7 +669,7 @@ def recent_photo_sessions(hours: int = 24) -> list[dict[str, Any]]:
             total_bytes = 0
             for (relative_path,) in file_rows:
                 try:
-                    total_bytes += (PHOTO_ROOT / relative_path).stat().st_size
+                    total_bytes += (root / relative_path).stat().st_size
                 except OSError:
                     pass
             sessions.append({
@@ -976,6 +1035,7 @@ def clear_failed_jobs() -> int:
 
 def cleanup_uploaded_photos() -> dict[str, int]:
     settings = load_settings()
+    root = photo_root(settings)
     retention = int(settings["booth"]["localRetentionHours"])
     require_upload = bool(settings["storage"]["deleteOnlyAfterUpload"])
     cutoff = time.time() - (retention * 3600)
@@ -985,7 +1045,7 @@ def cleanup_uploaded_photos() -> dict[str, int]:
         query = "SELECT id, path FROM photo_files WHERE uploaded_at IS NOT NULL" if require_upload else "SELECT id, path FROM photo_files"
         rows = db.execute(query).fetchall()
         for photo_id, relative_path in rows:
-            path = PHOTO_ROOT / relative_path
+            path = root / relative_path
             if path.exists() and path.stat().st_mtime <= cutoff:
                 size = path.stat().st_size
                 path.unlink()
@@ -1001,11 +1061,12 @@ def cleanup_uploaded_photos() -> dict[str, int]:
 
 
 def register_session_file(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    root = photo_root()
     relative_path = str(payload.get("path") or "").strip().lstrip("/")
     if not relative_path:
         raise ValueError("Path file wajib diisi")
-    target = (PHOTO_ROOT / relative_path).resolve()
-    if PHOTO_ROOT.resolve() not in target.parents or not target.is_file():
+    target = (root / relative_path).resolve()
+    if root not in target.parents or not target.is_file():
         raise ValueError("File foto tidak ditemukan di penyimpanan lokal")
     with sqlite3.connect(DB_PATH) as db:
         session = db.execute(
@@ -1130,6 +1191,8 @@ def booth_config() -> dict[str, Any]:
             "provider": settings["payment"]["provider"],
         },
         "devices": {
+            "cameraSource": str(settings["devices"].get("cameraSource", "auto")),
+            "browserCameraId": str(settings["devices"].get("browserCameraId", "")),
             "cameraMirror": bool(settings["devices"]["cameraMirror"]),
             "cameraRotation": str(settings["devices"]["cameraRotation"]),
             "paperSize": settings["devices"]["paperSize"],
@@ -1169,6 +1232,7 @@ def list_booth_clients() -> list[dict[str, Any]]:
 
 
 def capture_session_upload(session_id: str, slot_index: int, data: bytes) -> dict[str, Any]:
+    root = photo_root()
     if not data or len(data) > 20_000_000:
         raise ValueError("File foto harus berupa JPEG maksimal 20 MB")
     if not data.startswith(b"\xff\xd8"):
@@ -1194,13 +1258,13 @@ def capture_session_upload(session_id: str, slot_index: int, data: bytes) -> dic
         ).fetchone()[0]) + 1
         if attempt_number > int(session[2]) + 1:
             raise ValueError("Batas retake untuk foto ini sudah tercapai")
-    session_folder = PHOTO_ROOT / session_id
+    session_folder = root / session_id
     session_folder.mkdir(parents=True, exist_ok=True)
     filename = f"slot-{slot_index}-attempt-{attempt_number}-{uuid.uuid4().hex[:6]}.jpg"
     target = session_folder / filename
     target.write_bytes(data)
     file_data = register_session_file(session_id, {
-        "path": str(target.relative_to(PHOTO_ROOT)), "slotIndex": slot_index, "attemptNumber": attempt_number,
+        "path": str(target.relative_to(root)), "slotIndex": slot_index, "attemptNumber": attempt_number,
     })
     with sqlite3.connect(DB_PATH) as db:
         db.execute("UPDATE daily_usage SET photos = photos + 1 WHERE day = ?", (datetime.now().date().isoformat(),))
@@ -1210,6 +1274,7 @@ def capture_session_upload(session_id: str, slot_index: int, data: bytes) -> dic
 
 
 def capture_session_photo(session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    root = photo_root()
     slot_index = int(payload.get("slotIndex") or 0)
     with sqlite3.connect(DB_PATH) as db:
         session = db.execute(
@@ -1236,13 +1301,13 @@ def capture_session_photo(session_id: str, payload: dict[str, Any]) -> dict[str,
     ok, data, error = camera_image(capture=True)
     if not ok:
         raise ValueError(error)
-    session_folder = PHOTO_ROOT / session_id
+    session_folder = root / session_id
     session_folder.mkdir(parents=True, exist_ok=True)
     filename = f"slot-{slot_index}-attempt-{attempt_number}-{uuid.uuid4().hex[:6]}.jpg"
     target = session_folder / filename
     target.write_bytes(data)
     file_data = register_session_file(session_id, {
-        "path": str(target.relative_to(PHOTO_ROOT)),
+        "path": str(target.relative_to(root)),
         "slotIndex": slot_index,
         "attemptNumber": attempt_number,
     })
@@ -1254,12 +1319,13 @@ def capture_session_photo(session_id: str, payload: dict[str, Any]) -> dict[str,
 
 
 def session_file(file_id: str) -> tuple[bytes, str] | None:
+    root = photo_root()
     with sqlite3.connect(DB_PATH) as db:
         row = db.execute("SELECT path FROM photo_files WHERE id = ?", (file_id,)).fetchone()
     if not row:
         return None
-    path = (PHOTO_ROOT / row[0]).resolve()
-    if PHOTO_ROOT.resolve() not in path.parents or not path.is_file():
+    path = (root / row[0]).resolve()
+    if root not in path.parents or not path.is_file():
         return None
     return path.read_bytes(), "image/jpeg"
 

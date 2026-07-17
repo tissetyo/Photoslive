@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
 CONFIG_DIR = Path(os.environ.get("PHOTOSLIVE_CONFIG_DIR", Path.home() / ".config" / "photoslive"))
@@ -149,11 +149,13 @@ def memory_metrics() -> dict[str, int]:
 
 def snapshot(config: dict[str, Any]) -> dict[str, Any]:
     disk = shutil.disk_usage(CONFIG_DIR.parent)
+    storage: dict[str, Any] = {}
     devices: list[dict[str, Any]] = []
     controller = {"online": False, "url": config["controller"]}
     try:
         health = controller_request(config, "/api/health")
         device_payload = controller_request(config, "/api/devices")
+        storage = controller_request(config, "/api/storage/overview")
         devices = device_payload.get("devices", [])
         controller.update({"online": True, "time": health.get("time")})
     except Exception as error:  # the heartbeat must survive a controller restart
@@ -164,8 +166,9 @@ def snapshot(config: dict[str, Any]) -> dict[str, Any]:
         "platform": platform.platform(),
         "telemetry": {
             "hostname": socket.gethostname(),
-            "disk": {"totalBytes": disk.total, "usedBytes": disk.used, "freeBytes": disk.free},
-            "memory": memory_metrics(),
+            "disk": storage.get("disk") or {"totalBytes": disk.total, "usedBytes": disk.used, "freeBytes": disk.free},
+            "memory": storage.get("memory") or memory_metrics(),
+            "photoStoragePath": storage.get("localPath"),
         },
         "devices": devices,
         "controller": controller,

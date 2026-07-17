@@ -97,6 +97,19 @@ kemudian tanpa mengubah kontrak job.
 - UI membedakan `permission denied`, `device not found`, `device busy`, dan
   `device disconnected`.
 - Daftar kamera baru boleh ditampilkan setelah permission diberikan.
+- Wizard setup menggabungkan kamera hasil heartbeat Agent dan `videoinput` dari
+  browser. ID kamera browser yang dipilih disimpan agar booth memakai kamera yang
+  sama pada sesi pelanggan.
+
+### Folder foto lokal
+
+- `storage.localPhotoPath` adalah path absolut pada mesin Agent, bukan path pada
+  browser admin.
+- Controller memvalidasi bahwa folder dapat dibuat dan ditulis sebelum setting
+  disimpan. Saat lokasi berubah, folder sesi lama dipindahkan agar referensi file
+  relatif dan link unduhan tetap valid.
+- `GET /api/storage/overview` mengukur disk dari folder foto aktif dan mengirim
+  `localPath`, kapasitas disk, ukuran library, serta RAM tanpa polling berat.
 
 ### Kamera melalui Agent
 

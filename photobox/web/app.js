@@ -363,7 +363,9 @@ async function saveSettings() {
     for (const section of sections) await api(`/api/settings/${section}`, { method: "PATCH", body: JSON.stringify(state.settings[section]) });
     state.dirtySections.clear();
     toast("Pengaturan berhasil disimpan");
+    state.storageLoadedAt = 0;
     await refreshStatus();
+    if ($("#storage-view")?.classList.contains("active")) await loadStorageData(true);
   } catch (error) { toast(`Gagal menyimpan: ${error.message}`, "error"); }
 }
 
@@ -868,6 +870,8 @@ async function refreshStatus(notify = false) {
 
 function renderStorageData(overview, sessions) {
   const { disk, memory, library } = overview;
+  setText("#storage-local-path-active", overview.localPath || "Folder bawaan Photoslive");
+  setText("#storage-local-path-state", overview.localPath ? "DAPAT DITULIS" : "FOLDER BAWAAN");
   $("#storage-total-capacity").textContent = formatBytes(disk.totalBytes);
   $("#storage-disk-used").textContent = `${disk.usedPercent}% kapasitas terpakai`;
   $("#storage-used-capacity").textContent = formatBytes(disk.usedBytes);
