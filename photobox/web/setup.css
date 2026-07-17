@@ -313,13 +313,15 @@
 .install-steps b { display: block; font-size: 11px; }
 .install-steps p { margin: 3px 0 0; color: #6b707b; font-size: 10px; line-height: 1.5; }
 .installer-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 11px; }
-.installer-links a { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 42px; padding: 6px 9px; border: 1px solid #252832; border-radius: 9px; background: #252832; color: #fff; font-size: 10px; font-weight: 900; line-height: 1.25; text-align: center; text-decoration: none; }
-.installer-links a:hover { border-color: #5147d9; background: #5147d9; }
-.installer-links a.active { border-color: #5d56e8; background: #5d56e8; box-shadow: 0 0 0 3px rgba(93, 86, 232, .14); }
-.installer-links img { width: 14px; height: 14px; }
-.installer-links a img { filter: brightness(0) invert(1); }
+.installer-links button { min-height: 38px; padding: 6px 9px; border: 1px solid #d6d8e2; border-radius: 9px; background: #fff; color: #292c34; font: inherit; font-size: 10px; font-weight: 900; cursor: pointer; }
+.installer-links button:hover { border-color: #7770e8; background: #fafaff; }
+.installer-links button.active { border-color: #5d56e8; background: #5d56e8; color: #fff; box-shadow: 0 0 0 3px rgba(93, 86, 232, .14); }
 .command-label { display: block; margin-top: 13px; color: #4e535e; font-size: 10px; }
 .platform-hint { margin: 9px 0 0; color: #707581; font-size: 10px; line-height: 1.5; }
+.existing-agent { margin-top: 11px; padding-top: 11px; border-top: 1px solid #dedfe8; }
+.existing-agent summary { color: #555b67; font-size: 10px; font-weight: 800; cursor: pointer; }
+.existing-agent[open] summary { color: #292d35; }
+.existing-agent .command-box { margin-top: 8px; }
 .tablet-capability { display: grid; grid-template-columns: 36px 1fr; gap: 11px; align-items: start; padding: 13px; border: 1px solid #bfe4d3; border-radius: 11px; background: #f2fbf7; }
 .tablet-capability > span { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: #fff; }
 .tablet-capability img { width: 18px; height: 18px; }

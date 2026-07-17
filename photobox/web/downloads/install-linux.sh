@@ -52,4 +52,4 @@ systemctl --user restart photoslive-controller.service photoslive-agent.service
 sleep 3
 python3 "${SOURCE_DIR}/agent.py" --status
 echo "Photoslive Agent diperbarui dan service sudah direstart."
-echo "Untuk setup/pairing ulang: python3 \"${SOURCE_DIR}/agent.py\" --setup-code"
+python3 "${SOURCE_DIR}/agent.py" --setup-code

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Setup Photoslive</title>
   <link rel="stylesheet" href="/platform.css?v=2">
-  <link rel="stylesheet" href="/setup.css?v=5">
+  <link rel="stylesheet" href="/setup.css?v=6">
 </head>
 <body>
   <div class="platform-shell">
@@ -138,21 +138,28 @@
 
           <div class="agent-platform-panel" data-agent-panel="computer">
             <ol class="install-steps">
-              <li><span>1</span><div><b>Pertama kali memasang</b><p>Klik salah satu tombol download, lalu jalankan installer sesuai sistem operasi.</p>
+              <li><span>1</span><div><b>Pilih sistem operasi</b><p>Perintah instalasi akan disesuaikan otomatis.</p>
                 <div class="installer-links" aria-label="Download Photoslive Agent">
-                  <a href="/downloads/install-windows.ps1" download data-agent-os="windows"><img src="/icons/download.svg" alt="">Download Windows</a>
-                  <a href="/downloads/install-macos.sh" download data-agent-os="macos"><img src="/icons/download.svg" alt="">Download macOS</a>
-                  <a href="/downloads/install-linux.sh" download data-agent-os="linux"><img src="/icons/download.svg" alt="">Download Linux</a>
+                  <button type="button" data-agent-os="windows">Windows</button>
+                  <button type="button" data-agent-os="macos">macOS</button>
+                  <button type="button" data-agent-os="linux">Linux</button>
                 </div>
               </div></li>
-              <li><span>2</span><div><b>Buat kode setup</b><p>Setelah Agent aktif, jalankan perintah di bawah. Kode berlaku 15 menit.</p></div></li>
+              <li><span>2</span><div><b>Salin dan jalankan</b><p>Tempel perintah ini di Terminal atau PowerShell. Agent terpasang dan kode setup langsung muncul.</p></div></li>
             </ol>
-            <b class="command-label" id="setup-command-label">Perintah Linux Terminal</b>
+            <b class="command-label" id="install-command-label">Perintah instalasi Linux Terminal</b>
             <div class="command-box">
-              <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code</code>
-              <button type="button" id="copy-setup-command" aria-label="Salin perintah"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
+              <code id="install-command">curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash</code>
+              <button type="button" id="copy-install-command" aria-label="Salin perintah instalasi"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
             </div>
-            <p class="platform-hint">Sudah pernah memasang Agent? Lewati download dan langsung buat kode baru.</p>
+            <details class="existing-agent">
+              <summary>Agent sudah terpasang? Buat kode baru</summary>
+              <b class="command-label" id="setup-command-label">Perintah Linux Terminal</b>
+              <div class="command-box">
+                <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code</code>
+                <button type="button" id="copy-setup-command" aria-label="Salin perintah kode baru"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
+              </div>
+            </details>
           </div>
 
           <div class="agent-platform-panel hidden" data-agent-panel="tablet">
@@ -171,6 +178,6 @@
       </section>
     </main>
   </div>
-  <script src="/setup.js?v=6" defer></script>
+  <script src="/setup.js?v=7" defer></script>
 </body>
 </html>

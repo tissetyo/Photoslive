@@ -22,4 +22,4 @@ schtasks /Run /TN "Photoslive Agent" | Out-Null
 Start-Sleep -Seconds 3
 & $Python "$SourceDir\agent.py" --status
 Write-Host "Photoslive Agent diperbarui, dijalankan ulang, dan otomatis berjalan saat login."
-Write-Host "Untuk setup/pairing ulang: python `"$SourceDir\agent.py`" --setup-code"
+& $Python "$SourceDir\agent.py" --setup-code

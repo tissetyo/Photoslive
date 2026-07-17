@@ -232,18 +232,20 @@ function agentPlatform(name) {
   $("#copy-feedback").textContent = "";
 }
 const setupCommands = {
-  windows: ['Windows PowerShell', 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code'],
-  macos: ['macOS Terminal', 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code'],
-  linux: ['Linux Terminal', 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code'],
+  windows: ['Windows PowerShell', 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code'],
+  macos: ['macOS Terminal', 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code'],
+  linux: ['Linux Terminal', 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code'],
 };
 function agentOperatingSystem(name) {
-  const [label, command] = setupCommands[name] || setupCommands.linux;
+  const [label, installCommand, setupCommand] = setupCommands[name] || setupCommands.linux;
+  $("#install-command-label").textContent = `Perintah instalasi ${label}`;
+  $("#install-command").textContent = installCommand;
   $("#setup-command-label").textContent = `Perintah ${label}`;
-  $("#setup-code-command").textContent = command;
-  document.querySelectorAll("[data-agent-os]").forEach(link => link.classList.toggle("active", link.dataset.agentOs === name));
+  $("#setup-code-command").textContent = setupCommand;
+  document.querySelectorAll("[data-agent-os]").forEach(button => button.classList.toggle("active", button.dataset.agentOs === name));
 }
 document.querySelectorAll("[data-agent-platform]").forEach(button => button.addEventListener("click", () => agentPlatform(button.dataset.agentPlatform)));
-document.querySelectorAll("[data-agent-os]").forEach(link => link.addEventListener("click", () => agentOperatingSystem(link.dataset.agentOs)));
+document.querySelectorAll("[data-agent-os]").forEach(button => button.addEventListener("click", () => agentOperatingSystem(button.dataset.agentOs)));
 $("#use-companion-agent").addEventListener("click", () => agentPlatform("computer"));
 agentOperatingSystem(/Win/i.test(navigator.platform) ? "windows" : /Mac/i.test(navigator.platform) ? "macos" : "linux");
 document.querySelectorAll("[data-setup-back]").forEach(button => button.addEventListener("click", () => setSetupStep(onboarding.step - 1)));
@@ -252,8 +254,8 @@ document.querySelectorAll("[data-setup-next], [data-setup-skip]").forEach(button
   if (onboarding.step === 6) renderReadyChecklist();
 }));
 
-$("#copy-setup-command").addEventListener("click", async () => {
-  const command = $("#setup-code-command").textContent;
+async function copyCommand(sourceSelector, buttonSelector, successMessage) {
+  const command = $(sourceSelector).textContent;
   try {
     if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(command);
     else {
@@ -267,13 +269,15 @@ $("#copy-setup-command").addEventListener("click", async () => {
       temporary.remove();
       if (!copied) throw new Error("Copy tidak didukung");
     }
-    $("#copy-feedback").textContent = "Perintah berhasil disalin.";
-    $("#copy-setup-command span").textContent = "Tersalin";
-    setTimeout(() => { $("#copy-feedback").textContent = ""; $("#copy-setup-command span").textContent = "Salin"; }, 5000);
+    $("#copy-feedback").textContent = successMessage;
+    $(`${buttonSelector} span`).textContent = "Tersalin";
+    setTimeout(() => { $("#copy-feedback").textContent = ""; $(`${buttonSelector} span`).textContent = "Salin"; }, 5000);
   } catch {
     $("#copy-feedback").textContent = "Tidak dapat menyalin otomatis. Blok perintah lalu salin manual.";
   }
-});
+}
+$("#copy-install-command").addEventListener("click", () => copyCommand("#install-command", "#copy-install-command", "Perintah instalasi berhasil disalin. Tempel dan jalankan di Terminal."));
+$("#copy-setup-command").addEventListener("click", () => copyCommand("#setup-code-command", "#copy-setup-command", "Perintah kode baru berhasil disalin."));
 
 $("#setup-form").addEventListener("submit", async event => {
   event.preventDefault();

@@ -26,4 +26,4 @@ launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist"
 sleep 3
 "${PYTHON}" "${SOURCE_DIR}/agent.py" --status
 echo "Photoslive Agent diperbarui dan service sudah direstart."
-echo "Untuk setup/pairing ulang: \"${PYTHON}\" \"${SOURCE_DIR}/agent.py\" --setup-code"
+"${PYTHON}" "${SOURCE_DIR}/agent.py" --setup-code
