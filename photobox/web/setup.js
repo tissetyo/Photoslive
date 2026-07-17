@@ -737,7 +737,16 @@ $("#login-form").addEventListener("submit", async event => {
   status("Memeriksa akun…");
   try {
     const body = { boothCode: $("#login-booth").value, email: $("#login-email").value, password: $("#login-password").value, pin: $("#login-pin").value };
-    const result = await api("login", { method: "POST", body: JSON.stringify(body) });
+    let result;
+    try {
+      result = await api("login", { method: "POST", body: JSON.stringify(body) });
+    } catch (error) {
+      const savedCode = localStorage.getItem("photoslive.boothCode") || "";
+      const isMissing = error.message.includes("Photobox tidak ditemukan");
+      if (!isMissing || !savedCode || savedCode.toLowerCase() === body.boothCode.trim().toLowerCase()) throw error;
+      result = await api("login", { method: "POST", body: JSON.stringify({ ...body, boothCode: savedCode, aliasCode: body.boothCode }) });
+      $("#login-booth").value = result.booth.boothCode;
+    }
     localStorage.setItem("photoslive.machineId", result.booth.machineId);
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
     location.href = `/${result.booth.boothCode}/admin`;
@@ -754,7 +763,8 @@ $("#forgot-form").addEventListener("submit", async event => {
 });
 
 const params = new URLSearchParams(location.search);
-if (params.get("booth")) $("#login-booth").value = params.get("booth");
+const rememberedBooth = localStorage.getItem("photoslive.boothCode") || "";
+if (params.get("booth") || rememberedBooth) $("#login-booth").value = params.get("booth") || rememberedBooth;
 loginMethod("pin");
 const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;
 setSetupStep(previewStep >= 1 && previewStep <= 6 ? previewStep : 1);
