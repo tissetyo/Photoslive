@@ -130,8 +130,21 @@ async function setupBooth(redis, payload) {
 
 async function login(redis, payload) {
   const lookupCode = normalizeCode(payload.boothCode);
-  const booth = await resolveBooth(redis, lookupCode);
-  if (!booth || !booth.enabled) return json({ error: "Photobox tidak ditemukan atau aksesnya dinonaktifkan" }, 404);
+  let booth = await resolveBooth(redis, lookupCode);
+  if (!booth) {
+    const recoveryEmail = normalizeEmail(payload.email);
+    if (!recoveryEmail || !payload.pin) return json({ error: "Kode photobox belum tertaut. Masukkan email pemilik untuk memulihkannya.", recoveryRequired: true }, 404);
+    const recoveryUserId = await redis.get(`photoslive:email:${recoveryEmail}`);
+    const recoveryUser = recoveryUserId ? await redis.get(userKey(recoveryUserId)) : null;
+    if (!recoveryUser?.active || !await verifyCredential(payload.pin, recoveryUser.pinHash)) return json({ error: "Email pemilik atau PIN tidak benar", recoveryRequired: true }, 401);
+    booth = await resolveBooth(redis, recoveryUser.boothCode);
+    if (!booth || !booth.enabled) return json({ error: "Akses photobox dinonaktifkan" }, 403);
+    const existingAlias = await redis.get(boothKey(lookupCode));
+    if (!existingAlias || existingAlias === booth.machineId) await redis.set(boothKey(lookupCode), booth.machineId);
+    const token = await createSession(redis, { userId: recoveryUser.id, boothCode: booth.boothCode, machineId: booth.machineId, role: recoveryUser.role });
+    return json({ booth, user: { id: recoveryUser.id, email: recoveryUser.email, name: recoveryUser.name, role: recoveryUser.role }, aliasRepaired: true }, 200, { "set-cookie": sessionCookie(token) });
+  }
+  if (!booth.enabled) return json({ error: "Akses photobox dinonaktifkan" }, 403);
   const boothCode = booth.boothCode;
   const ids = await redis.smembers(`photoslive:booth:${boothCode}:users`);
   let matched = null;

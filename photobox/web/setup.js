@@ -28,7 +28,12 @@ const api = async (action, options = {}) => {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request gagal (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Request gagal (${response.status})`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
   return data;
 };
 
@@ -134,6 +139,9 @@ function loginMethod(name) {
     $("#login-password").value = "";
   } else {
     $("#login-pin").value = "";
+    $("#login-pin-email").value = "";
+    $("#login-pin-email").required = false;
+    $("#login-recovery-email-field").classList.add("hidden");
   }
 }
 
@@ -560,6 +568,7 @@ $("#setup-form").addEventListener("submit", async event => {
       onboarding.machine = { ...onboarding.machine, id: result.booth.machineId };
       localStorage.setItem("photoslive.machineId", result.booth.machineId);
       localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
+      localStorage.setItem(`photoslive.boothAlias.${$("#pairing-code").value.trim().toLowerCase()}`, result.booth.boothCode);
       setSetupStep(4);
       refreshOnboardingDevices();
     } catch (error) { status(error.message); }
@@ -736,16 +745,23 @@ $("#login-form").addEventListener("submit", async event => {
   event.preventDefault();
   status("Memeriksa akun…");
   try {
-    const body = { boothCode: $("#login-booth").value, email: $("#login-email").value, password: $("#login-password").value, pin: $("#login-pin").value };
+    const body = { boothCode: $("#login-booth").value, email: $("#login-email").value || $("#login-pin-email").value, password: $("#login-password").value, pin: $("#login-pin").value };
     let result;
     try {
       result = await api("login", { method: "POST", body: JSON.stringify(body) });
     } catch (error) {
-      const savedCode = localStorage.getItem("photoslive.boothCode") || "";
-      const isMissing = error.message.includes("Photobox tidak ditemukan");
-      if (!isMissing || !savedCode || savedCode.toLowerCase() === body.boothCode.trim().toLowerCase()) throw error;
-      result = await api("login", { method: "POST", body: JSON.stringify({ ...body, boothCode: savedCode, aliasCode: body.boothCode }) });
-      $("#login-booth").value = result.booth.boothCode;
+      const savedCode = localStorage.getItem(`photoslive.boothAlias.${body.boothCode.trim().toLowerCase()}`) || "";
+      const isMissing = error.data?.recoveryRequired || error.message.includes("Photobox tidak ditemukan");
+      if (isMissing && savedCode && savedCode.toLowerCase() !== body.boothCode.trim().toLowerCase()) {
+        result = await api("login", { method: "POST", body: JSON.stringify({ ...body, boothCode: savedCode, aliasCode: body.boothCode }) });
+        $("#login-booth").value = result.booth.boothCode;
+      } else if (error.data?.recoveryRequired) {
+        $("#login-recovery-email-field").classList.remove("hidden");
+        $("#login-pin-email").required = true;
+        status(error.message);
+        $("#login-pin-email").focus();
+        return;
+      } else throw error;
     }
     localStorage.setItem("photoslive.machineId", result.booth.machineId);
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
