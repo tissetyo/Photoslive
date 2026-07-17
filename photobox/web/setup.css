@@ -10,34 +10,18 @@
     radial-gradient(circle at 45% 27%, rgba(38, 35, 238, .92), transparent 32%),
     radial-gradient(circle at 75% 82%, rgba(48, 47, 211, .82), transparent 30%),
     linear-gradient(128deg, #202126 0%, #17171d 46%, #2d2e34 100%);
-  background-size: 135% 135%;
-  animation: gradient-drift 18s ease-in-out infinite alternate;
+  background-size: cover;
 }
 
 .auth-layout::before {
   content: "";
   position: absolute;
   z-index: -1;
-  inset: -35%;
+  inset: 0;
   opacity: .42;
   pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='5' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.82'/%3E%3C/svg%3E");
   mix-blend-mode: overlay;
-  animation: grain-shift .8s steps(2, end) infinite;
-}
-
-@keyframes gradient-drift {
-  0% { background-position: 0% 0%; }
-  50% { background-position: 38% 18%; }
-  100% { background-position: 78% 42%; }
-}
-
-@keyframes grain-shift {
-  0% { transform: translate3d(-2%, -2%, 0); }
-  25% { transform: translate3d(3%, 1%, 0); }
-  50% { transform: translate3d(-1%, 4%, 0); }
-  75% { transform: translate3d(4%, -3%, 0); }
-  100% { transform: translate3d(1%, 2%, 0); }
 }
 
 .auth-layout[data-mode="setup"][data-step="2"] {
@@ -328,11 +312,12 @@
 .install-steps li > span { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; background: #20232a; color: #fff; font-size: 10px; font-weight: 900; }
 .install-steps b { display: block; font-size: 11px; }
 .install-steps p { margin: 3px 0 0; color: #6b707b; font-size: 10px; line-height: 1.5; }
-.installer-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 13px; }
-.installer-links a { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 35px; border: 1px solid #d6d8e2; border-radius: 9px; background: #fff; color: #292c34; font-size: 10px; font-weight: 900; text-decoration: none; }
-.installer-links a:hover { border-color: #7770e8; background: #fafaff; }
-.installer-links a.active { border-color: #5d56e8; background: #f3f2ff; box-shadow: 0 0 0 2px rgba(93, 86, 232, .08); }
+.installer-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 11px; }
+.installer-links a { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 42px; padding: 6px 9px; border: 1px solid #252832; border-radius: 9px; background: #252832; color: #fff; font-size: 10px; font-weight: 900; line-height: 1.25; text-align: center; text-decoration: none; }
+.installer-links a:hover { border-color: #5147d9; background: #5147d9; }
+.installer-links a.active { border-color: #5d56e8; background: #5d56e8; box-shadow: 0 0 0 3px rgba(93, 86, 232, .14); }
 .installer-links img { width: 14px; height: 14px; }
+.installer-links a img { filter: brightness(0) invert(1); }
 .command-label { display: block; margin-top: 13px; color: #4e535e; font-size: 10px; }
 .platform-hint { margin: 9px 0 0; color: #707581; font-size: 10px; line-height: 1.5; }
 .tablet-capability { display: grid; grid-template-columns: 36px 1fr; gap: 11px; align-items: start; padding: 13px; border: 1px solid #bfe4d3; border-radius: 11px; background: #f2fbf7; }
@@ -347,7 +332,6 @@
 .use-companion-agent img { width: 15px; height: 15px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .auth-layout, .auth-layout::before { animation: none; }
   .setup-step { animation: none; }
 }
 
