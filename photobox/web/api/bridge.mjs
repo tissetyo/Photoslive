@@ -102,6 +102,9 @@ async function createSetupCode(redis, request, payload) {
   await redis.set(machineKey(machine.id), machine);
   await redis.set(`photoslive:pairing:${code}`, machine.id, { ex: 900 });
   await redis.set(boothKey(machine.boothCode), machine.id);
+  // Keep the short code useful after onboarding as an alias to the canonical
+  // photobox. The expiring pairing key still controls whether setup is valid.
+  await redis.set(boothKey(code), machine.id);
   return json({ pairingCode: code, boothCode: machine.boothCode, expiresInSeconds: 900 });
 }
 

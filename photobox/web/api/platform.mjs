@@ -60,11 +60,12 @@ const normalizeCode = code => String(code || "").trim().toLowerCase().replace(/[
 const normalizeEmail = email => String(email || "").trim().toLowerCase().slice(0, 160);
 
 async function resolveBooth(redis, code) {
-  const boothCode = normalizeCode(code);
-  const machineId = await redis.get(boothKey(boothCode));
+  const lookupCode = normalizeCode(code);
+  const machineId = await redis.get(boothKey(lookupCode));
   if (!machineId) return null;
   const machine = await redis.get(machineKey(machineId));
   if (!machine) return null;
+  const boothCode = normalizeCode(machine.boothCode || lookupCode);
   const lastSeen = machine.lastSeenAt ? Date.parse(machine.lastSeenAt) : 0;
   return { boothCode, machineId, name: machine.name, location: machine.location || "", enabled: machine.accessEnabled !== false, online: Boolean(lastSeen && Date.now() - lastSeen < 90_000), agentVersion: machine.agentVersion };
 }
@@ -115,6 +116,9 @@ async function setupBooth(redis, payload) {
   const user = { id: randomId("user"), boothCode, machineId, email, name: "Pemilik", role: "owner", passwordHash: payload.password ? await hashCredential(payload.password) : "", pinHash: await hashCredential(payload.pin), createdAt: now(), active: true };
   await redis.set(machineKey(machineId), machine);
   await redis.set(boothKey(boothCode), machineId);
+  // A setup code is also a permanent login alias. Users commonly keep the
+  // code shown by Agent, while the canonical booth URL may predate onboarding.
+  await redis.set(boothKey(code), machineId);
   await redis.set(userKey(user.id), user);
   await redis.set(`photoslive:email:${email}`, user.id);
   await redis.sadd(`photoslive:booth:${boothCode}:users`, user.id);
@@ -125,9 +129,10 @@ async function setupBooth(redis, payload) {
 }
 
 async function login(redis, payload) {
-  const boothCode = normalizeCode(payload.boothCode);
-  const booth = await resolveBooth(redis, boothCode);
+  const lookupCode = normalizeCode(payload.boothCode);
+  const booth = await resolveBooth(redis, lookupCode);
   if (!booth || !booth.enabled) return json({ error: "Photobox tidak ditemukan atau aksesnya dinonaktifkan" }, 404);
+  const boothCode = booth.boothCode;
   const ids = await redis.smembers(`photoslive:booth:${boothCode}:users`);
   let matched = null;
   for (const id of ids) {
@@ -137,6 +142,11 @@ async function login(redis, payload) {
     if (normalizeEmail(payload.email) === user.email && await verifyCredential(payload.password, user.passwordHash)) { matched = user; break; }
   }
   if (!matched) return json({ error: "Email/password atau PIN tidak benar" }, 401);
+  const aliasCode = normalizeCode(payload.aliasCode);
+  if (aliasCode && aliasCode !== boothCode) {
+    const existingAlias = await redis.get(boothKey(aliasCode));
+    if (!existingAlias || existingAlias === booth.machineId) await redis.set(boothKey(aliasCode), booth.machineId);
+  }
   const token = await createSession(redis, { userId: matched.id, boothCode, machineId: booth.machineId, role: matched.role });
   return json({ booth, user: { id: matched.id, email: matched.email, name: matched.name, role: matched.role } }, 200, { "set-cookie": sessionCookie(token) });
 }

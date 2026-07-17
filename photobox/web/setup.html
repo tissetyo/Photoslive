@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Setup Photoslive</title>
   <link rel="stylesheet" href="/platform.css?v=2">
-  <link rel="stylesheet" href="/setup.css?v=11">
+  <link rel="stylesheet" href="/setup.css?v=12">
 </head>
 <body>
   <div class="platform-shell">
@@ -138,7 +138,9 @@
 
         <p class="status" id="setup-status"></p>
 
-        <aside class="agent-recovery" id="agent-recovery">
+      </section>
+
+      <aside class="agent-recovery" id="agent-recovery">
           <div class="recovery-heading">
             <span class="recovery-icon"><img src="/icons/terminal.svg" alt=""></span>
             <div><b>Belum punya kode setup?</b><p>Pilih perangkat yang akan menjalankan Photoslive.</p></div>
@@ -153,9 +155,9 @@
             <ol class="install-steps">
               <li><span>1</span><div><b>Pilih sistem operasi</b><p>Perintah instalasi akan disesuaikan otomatis.</p>
                 <div class="installer-links" aria-label="Download Photoslive Agent">
-                  <button type="button" data-agent-os="windows">Windows</button>
-                  <button type="button" data-agent-os="macos">macOS</button>
-                  <button type="button" data-agent-os="linux">Linux</button>
+                  <button type="button" data-agent-os="windows"><img src="/icons/windows.svg" alt="">Windows</button>
+                  <button type="button" data-agent-os="macos"><img src="/icons/apple.svg" alt="">macOS</button>
+                  <button type="button" data-agent-os="linux"><img src="/icons/linux.svg" alt="">Linux</button>
                 </div>
               </div></li>
               <li><span>2</span><div><b>Salin dan jalankan</b><p>Tempel perintah ini di Terminal atau PowerShell. Agent terpasang dan kode setup langsung muncul.</p></div></li>
@@ -187,8 +189,7 @@
             <button type="button" class="btn use-companion-agent" id="use-companion-agent"><img src="/icons/monitor.svg" alt="">Siapkan komputer pendamping</button>
           </div>
           <p class="copy-feedback" id="copy-feedback" role="status"></p>
-        </aside>
-      </section>
+      </aside>
     </main>
   </div>
 
@@ -213,6 +214,6 @@
       <div class="setup-dialog-actions"><button class="btn" value="cancel">Batal</button><button class="btn primary" id="save-setup-frame-design" value="default"><img src="/icons/save.svg" alt="">Gunakan desain</button></div>
     </form>
   </dialog>
-  <script src="/setup.js?v=12" defer></script>
+  <script src="/setup.js?v=13" defer></script>
 </body>
 </html>
