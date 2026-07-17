@@ -110,6 +110,9 @@ kemudian tanpa mengubah kontrak job.
   relatif dan link unduhan tetap valid.
 - `GET /api/storage/overview` mengukur disk dari folder foto aktif dan mengirim
   `localPath`, kapasitas disk, ukuran library, serta RAM tanpa polling berat.
+- `POST /api/storage/pick-folder` membuka dialog folder native di komputer Agent:
+  `osascript` pada macOS, PowerShell pada Windows, serta `zenity` atau `kdialog`
+  pada Linux. Input path manual tetap tersedia sebagai fallback.
 
 ### Kamera melalui Agent
 

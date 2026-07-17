@@ -99,7 +99,7 @@ async function cloudControllerApi(path, options = {}) {
   }
   const headers = Object.fromEntries(Object.entries(options.headers || {}).filter(([name]) => ["content-type", "x-slot-index", "x-filename", "x-client-id"].includes(name.toLowerCase())));
   const { job } = await directBridge("enqueue_job", { machineId, type: "controller.request", payload: { path, method: String(options.method || "GET").toUpperCase(), body: requestBody, bodyBase64, headers } });
-  const deadline = Date.now() + 35000;
+  const deadline = Date.now() + Number(options.timeoutMs || 35000);
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 600));
     const status = await directBridge("job_status", { machineId, jobId: job.id }, "GET");
@@ -911,6 +911,20 @@ async function loadStorageData(force = false) {
   finally { state.storageLoading = false; }
 }
 
+async function pickStorageFolder() {
+  const button = $("#pick-storage-folder");
+  button.disabled = true;
+  toast("Dialog folder dibuka di komputer Agent…");
+  try {
+    const result = await api("/api/storage/pick-folder", { method: "POST", body: "{}", timeoutMs: 305_000 });
+    const input = $("#storage-local-path");
+    input.value = result.path || "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    toast(`Folder dipilih: ${result.path}`);
+  } catch (error) { toast(error.message, "error"); }
+  finally { button.disabled = false; }
+}
+
 async function loadVouchers() {
   const { vouchers, summary, events } = await api("/api/vouchers");
   const activeVouchers = Number(summary.generalActive || 0) + Number(summary.eventActive || 0);
@@ -1042,6 +1056,7 @@ function bindEvents() {
   document.addEventListener("input", event => { if (event.target.matches("[data-setting]")) markSetting(event.target); });
   document.addEventListener("change", event => { if (event.target.matches("[data-setting]")) markSetting(event.target); });
   $("#save-button").addEventListener("click", saveSettings);
+  $("#pick-storage-folder").addEventListener("click", pickStorageFolder);
   $("#refresh-button").addEventListener("click", () => refreshStatus(true));
   $("#add-background").addEventListener("click", () => chooseAsset("background"));
   $("#add-frame").addEventListener("click", () => chooseAsset("frame"));

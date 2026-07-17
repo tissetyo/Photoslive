@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import signal
@@ -368,6 +369,52 @@ def command_bytes(command: list[str], timeout: float = 8.0) -> tuple[bool, bytes
         return result.returncode == 0, result.stdout, result.stderr.decode("utf-8", errors="replace").strip()
     except (subprocess.SubprocessError, OSError) as exc:
         return False, b"", str(exc)
+
+
+def pick_local_folder() -> dict[str, str]:
+    """Open the host operating system's folder picker for the signed-in user."""
+    system = platform.system().lower()
+    if system == "darwin":
+        command = [
+            "osascript",
+            "-e",
+            'POSIX path of (choose folder with prompt "Pilih folder foto Photoslive")',
+        ]
+        picker = "macOS"
+    elif system == "windows":
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if not powershell:
+            raise ValueError("PowerShell tidak tersedia untuk membuka pemilih folder")
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$dialog.Description = 'Pilih folder foto Photoslive'; "
+            "$dialog.ShowNewFolderButton = $true; "
+            "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+            "{ [Console]::Write($dialog.SelectedPath) }"
+        )
+        command = [powershell, "-NoProfile", "-STA", "-Command", script]
+        picker = "Windows"
+    elif shutil.which("zenity"):
+        command = ["zenity", "--file-selection", "--directory", "--title=Pilih folder foto Photoslive"]
+        picker = "Zenity"
+    elif shutil.which("kdialog"):
+        command = ["kdialog", "--getexistingdirectory", str(Path.home()), "--title", "Pilih folder foto Photoslive"]
+        picker = "KDialog"
+    else:
+        raise ValueError("Pemilih folder grafis belum tersedia. Instal zenity atau masukkan path secara manual")
+
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("Pemilihan folder melewati batas waktu 5 menit") from error
+    selected = result.stdout.strip().rstrip("\r\n")
+    if result.returncode != 0 or not selected:
+        raise ValueError(result.stderr.strip() or "Pemilihan folder dibatalkan")
+    path = Path(selected).expanduser()
+    if not path.is_absolute() or not path.is_dir():
+        raise ValueError("Folder yang dipilih tidak valid")
+    return {"path": str(path.resolve()), "picker": picker}
 
 
 def active_camera() -> Device | None:
@@ -1590,6 +1637,13 @@ class ApiHandler(SimpleHTTPRequestHandler):
             return self.send_json({"deleted": clear_failed_jobs()})
         if path == "/api/storage/cleanup":
             return self.send_json(cleanup_uploaded_photos())
+        if path == "/api/storage/pick-folder":
+            try:
+                selected = pick_local_folder()
+                add_event("storage", f"Folder foto dipilih: {selected['path']}")
+                return self.send_json(selected)
+            except ValueError as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         if path == "/api/booth/sessions":
             try:
                 payload = self.read_json()

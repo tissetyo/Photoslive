@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
 CONFIG_DIR = Path(os.environ.get("PHOTOSLIVE_CONFIG_DIR", Path.home() / ".config" / "photoslive"))
@@ -114,7 +114,8 @@ def controller_raw_request(config: dict[str, Any], path: str, method: str, paylo
         headers.setdefault("Content-Type", "application/json")
     request = urllib.request.Request(f"{config['controller'].rstrip('/')}{path}", data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        timeout = 310 if path == "/api/storage/pick-folder" else 30
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             content_type = response.headers.get("Content-Type", "application/octet-stream")
             raw = response.read()
     except urllib.error.HTTPError as error:

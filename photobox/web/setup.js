@@ -49,7 +49,7 @@ async function controllerRequest(path, method = "GET", body = null, options = {}
     type: "controller.request",
     payload: { path, method, body, bodyBase64: options.bodyBase64 || null, headers: options.headers || {} },
   });
-  const deadline = Date.now() + 35_000;
+  const deadline = Date.now() + Number(options.timeoutMs || 35_000);
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 650));
     const current = await bridgeApi("job_status", { machineId: onboarding.machine.id, jobId: job.id }, "GET");
@@ -467,6 +467,18 @@ $("#setup-camera-select").addEventListener("change", () => selectOnboardingDevic
 $("#setup-printer-select").addEventListener("change", () => selectOnboardingDevice("printer").catch(error => { $("#device-onboarding-status").textContent = error.message; }));
 $("#test-setup-camera").addEventListener("click", () => testOnboardingDevice("camera"));
 $("#test-setup-printer").addEventListener("click", () => testOnboardingDevice("printer"));
+$("#pick-setup-storage-folder").addEventListener("click", async () => {
+  const button = $("#pick-setup-storage-folder");
+  button.disabled = true;
+  $("#device-onboarding-status").textContent = "Dialog folder dibuka di komputer Agent…";
+  try {
+    const result = await controllerRequest("/api/storage/pick-folder", "POST", {}, { timeoutMs: 305_000 });
+    $("#setup-storage-path").value = result.path || "";
+    $("#device-onboarding-status").textContent = result.path ? `Folder dipilih: ${result.path}` : "Folder belum dipilih.";
+  } catch (error) {
+    $("#device-onboarding-status").textContent = error.message;
+  } finally { button.disabled = false; }
+});
 $("#save-device-onboarding").addEventListener("click", async () => {
   const button = $("#save-device-onboarding");
   button.disabled = true;

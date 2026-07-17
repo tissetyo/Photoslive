@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b0d12" />
     <title>Photoslive Control</title>
-    <link rel="stylesheet" href="/styles.css?v=31" />
+    <link rel="stylesheet" href="/styles.css?v=32" />
   </head>
   <body>
     <div class="shell">
@@ -112,7 +112,7 @@
           <article class="panel local-storage-panel">
             <div class="panel-head"><div><span class="panel-icon"><img src="/icons/hard-drive.svg" alt="" /></span><div><h2>Folder foto lokal</h2><p>Tentukan lokasi penyimpanan foto di komputer Agent</p></div></div><span class="api-badge" id="storage-local-path-state">BELUM DIPERIKSA</span></div>
             <div class="local-storage-controls">
-              <label>Path folder<input data-setting="storage.localPhotoPath" id="storage-local-path" placeholder="Kosongkan untuk folder bawaan Photoslive" /><small>Gunakan path absolut, misalnya /home/photobox/Photoslive atau D:\Photoslive.</small></label>
+              <label>Path folder<span class="path-picker-control"><input data-setting="storage.localPhotoPath" id="storage-local-path" placeholder="Pilih folder atau masukkan path manual" /><button type="button" class="button secondary" id="pick-storage-folder"><img src="/icons/folder-open.svg" alt="" />Pilih folder</button></span><small>Dialog folder akan terbuka pada komputer Agent.</small></label>
               <div class="local-storage-current"><span>Folder aktif</span><code id="storage-local-path-active">Mengukur…</code><small>Folder harus berada di mesin yang menjalankan Agent, bukan folder pada browser admin.</small></div>
             </div>
           </article>
@@ -161,6 +161,6 @@
     </dialog>
     <dialog id="voucher-dialog"><form method="dialog" id="voucher-form"><div class="dialog-head"><div><small>AKSES SEKALI PAKAI</small><h2>Buat satu voucher</h2></div><button value="cancel" aria-label="Tutup"><img src="/icons/x.svg" alt="" /></button></div><label>Kode voucher <input id="voucher-code" placeholder="Kosongkan untuk membuat kode otomatis" /></label><p class="dialog-note"><img src="/icons/info.svg" alt="" />Voucher berlaku untuk satu sesi, tidak kedaluwarsa, dan tidak dapat dipakai ulang.</p><div class="dialog-actions"><button class="button secondary" value="cancel">Batal</button><button class="button primary" value="default" id="submit-voucher"><img src="/icons/ticket-check.svg" alt="" />Buat voucher</button></div></form></dialog>
     <dialog id="voucher-event-dialog"><form method="dialog" id="voucher-event-form"><div class="dialog-head"><div><small>VOUCHER KHUSUS EVENT</small><h2>Buat event baru</h2></div><button value="cancel" aria-label="Tutup"><img src="/icons/x.svg" alt="" /></button></div><label>Nama event <input id="voucher-event-name" placeholder="Contoh: Wedding Rina &amp; Adi" required maxlength="80" /></label><label>Berlaku sampai <input id="voucher-event-expiry" type="datetime-local" required /></label><label class="switch-row dialog-switch"><span><b>Sertakan hasil cetak</b><small>Matikan jika voucher hanya memberi akses sesi foto digital</small></span><input id="voucher-event-print" type="checkbox" checked /><i></i></label><p class="dialog-note"><img src="/icons/info.svg" alt="" />Setelah event dibuat, tekan Generate 100. Menekan lagi akan menambahkan 100 kode baru untuk event yang sama.</p><div class="dialog-actions"><button class="button secondary" value="cancel">Batal</button><button class="button primary" value="default" id="submit-voucher-event"><img src="/icons/calendar-days.svg" alt="" />Buat event</button></div></form></dialog>
-    <script src="/app.js?v=32" defer></script>
+    <script src="/app.js?v=33" defer></script>
   </body>
 </html>
