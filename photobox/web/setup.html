@@ -114,6 +114,7 @@
           </fieldset>
           <div class="login-method-panel" data-method-panel="pin">
             <label>PIN admin<input id="login-pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Masukkan 6 angka"></label>
+            <label class="hidden" id="login-recovery-email-field">Email pemilik<input id="login-pin-email" type="email" autocomplete="email" placeholder="Email saat pertama daftar"><small>Hanya diperlukan sekali untuk menautkan kode setup lama.</small></label>
           </div>
           <div class="login-method-panel hidden" data-method-panel="password">
             <div class="form-grid">
@@ -214,6 +215,6 @@
       <div class="setup-dialog-actions"><button class="btn" value="cancel">Batal</button><button class="btn primary" id="save-setup-frame-design" value="default"><img src="/icons/save.svg" alt="">Gunakan desain</button></div>
     </form>
   </dialog>
-  <script src="/setup.js?v=13" defer></script>
+  <script src="/setup.js?v=14" defer></script>
 </body>
 </html>

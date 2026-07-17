@@ -281,6 +281,8 @@
 .method-switch button.active { background: #fff; color: #17191f; box-shadow: 0 3px 12px rgba(0, 0, 0, .08); }
 .method-switch button.active img { opacity: 1; }
 .login-method-panel { margin-top: 18px; }
+#login-recovery-email-field { margin-top: 15px; }
+#login-recovery-email-field small { display: block; margin-top: 7px; color: #747984; font-size: 10px; font-weight: 600; line-height: 1.45; }
 
 .login-actions {
   display: flex;
