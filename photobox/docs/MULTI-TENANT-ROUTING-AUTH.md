@@ -60,8 +60,10 @@ Session browser ditandatangani HMAC dan disimpan pada cookie `HttpOnly`, `Secure
    nyata yang terdeteksi. Webcam browser ditambahkan lewat `MediaDevices` setelah
    tindakan pengguna memberi izin. Owner juga dapat menentukan path absolut
    folder foto lokal pada komputer Agent.
-5. **Frame pertama (boleh dilewati):** owner memilih frame bawaan atau mengunggah
-   frame melalui Agent ketika mesin online.
+5. **Frame pertama (boleh dilewati):** owner memilih frame bawaan dengan preview
+   area foto yang nyata, atau mengunggah frame melalui Agent ketika mesin online.
+   Upload membuka editor yang sama modelnya dengan admin: jumlah slot, posisi,
+   ukuran, rotasi, opacity, logo/stiker, dan urutan layer disimpan bersama frame.
 6. **Siap digunakan:** UI merangkum bagian yang sudah siap dan bagian yang masih
    perlu diselesaikan dari admin.
 
