@@ -58,6 +58,110 @@ const sessionCookie = token => `photoslive_session=${encodeURIComponent(token)};
 const clearCookie = "photoslive_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
 const normalizeCode = code => String(code || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
 const normalizeEmail = email => String(email || "").trim().toLowerCase().slice(0, 160);
+const cloudSettingsKey = boothCode => `photoslive:booth:${boothCode}:settings`;
+const voucherIndexKey = boothCode => `photoslive:booth:${boothCode}:vouchers`;
+const voucherKey = (boothCode, code) => `photoslive:booth:${boothCode}:voucher:${code}`;
+const voucherEventIndexKey = boothCode => `photoslive:booth:${boothCode}:voucher-events`;
+const voucherEventKey = (boothCode, id) => `photoslive:booth:${boothCode}:voucher-event:${id}`;
+const assetIndexKey = (boothCode, kind) => `photoslive:booth:${boothCode}:assets:${kind}`;
+const assetKey = (boothCode, id) => `photoslive:booth:${boothCode}:asset:${id}`;
+const ASSET_KINDS = ["background", "frame", "logo", "sticker"];
+
+const DEFAULT_CLOUD_SETTINGS = {
+  booth: { name: "Photoslive Booth", location: "", dailySessionLimit: 120, sessionTimeoutSeconds: 150, countdownSeconds: 15, retakeLimit: 1, unlimitedRetakes: true, photoSlotsPerSession: 3, printsPerSession: 1, localRetentionHours: 24, cloudRetentionDays: 7, maintenanceMode: false },
+  payment: { qrisEnabled: false, voucherEnabled: false, price: 35000, currency: "IDR", provider: "Not configured", paidPrintEnabled: false, printPrice: 10000 },
+  appearance: {
+    activeBackground: "default-gradient", activeFrame: "party-night", activeLogo: "text-logo", welcomeTitle: "Abadikan momenmu", touchPrompt: "Sentuh layar untuk memulai", startButtonLabel: "Mulai foto", fontFamily: "system", screenPreset: "1080x1920", screenSizeInches: 15.6, logoSizePercent: 28, headingFontSize: 48, helperFontSize: 18, buttonFontSize: 16, accentColor: "#6d5dfc", headingTextColor: "#ffffff", helperTextColor: "#ffffff", buttonBackgroundColor: "#ffffff", buttonTextColor: "#7c3049", frameFormat: "photo-strip-vertical",
+    framePhotoSlots: { "clean-white": 3, "party-night": 3 }, framePhotoWidths: { "clean-white": 86, "party-night": 86 }, frameBackgroundTransforms: {}, frameSlotTransforms: {}, frameStickers: {}, frameLayoutModes: { "clean-white": "auto", "party-night": "auto" }, frameSizePresets: { "clean-white": "custom", "party-night": "custom" }, frameCanvasSizes: { "clean-white": { width: 800, height: 1600 }, "party-night": { width: 800, height: 1600 } }, frameOriginalCanvasSizes: { "clean-white": { width: 1200, height: 1600 }, "party-night": { width: 1200, height: 1600 } }, frameAspectRatio: "3:4", frameCanvasWidth: 1200, frameCanvasHeight: 1600, frameBottomMarginPercent: 20,
+  },
+  storage: { cloudEnabled: false, provider: "Cloudflare R2", uploadFinalOnly: true, deleteOnlyAfterUpload: true },
+  devices: { preferredCamera: "auto", preferredPrinter: "auto", paperSize: "4x6", printLayout: "photo-strip-vertical", stripsPerSheet: 2, borderless: true, cameraSource: "auto", browserCameraId: "", cameraMirror: false, cameraRotation: "0" },
+};
+
+const clone = value => structuredClone(value);
+const isObject = value => Boolean(value && typeof value === "object" && !Array.isArray(value));
+function mergeObjects(base, incoming) {
+  const result = clone(base);
+  if (!isObject(incoming)) return result;
+  for (const [key, value] of Object.entries(incoming)) result[key] = isObject(value) && isObject(result[key]) ? mergeObjects(result[key], value) : clone(value);
+  return result;
+}
+
+async function cloudSettings(redis, booth) {
+  const stored = await redis.get(cloudSettingsKey(booth.boothCode));
+  const settings = mergeObjects(DEFAULT_CLOUD_SETTINGS, stored);
+  settings.booth.name = stored?.booth?.name || booth.name || settings.booth.name;
+  settings.booth.location = stored?.booth?.location ?? booth.location ?? settings.booth.location;
+  return settings;
+}
+
+async function requireBoothAdmin(redis, request, requestedCode) {
+  const auth = await authenticate(redis, request);
+  const booth = await resolveBooth(redis, requestedCode || auth?.boothCode);
+  if (!auth?.boothCode || !booth || auth.boothCode !== booth.boothCode) return null;
+  return { auth, booth };
+}
+
+function voucherCode(value = "") {
+  return String(value).trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 32);
+}
+
+async function voucherRecords(redis, boothCode) {
+  const codes = await redis.smembers(voucherIndexKey(boothCode));
+  return (await Promise.all(codes.map(code => redis.get(voucherKey(boothCode, code))))).filter(Boolean);
+}
+
+async function voucherEvents(redis, boothCode) {
+  const ids = await redis.smembers(voucherEventIndexKey(boothCode));
+  return (await Promise.all(ids.map(id => redis.get(voucherEventKey(boothCode, id))))).filter(Boolean);
+}
+
+async function cloudAssets(redis, boothCode) {
+  const result = Object.fromEntries(ASSET_KINDS.map(kind => [kind, []]));
+  await Promise.all(ASSET_KINDS.map(async kind => {
+    const ids = await redis.smembers(assetIndexKey(boothCode, kind));
+    const records = (await Promise.all(ids.map(id => redis.get(assetKey(boothCode, id))))).filter(Boolean);
+    result[kind] = records.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map(({ data, ...record }) => record);
+  }));
+  return result;
+}
+
+function eventExpired(event) {
+  return Boolean(event?.expiresAt && Date.parse(event.expiresAt) <= Date.now());
+}
+
+async function voucherPayload(redis, boothCode) {
+  const [records, events] = await Promise.all([voucherRecords(redis, boothCode), voucherEvents(redis, boothCode)]);
+  const eventMap = new Map(events.map(event => [event.id, event]));
+  const active = records.filter(record => !record.redeemedAt && !eventExpired(eventMap.get(record.eventId)));
+  const renderedEvents = events.map(event => {
+    const members = records.filter(record => record.eventId === event.id);
+    return { ...event, status: eventExpired(event) ? "expired" : "active", active: members.filter(record => !record.redeemedAt && !eventExpired(event)).length, used: members.filter(record => record.redeemedAt).length, total: members.length };
+  }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return {
+    vouchers: active.slice(0, 100).map(record => ({ ...record, eventName: eventMap.get(record.eventId)?.name || "" })),
+    summary: { generalActive: active.filter(record => !record.eventId).length, eventActive: active.filter(record => record.eventId).length, used: records.filter(record => record.redeemedAt).length },
+    events: renderedEvents,
+  };
+}
+
+async function createCloudVoucher(redis, boothCode, payload) {
+  const code = voucherCode(payload.code) || `${pairingVoucherPart()}-${pairingVoucherPart()}`;
+  if (code.length < 4) return json({ error: "Kode voucher minimal 4 karakter" }, 400);
+  if (await redis.get(voucherKey(boothCode, code))) return json({ error: "Kode voucher sudah digunakan" }, 409);
+  const event = payload.eventId ? await redis.get(voucherEventKey(boothCode, String(payload.eventId))) : null;
+  if (payload.eventId && (!event || eventExpired(event))) return json({ error: "Event tidak ditemukan atau sudah berakhir" }, 404);
+  const record = { code, boothCode, eventId: event?.id || null, includesPrint: event ? Boolean(event.includesPrint) : true, createdAt: now(), redeemedAt: null };
+  await redis.set(voucherKey(boothCode, code), record);
+  await redis.sadd(voucherIndexKey(boothCode), code);
+  return json({ voucher: record }, 201);
+}
+
+function pairingVoucherPart() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  return [...bytes].map(byte => alphabet[byte % alphabet.length]).join("");
+}
 
 async function resolveBooth(redis, code) {
   const lookupCode = normalizeCode(code);
@@ -306,6 +410,165 @@ async function publicPhotoSession(redis, payload) {
   return json({ session: record, booth: await resolveBooth(redis, boothCode) });
 }
 
+async function cloudData(redis, request, payload) {
+  const target = new URL(String(payload.path || "/"), "https://photoslive.local");
+  const path = target.pathname;
+  const booth = await resolveBooth(redis, payload.booth);
+  if (!booth || !booth.enabled) return json({ error: "Photobox tidak ditemukan atau aksesnya dinonaktifkan" }, 404);
+
+  if (request.method === "GET" && path === "/api/booth/config") {
+    const [settings, assets] = await Promise.all([cloudSettings(redis, booth), cloudAssets(redis, booth.boothCode)]);
+    return json({
+      booth: settings.booth,
+      appearance: settings.appearance,
+      payment: settings.payment,
+      devices: settings.devices,
+      assets,
+    });
+  }
+
+  if (request.method === "POST" && path === "/api/vouchers/redeem") {
+    const code = voucherCode(payload.data?.code);
+    if (!code) return json({ error: "Masukkan kode voucher" }, 400);
+    const lockKey = `photoslive:booth:${booth.boothCode}:voucher-lock:${code}`;
+    const locked = await redis.set(lockKey, "1", { nx: true, ex: 8 });
+    if (!locked) return json({ error: "Voucher sedang diperiksa. Coba sekali lagi." }, 409);
+    try {
+      const record = await redis.get(voucherKey(booth.boothCode, code));
+      if (!record || record.redeemedAt) return json({ error: "Voucher tidak ditemukan atau sudah dipakai" }, 404);
+      const event = record.eventId ? await redis.get(voucherEventKey(booth.boothCode, record.eventId)) : null;
+      if (eventExpired(event)) return json({ error: "Voucher event sudah kedaluwarsa" }, 410);
+      record.redeemedAt = now();
+      await redis.set(voucherKey(booth.boothCode, code), record);
+      return json({ voucher: record });
+    } finally {
+      await redis.del(lockKey);
+    }
+  }
+
+  if (request.method === "POST" && path === "/api/booth/client") {
+    const id = String(payload.clientId || randomId("client")).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
+    const record = { id, boothCode: booth.boothCode, ...payload.data, updatedAt: now() };
+    await redis.set(`photoslive:booth:${booth.boothCode}:client:${id}`, record, { ex: 180 });
+    await redis.sadd(`photoslive:booth:${booth.boothCode}:clients`, id);
+    return json({ client: record }, 201);
+  }
+
+  const access = await requireBoothAdmin(redis, request, booth.boothCode);
+  if (!access) return json({ error: "Login admin photobox diperlukan" }, 401);
+
+  if (request.method === "GET" && path === "/api/settings") return json(await cloudSettings(redis, booth));
+  if (request.method === "PATCH" && (path === "/api/settings" || path.startsWith("/api/settings/"))) {
+    const section = path === "/api/settings" ? "" : path.slice("/api/settings/".length);
+    const current = await cloudSettings(redis, booth);
+    if (section && !(section in DEFAULT_CLOUD_SETTINGS)) return json({ error: "Bagian pengaturan tidak dikenal" }, 404);
+    const incoming = payload.data;
+    const next = section ? { ...current, [section]: mergeObjects(current[section], incoming) } : mergeObjects(current, incoming);
+    if (JSON.stringify(next).length > 500_000) return json({ error: "Pengaturan terlalu besar" }, 413);
+    next.booth.name = String(next.booth.name || booth.name).slice(0, 80);
+    next.booth.location = String(next.booth.location || "").slice(0, 120);
+    await redis.set(cloudSettingsKey(booth.boothCode), next);
+    const machine = await redis.get(machineKey(booth.machineId));
+    if (machine) {
+      machine.name = next.booth.name;
+      machine.location = next.booth.location;
+      machine.updatedAt = now();
+      await redis.set(machineKey(machine.id), machine);
+    }
+    return json(next);
+  }
+
+  if (request.method === "GET" && path === "/api/vouchers") return json(await voucherPayload(redis, booth.boothCode));
+  if (request.method === "GET" && path === "/api/vouchers/print") {
+    const eventId = target.searchParams.get("eventId") || "";
+    const records = await voucherRecords(redis, booth.boothCode);
+    const selected = records.filter(record => !record.redeemedAt && (eventId ? record.eventId === eventId : !record.eventId));
+    return json({ codes: selected.map(record => record.code), eventId });
+  }
+  if (request.method === "GET" && path === "/api/assets") return json(await cloudAssets(redis, booth.boothCode));
+  if (request.method === "PUT" && path.startsWith("/api/assets/")) {
+    const kind = path.slice("/api/assets/".length);
+    if (!ASSET_KINDS.includes(kind)) return json({ error: "Jenis aset tidak dikenal" }, 404);
+    const bodyBase64 = String(payload.data?.bodyBase64 || "");
+    const byteLength = Math.floor(bodyBase64.length * 0.75);
+    if (!bodyBase64 || byteLength > 2_000_000) return json({ error: "Ukuran aset cloud maksimal 2 MB" }, 413);
+    const id = randomId("asset");
+    const filename = String(payload.data?.filename || `${kind}.webp`).replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120);
+    const record = { id, boothCode: booth.boothCode, kind, name: filename, contentType: String(payload.data?.contentType || "application/octet-stream").slice(0, 100), size: byteLength, createdAt: now(), url: `/api/platform?action=cloud_asset&booth=${encodeURIComponent(booth.boothCode)}&id=${encodeURIComponent(id)}`, data: bodyBase64 };
+    await redis.set(assetKey(booth.boothCode, id), record);
+    await redis.sadd(assetIndexKey(booth.boothCode, kind), id);
+    const { data, ...asset } = record;
+    return json({ asset }, 201);
+  }
+  if (request.method === "DELETE" && path.startsWith("/api/assets/")) {
+    const parts = path.split("/").filter(Boolean);
+    const kind = parts[2];
+    const idOrName = decodeURIComponent(parts.slice(3).join("/"));
+    if (!ASSET_KINDS.includes(kind) || !idOrName) return json({ error: "Aset tidak valid" }, 400);
+    const ids = await redis.smembers(assetIndexKey(booth.boothCode, kind));
+    let id = idOrName;
+    let record = await redis.get(assetKey(booth.boothCode, id));
+    if (!record) {
+      for (const candidate of ids) {
+        const item = await redis.get(assetKey(booth.boothCode, candidate));
+        if (item?.name === idOrName || item?.url === idOrName) { id = candidate; record = item; break; }
+      }
+    }
+    if (!record) return json({ error: "Aset tidak ditemukan" }, 404);
+    await redis.del(assetKey(booth.boothCode, id));
+    await redis.srem(assetIndexKey(booth.boothCode, kind), id);
+    return json({ deleted: true });
+  }
+  if (request.method === "POST" && path === "/api/vouchers") return createCloudVoucher(redis, booth.boothCode, payload.data || {});
+  if (request.method === "POST" && path === "/api/vouchers/generate") {
+    const count = Math.max(1, Math.min(100, Number(payload.data?.count || 100)));
+    const event = payload.data?.eventId ? await redis.get(voucherEventKey(booth.boothCode, String(payload.data.eventId))) : null;
+    if (payload.data?.eventId && (!event || eventExpired(event))) return json({ error: "Event tidak ditemukan atau sudah berakhir" }, 404);
+    const existing = new Set(await redis.smembers(voucherIndexKey(booth.boothCode)));
+    const vouchers = [];
+    for (let attempt = 0; vouchers.length < count && attempt < count * 3; attempt += 1) {
+      const code = `${pairingVoucherPart()}-${pairingVoucherPart()}`;
+      if (existing.has(code)) continue;
+      existing.add(code);
+      const record = { code, boothCode: booth.boothCode, eventId: event?.id || null, includesPrint: event ? Boolean(event.includesPrint) : true, createdAt: now(), redeemedAt: null };
+      vouchers.push(record);
+    }
+    const pipeline = redis.pipeline();
+    for (const record of vouchers) pipeline.set(voucherKey(booth.boothCode, record.code), record);
+    if (vouchers.length) pipeline.sadd(voucherIndexKey(booth.boothCode), ...vouchers.map(record => record.code));
+    await pipeline.exec();
+    return json({ created: vouchers.length, vouchers }, 201);
+  }
+  if (request.method === "DELETE" && path.startsWith("/api/vouchers/")) {
+    const code = voucherCode(decodeURIComponent(path.slice("/api/vouchers/".length)));
+    const record = code ? await redis.get(voucherKey(booth.boothCode, code)) : null;
+    if (!record || record.redeemedAt) return json({ error: "Voucher tidak ditemukan atau sudah dipakai" }, 404);
+    await redis.del(voucherKey(booth.boothCode, code));
+    await redis.srem(voucherIndexKey(booth.boothCode), code);
+    return json({ deleted: true });
+  }
+  if (request.method === "GET" && path === "/api/voucher-events") return json({ events: (await voucherPayload(redis, booth.boothCode)).events });
+  if (request.method === "POST" && path === "/api/voucher-events") {
+    const name = String(payload.data?.name || "").trim().slice(0, 100);
+    const expiresAt = new Date(payload.data?.expiresAt || "");
+    if (!name || Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) return json({ error: "Nama dan waktu berakhir event wajib diisi" }, 400);
+    const event = { id: randomId("event"), boothCode: booth.boothCode, name, expiresAt: expiresAt.toISOString(), includesPrint: Boolean(payload.data?.includesPrint), createdAt: now() };
+    await redis.set(voucherEventKey(booth.boothCode, event.id), event);
+    await redis.sadd(voucherEventIndexKey(booth.boothCode), event.id);
+    return json({ event }, 201);
+  }
+  return json({ error: "Endpoint cloud data tidak ditemukan" }, 404);
+}
+
+async function cloudAsset(redis, payload) {
+  const booth = await resolveBooth(redis, payload.booth);
+  if (!booth || !booth.enabled) return json({ error: "Photobox tidak ditemukan" }, 404);
+  const record = await redis.get(assetKey(booth.boothCode, String(payload.id || "")));
+  if (!record?.data) return json({ error: "Aset tidak ditemukan" }, 404);
+  const bytes = Uint8Array.from(atob(record.data), character => character.charCodeAt(0));
+  return new Response(bytes, { headers: { "content-type": record.contentType || "application/octet-stream", "content-length": String(bytes.byteLength), "cache-control": "public, max-age=31536000, immutable" } });
+}
+
 async function handler(request) {
   try {
     const url = new URL(request.url);
@@ -329,6 +592,8 @@ async function handler(request) {
     if (action === "resolve_reset" && request.method === "POST") return resolveResetRequest(redis, request, payload);
     if (action === "register_session" && request.method === "POST") return registerPhotoSession(redis, payload);
     if (action === "public_session" && request.method === "GET") return publicPhotoSession(redis, payload);
+    if (action === "cloud_data") return cloudData(redis, request, payload);
+    if (action === "cloud_asset" && request.method === "GET") return cloudAsset(redis, payload);
     return json({ error: "Endpoint tidak ditemukan" }, 404);
   } catch (error) {
     console.error(error);

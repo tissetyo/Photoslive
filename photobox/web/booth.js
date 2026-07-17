@@ -44,10 +44,33 @@ const FONT_FAMILIES = {
 };
 
 async function boothApi(path, options = {}) {
-  if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") return boothCloudControllerApi(path, options);
+  if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
+    if (isBoothCloudDataPath(path)) return boothCloudDataApi(path, options);
+    return boothCloudControllerApi(path, options);
+  }
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || payload.message || `Permintaan gagal (${response.status})`);
+  return payload;
+}
+
+function isBoothCloudDataPath(path) {
+  const pathname = String(path).split("?")[0];
+  return pathname === "/api/booth/config" || pathname === "/api/booth/client" || pathname === "/api/vouchers/redeem";
+}
+
+async function boothCloudDataApi(path, options = {}) {
+  let data = {};
+  if (typeof options.body === "string" && options.body) data = JSON.parse(options.body);
+  const method = String(options.method || "GET").toUpperCase();
+  const clientId = Object.entries(options.headers || {}).find(([name]) => name.toLowerCase() === "x-client-id")?.[1] || "";
+  const response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(routeBoothCode)}&path=${encodeURIComponent(path)}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: method === "GET" ? undefined : JSON.stringify({ data, clientId }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Cloud database gagal (${response.status})`);
   return payload;
 }
 
@@ -437,7 +460,7 @@ async function openAccessGate() {
   const startButton = $("#welcome-start");
   if (!boothState.config) {
     startButton.disabled = true;
-    $("#welcome-button-label").textContent = "Menghubungkan mesin…";
+    $("#welcome-button-label").textContent = "Menyiapkan sesi…";
     try {
       boothState.config = await boothApi("/api/booth/config");
       localStorage.setItem("photoslive.boothConfig", JSON.stringify(boothState.config));

@@ -56,11 +56,43 @@ const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, character =>
 
 async function api(path, options = {}) {
   if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost" && !path.startsWith("/api/bridge")) {
+    if (isCloudDataPath(path)) return cloudDataApi(path, options);
     return cloudControllerApi(path, options);
   }
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || payload.message || `Request failed (${response.status})`);
+  return payload;
+}
+
+function isCloudDataPath(path) {
+  const pathname = String(path).split("?")[0];
+  return pathname === "/api/settings" || pathname.startsWith("/api/settings/") || pathname === "/api/assets" || pathname.startsWith("/api/assets/") || pathname === "/api/vouchers" || pathname === "/api/vouchers/generate" || pathname.startsWith("/api/vouchers/") || pathname === "/api/voucher-events";
+}
+
+const isProductionHost = () => location.hostname !== "127.0.0.1" && location.hostname !== "localhost";
+const assetUploadLimit = () => isProductionHost() ? 2 * 1024 * 1024 : 10 * 1024 * 1024;
+const assetUploadLimitLabel = () => isProductionHost() ? "2 MB" : "10 MB";
+const isUploadedAssetUrl = url => String(url || "").startsWith("/uploads/") || String(url || "").includes("action=cloud_asset");
+
+async function cloudDataApi(path, options = {}) {
+  let data = {};
+  if (typeof options.body === "string" && options.body) data = JSON.parse(options.body);
+  else if (options.body instanceof Blob) {
+    if (options.body.size > 2_000_000) throw new Error("Ukuran aset cloud maksimal 2 MB");
+    data = {
+      bodyBase64: await blobToBase64(options.body),
+      contentType: options.body.type || "application/octet-stream",
+      filename: Object.entries(options.headers || {}).find(([name]) => name.toLowerCase() === "x-filename")?.[1] || "asset.webp",
+    };
+  }
+  const response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(adminBoothCode)}&path=${encodeURIComponent(path)}`, {
+    method: String(options.method || "GET").toUpperCase(),
+    headers: { "Content-Type": "application/json" },
+    body: String(options.method || "GET").toUpperCase() === "GET" ? undefined : JSON.stringify({ data }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Cloud database gagal (${response.status})`);
   return payload;
 }
 
@@ -360,12 +392,17 @@ async function saveSettings() {
   if (!state.dirtySections.size) return toast("Tidak ada perubahan yang perlu disimpan");
   const sections = [...state.dirtySections];
   try {
-    for (const section of sections) await api(`/api/settings/${section}`, { method: "PATCH", body: JSON.stringify(state.settings[section]) });
+    for (const section of sections) {
+      await api(`/api/settings/${section}`, { method: "PATCH", body: JSON.stringify(state.settings[section]) });
+      if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
+        // Keep the local controller in sync when it is online, but never make
+        // cloud saving wait for Agent hardware polling.
+        cloudControllerApi(`/api/settings/${section}`, { method: "PATCH", body: JSON.stringify(state.settings[section]), timeoutMs: 5000 }).catch(() => {});
+      }
+    }
     state.dirtySections.clear();
     toast("Pengaturan berhasil disimpan");
-    state.storageLoadedAt = 0;
-    await refreshStatus();
-    if ($("#storage-view")?.classList.contains("active")) await loadStorageData(true);
+    updatePreview();
   } catch (error) { toast(`Gagal menyimpan: ${error.message}`, "error"); }
 }
 
@@ -376,7 +413,7 @@ function updatePreview() {
   $("#preview-prompt").textContent = appearance.touchPrompt;
   $("#preview-start-button").textContent = appearance.startButtonLabel;
   const selected = [...defaults.background, ...state.assets.background].find(asset => asset.url === appearance.activeBackground);
-  const style = selected?.style || (selected?.url?.startsWith("/uploads/") ? `center / cover url('${selected.url}')` : defaults.background[0].style);
+  const style = selected?.style || (isUploadedAssetUrl(selected?.url) ? `center / cover url('${selected.url}')` : defaults.background[0].style);
   $("#booth-preview").style.background = style;
   $("#booth-preview").style.fontFamily = FONT_FAMILIES[appearance.fontFamily] || FONT_FAMILIES.system;
   const screen = SCREEN_PRESETS[appearance.screenPreset] || SCREEN_PRESETS["1080x1920"];
@@ -507,7 +544,7 @@ async function renderFrameThumbnailImage(target, frameUrl) {
   const context = canvas.getContext("2d", { alpha: false });
   const frame = getFramePresentation(frameUrl);
   const transform = state.settings.appearance.frameBackgroundTransforms?.[frameUrl] || { zoom: 100, x: 50, y: 50 };
-  if (frameUrl.startsWith("/uploads/")) {
+  if (isUploadedAssetUrl(frameUrl)) {
     const source = await loadThumbnailSource(frameUrl);
     const scale = Math.max(width / source.naturalWidth, height / source.naturalHeight) * (Number(transform.zoom || 100) / 100);
     const drawWidth = source.naturalWidth * scale, drawHeight = source.naturalHeight * scale;
@@ -672,7 +709,7 @@ function updateFrameUploadPreview() {
 
 async function prepareFrameUpload(file) {
   if (!file) return;
-  if (file.size > 10 * 1024 * 1024) return toast("Ukuran gambar maksimal 10 MB", "error");
+  if (file.size > assetUploadLimit()) return toast(`Ukuran gambar maksimal ${assetUploadLimitLabel()}`, "error");
   try {
     await readImageDimensions(file);
     if (state.pendingFrameUpload?.previewUrl) URL.revokeObjectURL(state.pendingFrameUpload.previewUrl);
@@ -692,7 +729,7 @@ function openFrameEditor(frameUrl) {
   const frame = getFramePresentation(frameUrl);
   const transform = state.settings.appearance.frameBackgroundTransforms?.[frameUrl] || { zoom: 100, x: 50, y: 50 };
   state.pendingFrameUpload = {
-    mode: "edit", file: null, previewUrl: null, frameUrl, backgroundCss: frameUrl.startsWith("/uploads/") ? `center / cover no-repeat url('${frameUrl}')` : frame.asset.style,
+    mode: "edit", file: null, previewUrl: null, frameUrl, backgroundCss: isUploadedAssetUrl(frameUrl) ? `center / cover no-repeat url('${frameUrl}')` : frame.asset.style,
     slots: frame.slots, zoom: Number(transform.zoom || 100), x: Number(transform.x ?? 50), y: Number(transform.y ?? 50),
     slotTransforms: structuredClone(frame.slotTransforms.length === frame.slots ? frame.slotTransforms : defaultSlotTransforms(frame.slots)),
     stickers: structuredClone(frame.stickers), selected: { type: "slot", index: 0 },
@@ -708,7 +745,7 @@ function openFrameEditor(frameUrl) {
 
 async function uploadAsset(file, kind, frameOptions = {}) {
   if (!file) return;
-  if (file.size > 10 * 1024 * 1024) return toast("Ukuran gambar maksimal 10 MB", "error");
+  if (file.size > assetUploadLimit()) return toast(`Ukuran gambar maksimal ${assetUploadLimitLabel()}`, "error");
   try {
     const imageDimensions = kind === "frame" ? await readImageDimensions(file) : null;
     const result = await api(`/api/assets/${kind}`, { method: "PUT", headers: { "Content-Type": file.type, "X-Filename": file.name }, body: file });
@@ -748,7 +785,7 @@ async function uploadAsset(file, kind, frameOptions = {}) {
 
 async function uploadFrameSticker(file) {
   if (!file || !state.pendingFrameUpload) return;
-  if (file.size > 10 * 1024 * 1024) return toast("Ukuran logo atau stiker maksimal 10 MB", "error");
+  if (file.size > assetUploadLimit()) return toast(`Ukuran logo atau stiker maksimal ${assetUploadLimitLabel()}`, "error");
   try {
     await readImageDimensions(file);
     const asset = (await api("/api/assets/sticker", { method: "PUT", headers: { "Content-Type": file.type, "X-Filename": file.name }, body: file })).asset;
@@ -763,7 +800,8 @@ async function uploadFrameSticker(file) {
 }
 
 async function deleteAsset(kind, url) {
-  const filename = url.split("/").pop();
+  const asset = state.assets[kind].find(item => item.url === url);
+  const filename = asset?.id || asset?.name || url.split("/").pop();
   try {
     await api(`/api/assets/${kind}/${encodeURIComponent(filename)}`, { method: "DELETE" });
     state.assets[kind] = state.assets[kind].filter(asset => asset.url !== url);
@@ -966,10 +1004,16 @@ async function createVoucherEvent() {
 async function printVouchers(eventId = null) {
   const url = `/api/vouchers/print${eventId ? `?eventId=${encodeURIComponent(eventId)}` : ""}`;
   if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return window.open(url, "_blank", "noopener");
+  const popup = window.open("", "_blank");
   try {
-    const result = await cloudControllerApi(url);
-    window.open(cloudBinaryUrl(result), "_blank", "noopener");
-  } catch (error) { toast(`Voucher tidak dapat dibuka: ${error.message}`, "error"); }
+    if (!popup) throw new Error("Browser memblokir jendela cetak");
+    popup.document.write("<p style='font:16px system-ui;padding:24px'>Menyiapkan voucher…</p>");
+    const { codes } = await api(url);
+    if (!codes?.length) throw new Error("Tidak ada voucher aktif untuk dicetak");
+    popup.document.open();
+    popup.document.write(`<!doctype html><html><head><title>Voucher Photoslive</title><style>body{font:14px system-ui;margin:24px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.code{border:1px dashed #333;padding:16px;text-align:center;break-inside:avoid}.code b{display:block;font-size:18px;letter-spacing:1px}@media print{body{margin:8mm}}</style></head><body><div class="grid">${codes.map(code => `<div class="code"><small>PHOTOSLIVE</small><b>${escapeHtml(code)}</b><span>Sekali pakai</span></div>`).join("")}</div><script>window.print()<\/script></body></html>`);
+    popup.document.close();
+  } catch (error) { popup?.close(); toast(`Voucher tidak dapat dibuka: ${error.message}`, "error"); }
 }
 
 async function testDevice(kind) {
@@ -1215,13 +1259,15 @@ async function boot() {
   if (requestedView && titles[requestedView]) showView(requestedView);
   try {
     state.settings = await api("/api/settings");
-    const [assets] = await Promise.all([api("/api/assets")]);
-    state.assets = assets;
     hydrateSettings();
-    await Promise.all([refreshStatus(), loadVouchers()]);
-    if ($("#storage-view").classList.contains("active")) await loadStorageData(false);
-    setInterval(() => refreshStatus(false), 30000);
-  } catch (error) { toast(`Layanan mesin tidak tersedia: ${error.message}`, "error"); }
+    await loadVouchers();
+    // Hardware status and local assets are optional background data. They may
+    // be offline without blocking cloud settings, vouchers, or navigation.
+    api("/api/assets", { timeoutMs: 5000 }).then(assets => { state.assets = assets; renderAssets(); updatePreview(); }).catch(() => {});
+    refreshStatus(false).catch(() => {});
+    if ($("#storage-view").classList.contains("active")) loadStorageData(false).catch(() => {});
+    setInterval(() => refreshStatus(false).catch(() => {}), 60000);
+  } catch (error) { toast(`Data admin tidak dapat dimuat: ${error.message}`, "error"); }
 }
 
 window.addEventListener("beforeunload", event => { stopCameraPreview(); if (state.dirtySections.size) { event.preventDefault(); event.returnValue = ""; } });
