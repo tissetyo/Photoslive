@@ -45,8 +45,10 @@ pendamping Windows, macOS, atau Linux.
 4. Setelah email dan PIN berhasil disimpan, kode sekali pakai dihapus
    (`pairingCode` menjadi `null`)
    dan `boothCode` permanen digunakan untuk URL tenant.
-5. Wizard memeriksa kamera/printer dari heartbeat Agent dan menawarkan frame
-   awal. Kedua langkah ini boleh dilewati dan diselesaikan dari admin.
+5. Wizard meminta scan perangkat baru melalui Agent, hanya menampilkan entri
+   berstatus `connected`, lalu menyediakan pilihan dan tes untuk setiap model
+   kamera/printer yang ditemukan. Placeholder `*-none` tidak boleh ditampilkan
+   sebagai tersambung. Langkah perangkat dan frame boleh dilewati.
 6. Cloud menerbitkan `machine_id` dan credential khusus mesin.
 7. Credential disimpan oleh service lokal dengan permission file terbatas,
    tidak di localStorage dan tidak pernah dikirim ke browser pelanggan.

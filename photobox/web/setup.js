@@ -11,12 +11,12 @@ const onboarding = {
 };
 
 const setupSteps = [
-  ["Hubungkan mesin", "Masukkan kode dari Photoslive Agent."],
-  ["Identitas photobox", "Beri nama agar mesin mudah dikenali."],
-  ["Akses pemilik", "Email dan PIN wajib diisi."],
-  ["Kamera & printer", "Periksa perangkat yang terhubung."],
-  ["Frame pertama", "Pilih tampilan awal hasil foto."],
-  ["Siap digunakan", "Setup dasar telah selesai."],
+  ["Hubungkan mesin", "Masukkan kode Agent."],
+  ["Identitas mesin", "Nama dan lokasi."],
+  ["Akses admin", "Email dan PIN."],
+  ["Perangkat", "Pilih dan tes."],
+  ["Frame awal", "Pilih satu desain."],
+  ["Siap", "Setup selesai."],
 ];
 
 const api = async (action, options = {}) => {
@@ -139,26 +139,80 @@ function deviceKind(device) {
   return "other";
 }
 
-function renderDeviceCard(kind, device) {
+function connectedDevices(kind) {
+  return onboarding.devices.filter(device => (
+    deviceKind(device) === kind
+    && device?.status === "connected"
+    && !String(device?.id || "").endsWith("-none")
+  ));
+}
+
+function renderDevicePicker(kind, devices) {
   const card = $(`#onboarding-${kind}`);
-  card.classList.toggle("connected", Boolean(device));
-  card.querySelector("small").textContent = device ? String(device.name || device.model || "Terdeteksi") : "Belum terdeteksi";
+  const select = $(`#setup-${kind}-select`);
+  const testButton = $(`#test-setup-${kind}`);
+  select.replaceChildren();
+  devices.forEach(device => {
+    const option = document.createElement("option");
+    option.value = String(device.id || "");
+    option.textContent = String(device.name || device.model || device.id || "Perangkat");
+    select.append(option);
+  });
+  if (!devices.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Tidak ditemukan";
+    select.append(option);
+  }
+  const connected = devices.length > 0;
+  card.classList.toggle("connected", connected);
+  card.querySelector("small").textContent = connected ? `${devices.length} terdeteksi` : "Tidak terhubung";
+  select.disabled = !connected;
+  testButton.disabled = !connected;
 }
 
 async function refreshOnboardingDevices() {
   const message = $("#device-onboarding-status");
-  message.textContent = "Memeriksa Agent dan perangkat…";
+  message.textContent = "Mencari perangkat…";
   try {
     const { machine } = await bridgeApi("machine_status", { machineId: onboarding.machine.id }, "GET");
     onboarding.machine = { ...onboarding.machine, ...machine };
-    onboarding.devices = Array.isArray(machine?.devices) ? machine.devices : [];
-    const camera = onboarding.devices.find(device => deviceKind(device) === "camera");
-    const printer = onboarding.devices.find(device => deviceKind(device) === "printer");
-    renderDeviceCard("camera", camera);
-    renderDeviceCard("printer", printer);
-    message.textContent = !machine?.online ? "Agent sedang offline. Nyalakan Agent lalu periksa kembali, atau lewati dulu." : camera || printer ? "Perangkat yang terdeteksi sudah diperbarui." : "Agent online, tetapi kamera dan printer belum terdeteksi.";
+    if (!machine?.online) throw new Error("Agent offline");
+    const refreshed = await controllerRequest("/api/devices/refresh", "POST");
+    onboarding.devices = Array.isArray(refreshed?.devices) ? refreshed.devices : Array.isArray(machine?.devices) ? machine.devices : [];
+    const cameras = connectedDevices("camera");
+    const printers = connectedDevices("printer");
+    renderDevicePicker("camera", cameras);
+    renderDevicePicker("printer", printers);
+    message.textContent = cameras.length || printers.length ? "Pilih perangkat yang akan dipakai." : "Tidak ada perangkat terhubung.";
   } catch (error) {
-    message.textContent = `${error.message} Anda dapat melewati langkah ini.`;
+    onboarding.devices = [];
+    renderDevicePicker("camera", []);
+    renderDevicePicker("printer", []);
+    message.textContent = `${error.message}. Periksa Agent atau lewati.`;
+  }
+}
+
+async function selectOnboardingDevice(kind) {
+  const select = $(`#setup-${kind}-select`);
+  if (!select.value) return;
+  const key = kind === "camera" ? "preferredCamera" : "preferredPrinter";
+  await controllerRequest("/api/settings", "PATCH", { devices: { [key]: select.value } });
+}
+
+async function testOnboardingDevice(kind) {
+  const message = $("#device-onboarding-status");
+  const button = $(`#test-setup-${kind}`);
+  button.disabled = true;
+  message.textContent = kind === "camera" ? "Menguji kamera…" : "Mengirim halaman tes…";
+  try {
+    await selectOnboardingDevice(kind);
+    const result = await controllerRequest(kind === "camera" ? "/api/devices/camera/test" : "/api/devices/printer/test-page", "POST");
+    message.textContent = result.message || (kind === "camera" ? "Kamera siap." : "Halaman tes dikirim.");
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = !connectedDevices(kind).length;
   }
 }
 
@@ -192,7 +246,7 @@ async function saveStarterFrame() {
       onboarding.selectedFrame = activeFrame;
     }
     if (onboarding.machine?.online) {
-      await controllerRequest("/api/settings", "POST", { appearance: { activeFrame }, booth: { name: $("#booth-name").value.trim() } });
+      await controllerRequest("/api/settings", "PATCH", { appearance: { activeFrame }, booth: { name: $("#booth-name").value.trim() } });
     }
     message.textContent = "Frame pertama siap digunakan.";
     setSetupStep(6);
@@ -203,8 +257,8 @@ async function saveStarterFrame() {
 }
 
 function renderReadyChecklist() {
-  const hasCamera = onboarding.devices.some(device => deviceKind(device) === "camera");
-  const hasPrinter = onboarding.devices.some(device => deviceKind(device) === "printer");
+  const hasCamera = connectedDevices("camera").length > 0;
+  const hasPrinter = connectedDevices("printer").length > 0;
   const items = [
     [true, "Akun pemilik", $("#owner-email").value],
     [Boolean(onboarding.machine?.online), "Photoslive Agent", onboarding.machine?.online ? "Online" : "Perlu dinyalakan"],
@@ -325,6 +379,10 @@ $("#setup-form").addEventListener("submit", async event => {
 });
 
 $("#refresh-onboarding-devices").addEventListener("click", refreshOnboardingDevices);
+$("#setup-camera-select").addEventListener("change", () => selectOnboardingDevice("camera").catch(error => { $("#device-onboarding-status").textContent = error.message; }));
+$("#setup-printer-select").addEventListener("change", () => selectOnboardingDevice("printer").catch(error => { $("#device-onboarding-status").textContent = error.message; }));
+$("#test-setup-camera").addEventListener("click", () => testOnboardingDevice("camera"));
+$("#test-setup-printer").addEventListener("click", () => testOnboardingDevice("printer"));
 document.querySelectorAll("[data-frame-choice]").forEach(button => button.addEventListener("click", () => {
   onboarding.frameFile = null;
   if (onboarding.framePreviewUrl) URL.revokeObjectURL(onboarding.framePreviewUrl);
