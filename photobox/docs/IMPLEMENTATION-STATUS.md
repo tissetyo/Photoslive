@@ -24,6 +24,7 @@ fitur production.
 - Batas RAM idle 150 MB, total kiosk 1,5 GB, boot 30–60 detik.
 - Soak test 72 jam dan recovery storage penuh/kamera sibuk/printer putus.
 - Cloud object storage produksi untuk foto, frame besar, hasil kolase, dan GIF.
+- Token akses per sesi untuk mengamankan antrean hardware publik dan upload file sesi.
 - Passkey remote dan penghapusan penuh compatibility PIN remote.
 - Snapshot kamera remote resolusi rendah dengan consent/expiry.
 
@@ -34,4 +35,3 @@ fitur production.
 - GIF renderer final (halaman sesi saat ini hanya menyediakan flipbook ringan).
 - Migrasi data lama otomatis.
 - Remote restart ketika Agent offline.
-
