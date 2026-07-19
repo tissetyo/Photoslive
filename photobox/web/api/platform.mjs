@@ -317,7 +317,7 @@ async function superadminLogin(redis, payload) {
 }
 
 async function superadminSession(redis, request) {
-  const auth = await readSession(redis, request);
+  const auth = await authenticate(redis, request);
   return json({ authenticated: auth?.role === "superadmin" });
 }
 
