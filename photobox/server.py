@@ -1835,6 +1835,8 @@ class ApiHandler(SimpleHTTPRequestHandler):
             return self.send_bytes(b"Sesi tidak ditemukan atau sudah kedaluwarsa", "text/plain; charset=utf-8", HTTPStatus.NOT_FOUND)
         if path in {"/booth", "/kiosk"}:
             self.path = "/booth.html"
+        elif path == "/setup":
+            self.path = "/setup.html"
         elif path == "/local-agent":
             self.path = "/local-agent.html"
         elif path == "/":

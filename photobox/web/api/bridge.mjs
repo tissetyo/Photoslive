@@ -1,4 +1,5 @@
 import {
+  authenticateWebSession,
   getRedis,
   boothKey,
   jobKey,
@@ -8,6 +9,7 @@ import {
   queueKey,
   randomId,
   sha256,
+  verifyScopedToken,
 } from "./_store.mjs";
 
 const json = (response, status = 200) => new Response(JSON.stringify(response), {
@@ -32,6 +34,29 @@ async function authenticateAgent(redis, request, machineId) {
   const machine = await redis.get(machineKey(machineId));
   if (!machine || machine.agentTokenHash !== await sha256(token)) return null;
   return machine;
+}
+
+export const boothControllerPathAllowed = value => {
+  const path = String(value || "").split("?")[0];
+  return path === "/api/devices"
+    || path === "/api/devices/camera/preview.jpg"
+    || path === "/api/booth/sessions"
+    || path === "/api/booth/qris"
+    || path === "/api/booth/print"
+    || /^\/api\/sessions\/[^/]+\/(capture|capture-upload|select|complete)$/.test(path);
+};
+
+async function authorizeOperator(redis, request, machineId, payload = null) {
+  const bearer = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
+  const scoped = bearer ? await verifyScopedToken(bearer) : null;
+  if (scoped?.scope === "booth.hardware" && scoped.machineId === machineId) {
+    if (payload?.type && payload.type !== "controller.request") return null;
+    if (payload?.type === "controller.request" && !boothControllerPathAllowed(payload.payload?.path)) return null;
+    return { kind: "booth", ...scoped };
+  }
+  const session = await authenticateWebSession(redis, request);
+  if (!session || (session.role !== "superadmin" && session.machineId !== machineId)) return null;
+  return { kind: "admin", ...session };
 }
 
 function publicMachine(machine) {
@@ -188,8 +213,9 @@ async function syncVoucherRedemptions(redis, request, payload) {
   return json({ updated });
 }
 
-async function enqueueJob(redis, payload) {
+async function enqueueJob(redis, request, payload) {
   const machineId = String(payload.machineId || "");
+  if (!await authorizeOperator(redis, request, machineId, payload)) return json({ error: "Akses hardware photobox tidak valid" }, 401);
   const machine = await redis.get(machineKey(machineId));
   if (!machine?.paired) return json({ error: "Mesin belum dipasangkan" }, 409);
   if (machine.accessEnabled === false) return json({ error: "Akses photobox dinonaktifkan oleh superadmin" }, 403);
@@ -264,8 +290,9 @@ async function updateJob(redis, request, payload) {
   return json({ job });
 }
 
-async function jobStatus(redis, payload) {
+async function jobStatus(redis, request, payload) {
   const machineId = String(payload.machineId || "");
+  if (!await authorizeOperator(redis, request, machineId)) return json({ error: "Akses hardware photobox tidak valid" }, 401);
   const job = await redis.get(jobKey(String(payload.jobId || "")));
   if (!job || job.machineId !== machineId) return json({ error: "Job tidak ditemukan" }, 404);
   return json({ job });
@@ -286,11 +313,15 @@ async function handler(request) {
     if (action === "settings_snapshot" && request.method === "POST") return settingsSnapshot(redis, request, payload);
     if (action === "voucher_snapshot" && request.method === "POST") return voucherSnapshot(redis, request, payload);
     if (action === "sync_voucher_redemptions" && request.method === "POST") return syncVoucherRedemptions(redis, request, payload);
-    if (action === "machine_status" && request.method === "GET") return json({ machine: publicMachine(await redis.get(machineKey(String(payload.machineId || "")))) });
-    if (action === "enqueue_job" && request.method === "POST") return enqueueJob(redis, payload);
+    if (action === "machine_status" && request.method === "GET") {
+      const machineId = String(payload.machineId || "");
+      if (!await authorizeOperator(redis, request, machineId)) return json({ error: "Login admin diperlukan" }, 401);
+      return json({ machine: publicMachine(await redis.get(machineKey(machineId))) });
+    }
+    if (action === "enqueue_job" && request.method === "POST") return enqueueJob(redis, request, payload);
     if (action === "claim_job" && request.method === "POST") return claimJob(redis, request, payload);
     if (action === "update_job" && request.method === "POST") return updateJob(redis, request, payload);
-    if (action === "job_status" && request.method === "GET") return jobStatus(redis, payload);
+    if (action === "job_status" && request.method === "GET") return jobStatus(redis, request, payload);
     return json({ error: "Endpoint tidak ditemukan" }, 404);
   } catch (error) {
     console.error(error);

@@ -31,6 +31,12 @@ disabled state. Kontrol tanpa backend harus disembunyikan oleh feature flag.
 | Pengguna | cloud users/roles | tetap bekerja tanpa Agent |
 | Audit | cloud audit | tetap bekerja tanpa Agent |
 
+Capability gate production wajib berasal dari respons `/api/settings` dan `/api/booth/config`. UI tidak boleh menganggap nama provider di dropdown sebagai bukti bahwa integrasi siap. Bila capability tidak tersedia, toggle dinonaktifkan, nilai efektif booth dipaksa `false`, dan server menolak aktivasi dengan HTTP 409.
+
+Local Manager hanya aktif pada `127.0.0.1`/`localhost`. Dari domain production, route tersebut hanya menampilkan petunjuk untuk membuka URL loopback pada komputer photobox dan tidak mengirim request kontrol apa pun.
+
+Build test memeriksa semua tombol ber-ID pada keenam surface utama agar tidak ada kontrol baru yang dirilis tanpa referensi handler. Link inert `href="#"` juga ditolak.
+
 Semua tombol submit harus memakai `disabled` dan `aria-busy` selama request,
 memulihkan label setelah selesai, serta menampilkan pesan backend konkret.
 
@@ -57,4 +63,3 @@ rollback tersedia.
 Daftar mesin, online/offline, access enable/disable, request pemulihan, dan
 telemetry terakhir wajib berasal dari cloud. Restart/update hanya aktif saat
 Agent online dan command backend tersedia. Semua mutasi masuk audit log.
-

@@ -413,6 +413,46 @@ function frameTemplateMarkup(frameUrl, options = {}) {
   return `<div class="photo-strip frame-layout-${frame.layout}" style="--frame-art:${frame.asset.style};--frame-ratio:${canvas.width} / ${canvas.height};--photo-width:${photoWidth}%"><div class="photo-strip-slots" data-slots="${frame.slots}">${cells}</div>${stickers}</div>`;
 }
 
+function applyCapabilityGates() {
+  const capabilities = state.settings?.capabilities || {};
+  const qris = capabilities.qris || { available: false, reason: "Provider QRIS production belum tersedia." };
+  const cloudStorage = capabilities.cloudStorage || { available: false, reason: "Object storage production belum tersedia." };
+  const gate = (selector, disabled) => {
+    const control = $(selector);
+    if (!control) return;
+    control.disabled = disabled;
+    if (disabled && control.type === "checkbox") control.checked = false;
+    control.closest("label")?.classList.toggle("is-unavailable", disabled);
+  };
+
+  if (!qris.available) {
+    state.settings.payment.qrisEnabled = false;
+    state.settings.payment.paidPrintEnabled = false;
+    gate('[data-setting="payment.qrisEnabled"]', true);
+    gate('[data-setting="payment.paidPrintEnabled"]', true);
+    gate('[data-setting="payment.provider"]', true);
+    const note = $("#qris-capability-note");
+    if (note) note.hidden = false;
+    setText("#qris-capability-detail", qris.reason);
+  }
+
+  if (!cloudStorage.available) {
+    state.settings.storage.cloudEnabled = false;
+    gate('[data-setting="storage.cloudEnabled"]', true);
+    gate('[data-setting="storage.provider"]', true);
+    const note = $("#cloud-storage-capability-note");
+    if (note) note.hidden = false;
+    setText("#cloud-storage-capability-detail", cloudStorage.reason);
+  }
+
+  const folderButton = $("#pick-storage-folder");
+  if (folderButton && isProductionHost()) {
+    folderButton.disabled = true;
+    folderButton.title = "Buka Local Manager pada komputer photobox untuk memilih folder.";
+    setText("#storage-folder-help", "Pemilihan folder hanya tersedia di Local Manager pada komputer photobox. Path yang sudah diketahui tetap dapat diketik manual.");
+  }
+}
+
 async function saveSettings() {
   if (!state.dirtySections.size) return toast("Tidak ada perubahan yang perlu disimpan");
   const sections = [...state.dirtySections];
@@ -981,6 +1021,10 @@ async function loadStorageData(force = false) {
 
 async function pickStorageFolder() {
   const button = $("#pick-storage-folder");
+  if (isProductionHost()) {
+    toast("Pilih folder dari Local Manager di komputer photobox (127.0.0.1:8080/local-agent).", "error");
+    return;
+  }
   button.disabled = true;
   toast("Dialog folder dibuka di komputer Agent…");
   try {
@@ -1301,6 +1345,8 @@ async function boot() {
   try {
     state.settings = await api("/api/settings");
     hydrateSettings();
+    applyCapabilityGates();
+    updatePreview();
     await loadVouchers();
     // Hardware status and local assets are optional background data. They may
     // be offline without blocking cloud settings, vouchers, or navigation.

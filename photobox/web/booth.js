@@ -87,7 +87,7 @@ async function boothCloudDataApi(path, options = {}) {
 
 async function boothBridge(action, payload = {}, method = "POST") {
   const query = method === "GET" ? `&${new URLSearchParams(payload)}` : "";
-  const response = await fetch(`/api/bridge?action=${encodeURIComponent(action)}${query}`, { method, headers: { "Content-Type": "application/json" }, body: method === "GET" ? undefined : JSON.stringify(payload) });
+  const response = await fetch(`/api/bridge?action=${encodeURIComponent(action)}${query}`, { method, headers: { "Content-Type": "application/json", ...(boothState.config?.bridgeToken ? { Authorization: `Bearer ${boothState.config.bridgeToken}` } : {}) }, body: method === "GET" ? undefined : JSON.stringify(payload) });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || `Cloud bridge gagal (${response.status})`);
   return result;
@@ -400,7 +400,7 @@ async function createSession() {
     boothState.session = session; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false;
     const boothCode = routeBoothCode || localStorage.getItem("photoslive.boothCode");
     if (boothCode && session.shareToken) {
-      fetch("/api/platform?action=register_session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ boothCode, machineId: localStorage.getItem("photoslive.machineId"), shareCode: session.shareToken, localSessionId: session.id, status: session.status, frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }) }).catch(() => {});
+      fetch("/api/platform?action=register_session", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${boothState.config?.bridgeToken || ""}` }, body: JSON.stringify({ boothCode, machineId: localStorage.getItem("photoslive.machineId"), shareCode: session.shareToken, localSessionId: session.id, status: session.status, frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }) }).catch(() => {});
       history.replaceState(null, "", `/${boothCode}/sesi/${session.shareToken}`);
     }
     setScreen("capture"); $(".capture-screen").classList.add("is-waiting"); $("#capture-ready-overlay").hidden = false;
@@ -497,7 +497,7 @@ async function syncSessionRecord(record) {
   const { boothCode, machineId, session, files } = record;
   const metadataResponse = await fetch("/api/platform?action=register_session", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${boothState.config?.bridgeToken || ""}` },
     body: JSON.stringify({ boothCode, machineId, shareCode: session.shareToken, localSessionId: session.id, status: "completed", frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }),
   });
   if (!metadataResponse.ok) throw new Error((await metadataResponse.json().catch(() => ({}))).error || "Metadata sesi gagal disimpan");
@@ -506,7 +506,7 @@ async function syncSessionRecord(record) {
     if (blob.size > 1_800_000) throw new Error(`Foto ${file.slotIndex} terlalu besar untuk upload cloud`);
     const response = await fetch("/api/platform?action=upload_session_file", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${boothState.config?.bridgeToken || ""}` },
       body: JSON.stringify({ boothCode, machineId, shareCode: session.shareToken, slotIndex: Number(file.slotIndex), contentType: blob.type || "image/jpeg", bodyBase64: await boothBlobToBase64(blob), status: "completed" }),
     });
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Upload foto ${file.slotIndex} gagal`);

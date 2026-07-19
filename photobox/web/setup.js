@@ -13,6 +13,53 @@ const onboarding = {
   frameEditor: null,
 };
 
+const SETUP_DRAFT_KEY = "photoslive.setupDraft.v2";
+
+function readSetupDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(SETUP_DRAFT_KEY) || "null");
+    return draft && typeof draft === "object" ? draft : null;
+  } catch {
+    localStorage.removeItem(SETUP_DRAFT_KEY);
+    return null;
+  }
+}
+
+function persistSetupDraft() {
+  // PIN and uploaded file contents are intentionally never persisted.
+  const draft = {
+    version: 2,
+    step: onboarding.step,
+    pairingCode: $("#pairing-code")?.value.trim() || "",
+    boothName: $("#booth-name")?.value.trim() || "",
+    boothLocation: $("#booth-location")?.value.trim() || "",
+    ownerEmail: $("#owner-email")?.value.trim() || "",
+    machine: onboarding.machine ? {
+      id: onboarding.machine.id,
+      name: onboarding.machine.name,
+      location: onboarding.machine.location,
+      platform: onboarding.machine.platform,
+      agentVersion: onboarding.machine.agentVersion,
+      online: onboarding.machine.online,
+      telemetry: onboarding.machine.telemetry || {},
+      devices: onboarding.machine.devices || [],
+    } : null,
+    booth: onboarding.booth ? {
+      boothCode: onboarding.booth.boothCode,
+      machineId: onboarding.booth.machineId,
+      name: onboarding.booth.name,
+      location: onboarding.booth.location,
+    } : null,
+    selectedFrame: onboarding.frameFile ? "clean-white" : onboarding.selectedFrame,
+    updatedAt: Date.now(),
+  };
+  localStorage.setItem(SETUP_DRAFT_KEY, JSON.stringify(draft));
+}
+
+function clearSetupDraft() {
+  localStorage.removeItem(SETUP_DRAFT_KEY);
+}
+
 const setupSteps = [
   ["Hubungkan mesin", "Masukkan kode Agent."],
   ["Identitas mesin", "Nama dan lokasi."],
@@ -46,6 +93,19 @@ async function bridgeApi(action, payload = {}, method = "POST") {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || `Agent tidak merespons (${response.status})`);
+  return result;
+}
+
+async function setupCloudData(path, method = "GET", data = {}) {
+  const boothCode = onboarding.booth?.boothCode || localStorage.getItem("photoslive.boothCode") || "";
+  if (!boothCode) throw new Error("Photobox belum selesai dibuat");
+  const response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(boothCode)}&path=${encodeURIComponent(path)}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: method === "GET" ? undefined : JSON.stringify({ data }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Cloud gagal menyimpan (${response.status})`);
   return result;
 }
 
@@ -102,6 +162,7 @@ function setSetupStep(step) {
   syncUrl("setup");
   status("");
   if (onboarding.step === 6) renderReadyChecklist();
+  persistSetupDraft();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -386,7 +447,7 @@ function renderSetupFrameEditor() {
 
 function openSetupFrameEditor(file) {
   if (!file) return;
-  if (file.size > 10 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran frame maksimal 10 MB."; return; }
+  if (file.size > 2 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran frame maksimal 2 MB untuk sinkronisasi cloud."; return; }
   const previewUrl = URL.createObjectURL(file);
   onboarding.frameEditor = { file, previewUrl, backgroundCss: `center / cover no-repeat url('${previewUrl}')`, slots: 3, zoom: 100, x: 50, y: 50, slotTransforms: setupDefaultSlotTransforms(3), stickers: [], selected: { type: "slot", index: 0 } };
   $("#setup-frame-slots").value = "3";
@@ -414,6 +475,7 @@ function selectStarterFrame(value) {
   $("#upload-starter-frame > span").innerHTML = '<img src="/icons/image-plus.svg" alt="">';
   $("#upload-starter-frame small").textContent = "PNG, JPG, atau WebP";
   document.querySelectorAll("[data-frame-choice]").forEach(button => button.classList.toggle("active", button.dataset.frameChoice === value));
+  persistSetupDraft();
 }
 
 async function saveStarterFrame() {
@@ -424,27 +486,29 @@ async function saveStarterFrame() {
   let activeFrame = onboarding.selectedFrame;
   try {
     if (onboarding.frameFile) {
-      if (!onboarding.machine?.id) throw new Error("Mesin belum terhubung");
-      const uploaded = await controllerRequest("/api/assets/frame", "PUT", null, {
+      if (onboarding.frameFile.size > 2 * 1024 * 1024) throw new Error("Ukuran frame maksimal 2 MB untuk sinkronisasi cloud");
+      const uploaded = await setupCloudData("/api/assets/frame", "PUT", {
         bodyBase64: await fileToBase64(onboarding.frameFile),
-        headers: { "content-type": onboarding.frameFile.type, "x-filename": onboarding.frameFile.name },
+        contentType: onboarding.frameFile.type,
+        filename: onboarding.frameFile.name,
       });
-      activeFrame = uploaded.asset?.url || uploaded.body?.asset?.url;
-      if (!activeFrame) throw new Error("Agent tidak mengembalikan file frame");
+      activeFrame = uploaded.asset?.url;
+      if (!activeFrame) throw new Error("Cloud tidak mengembalikan file frame");
       onboarding.selectedFrame = activeFrame;
     }
     const design = onboarding.frameDesign || { slots: 3, zoom: 100, x: 50, y: 50, slotTransforms: setupDefaultSlotTransforms(3), stickers: [] };
-    await controllerRequest("/api/settings", "PATCH", {
-      appearance: {
+    const current = await setupCloudData("/api/settings", "GET");
+    await Promise.all([
+      setupCloudData("/api/settings/appearance", "PATCH", {
         activeFrame,
-        framePhotoSlots: { [activeFrame]: design.slots },
-        frameBackgroundTransforms: { [activeFrame]: { zoom: design.zoom, x: design.x, y: design.y } },
-        frameSlotTransforms: { [activeFrame]: design.slotTransforms },
-        frameStickers: { [activeFrame]: design.stickers.map(({ previewUrl, ...item }) => item) },
-      },
-      booth: { name: $("#booth-name").value.trim(), photoSlotsPerSession: design.slots },
-    });
-    message.textContent = "Frame pertama siap digunakan.";
+        framePhotoSlots: { ...(current.appearance?.framePhotoSlots || {}), [activeFrame]: design.slots },
+        frameBackgroundTransforms: { ...(current.appearance?.frameBackgroundTransforms || {}), [activeFrame]: { zoom: design.zoom, x: design.x, y: design.y } },
+        frameSlotTransforms: { ...(current.appearance?.frameSlotTransforms || {}), [activeFrame]: design.slotTransforms },
+        frameStickers: { ...(current.appearance?.frameStickers || {}), [activeFrame]: design.stickers.map(({ previewUrl, ...item }) => item) },
+      }),
+      setupCloudData("/api/settings/booth", "PATCH", { name: $("#booth-name").value.trim(), photoSlotsPerSession: design.slots }),
+    ]);
+    message.textContent = onboarding.machine?.online ? "Frame siap dan akan disinkronkan ke Agent." : "Frame tersimpan di cloud dan akan disinkronkan saat Agent online.";
     setSetupStep(6);
     renderReadyChecklist();
   } catch (error) {
@@ -576,8 +640,8 @@ $("#setup-form").addEventListener("submit", async event => {
 });
 
 $("#refresh-onboarding-devices").addEventListener("click", () => refreshOnboardingDevices(true));
-$("#setup-camera-select").addEventListener("change", () => selectOnboardingDevice("camera").catch(error => { $("#device-onboarding-status").textContent = error.message; }));
-$("#setup-printer-select").addEventListener("change", () => selectOnboardingDevice("printer").catch(error => { $("#device-onboarding-status").textContent = error.message; }));
+$("#setup-camera-select").addEventListener("change", () => { $("#device-onboarding-status").textContent = "Kamera dipilih. Tekan Tes kamera jika ingin memeriksa preview."; persistSetupDraft(); });
+$("#setup-printer-select").addEventListener("change", () => { $("#device-onboarding-status").textContent = "Printer dipilih. Tekan Tes printer jika ingin mencetak halaman tes."; persistSetupDraft(); });
 $("#test-setup-camera").addEventListener("click", () => testOnboardingDevice("camera"));
 $("#test-setup-printer").addEventListener("click", () => testOnboardingDevice("printer"));
 $("#pick-setup-storage-folder").addEventListener("click", async () => {
@@ -595,14 +659,24 @@ $("#pick-setup-storage-folder").addEventListener("click", async () => {
 $("#save-device-onboarding").addEventListener("click", async () => {
   const button = $("#save-device-onboarding");
   button.disabled = true;
-  $("#device-onboarding-status").textContent = "Menyimpan perangkat dan folder…";
+  $("#device-onboarding-status").textContent = "Menyimpan pilihan…";
   try {
     const localPhotoPath = $("#setup-storage-path").value.trim();
+    const cameraValue = $("#setup-camera-select").value;
+    const printerValue = $("#setup-printer-select").value;
+    const devices = {
+      preferredCamera: cameraValue && !cameraValue.startsWith("browser:") ? cameraValue : "auto",
+      preferredPrinter: printerValue || "auto",
+      cameraSource: cameraValue?.startsWith("browser:") ? "browser" : cameraValue ? "controller" : "auto",
+      browserCameraId: cameraValue?.startsWith("browser:") ? cameraValue.slice(8) : "",
+    };
     await Promise.all([
-      $("#setup-camera-select").value ? selectOnboardingDevice("camera") : Promise.resolve(),
-      $("#setup-printer-select").value ? selectOnboardingDevice("printer") : Promise.resolve(),
-      controllerRequest("/api/settings", "PATCH", { storage: { localPhotoPath } }),
+      setupCloudData("/api/settings/devices", "PATCH", devices),
+      setupCloudData("/api/settings/storage", "PATCH", { localPhotoPath }),
     ]);
+    $("#device-onboarding-status").textContent = onboarding.machine?.online
+      ? "Tersimpan. Agent akan menerapkan pilihan di background."
+      : "Tersimpan di cloud. Agent akan menerapkannya saat online.";
     setSetupStep(5);
   } catch (error) {
     $("#device-onboarding-status").textContent = error.message;
@@ -648,11 +722,11 @@ $("#setup-add-frame-sticker").addEventListener("click", () => { $("#setup-frame-
 $("#setup-frame-sticker-file").addEventListener("change", async event => {
   const file = event.target.files[0];
   if (!file || !onboarding.frameEditor) return;
-  if (file.size > 10 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran logo atau stiker maksimal 10 MB."; return; }
+  if (file.size > 2 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran logo atau stiker maksimal 2 MB untuk sinkronisasi cloud."; return; }
   try {
-    const uploaded = await controllerRequest("/api/assets/sticker", "PUT", null, { bodyBase64: await fileToBase64(file), headers: { "content-type": file.type, "x-filename": file.name } });
-    const url = uploaded.asset?.url || uploaded.body?.asset?.url;
-    if (!url) throw new Error("Agent tidak mengembalikan file stiker");
+    const uploaded = await setupCloudData("/api/assets/sticker", "PUT", { bodyBase64: await fileToBase64(file), contentType: file.type, filename: file.name });
+    const url = uploaded.asset?.url;
+    if (!url) throw new Error("Cloud tidak mengembalikan file stiker");
     const top = Math.max(0, ...setupFrameLayers().map(layer => layer.z));
     onboarding.frameEditor.stickers.push({ url, previewUrl: URL.createObjectURL(file), x: 50, y: 88, size: 28, rotation: 0, opacity: 100, z: top + 1 });
     onboarding.frameEditor.selected = { type: "sticker", index: onboarding.frameEditor.stickers.length - 1 };
@@ -738,6 +812,7 @@ $("#setup-frame-editor-dialog").addEventListener("close", () => {
 $("#save-onboarding-frame").addEventListener("click", saveStarterFrame);
 $("#finish-onboarding").addEventListener("click", () => {
   const code = onboarding.booth?.boothCode || localStorage.getItem("photoslive.boothCode");
+  clearSetupDraft();
   location.href = `/${code}/admin`;
 });
 
@@ -778,10 +853,46 @@ $("#forgot-form").addEventListener("submit", async event => {
   } catch (error) { status(error.message); }
 });
 
+function restoreSetupDraft() {
+  const draft = readSetupDraft();
+  if (!draft || draft.version !== 2 || Date.now() - Number(draft.updatedAt || 0) > 7 * 86_400_000) {
+    clearSetupDraft();
+    setSetupStep(1);
+    return false;
+  }
+  $("#pairing-code").value = draft.pairingCode || "";
+  $("#booth-name").value = draft.boothName || "";
+  $("#booth-location").value = draft.boothLocation || "";
+  $("#owner-email").value = draft.ownerEmail || "";
+  onboarding.machine = draft.machine || null;
+  onboarding.booth = draft.booth || null;
+  onboarding.selectedFrame = ["clean-white", "party-night"].includes(draft.selectedFrame) ? draft.selectedFrame : "clean-white";
+  document.querySelectorAll("[data-frame-choice]").forEach(button => button.classList.toggle("active", button.dataset.frameChoice === onboarding.selectedFrame));
+  let step = Math.max(1, Math.min(6, Number(draft.step || 1)));
+  if (step >= 4 && (!onboarding.machine?.id || !onboarding.booth?.boothCode)) step = 1;
+  setSetupStep(step);
+  if (step === 3) status("Setup dilanjutkan. Masukkan kembali PIN untuk keamanan.", true);
+  else if (step > 1) status("Setup dilanjutkan dari langkah terakhir.", true);
+  if (step === 4) refreshOnboardingDevices().catch(() => {});
+  return step > 1;
+}
+
+document.querySelectorAll("#setup-form input").forEach(input => {
+  if (["owner-pin", "owner-pin-confirm", "starter-frame-file", "setup-frame-sticker-file"].includes(input.id)) return;
+  input.addEventListener("input", persistSetupDraft);
+});
+
 const params = new URLSearchParams(location.search);
 const rememberedBooth = localStorage.getItem("photoslive.boothCode") || "";
 if (params.get("booth") || rememberedBooth) $("#login-booth").value = params.get("booth") || rememberedBooth;
 loginMethod("pin");
-const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;
-setSetupStep(previewStep >= 1 && previewStep <= 6 ? previewStep : 1);
-mode(params.get("mode") || "setup");
+const requestedMode = params.get("mode") || "setup";
+if (requestedMode === "setup") {
+  const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;
+  if (previewStep >= 1 && previewStep <= 6) setSetupStep(previewStep);
+  else restoreSetupDraft();
+  mode("setup");
+} else {
+  onboarding.step = 1;
+  mode(requestedMode);
+}

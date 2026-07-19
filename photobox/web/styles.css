@@ -713,6 +713,13 @@ dialog .dialog-switch { min-height: 66px; padding: var(--space-2) 0; }
 }
 
 /* Final readability layer shared by every admin route. */
+.capability-note { display: grid; grid-template-columns: 36px 1fr; gap: var(--space-3); align-items: center; margin: 0 0 var(--space-3); padding: var(--space-3); border: 1px solid #f3c879; border-radius: 8px; background: #fff8e8; color: #5f4514; }
+.capability-note[hidden] { display: none; }
+.capability-note > img { width: 20px; height: 20px; margin: auto; }
+.capability-note span { display: grid; gap: 2px; }
+.capability-note small { color: #745c2c; font-size: 12px; }
+label.is-unavailable { opacity: .58; }
+label.is-unavailable select, label.is-unavailable input { cursor: not-allowed; }
 .nav-item b { font-size: 14px; }
 .brand small,
 .environment small,

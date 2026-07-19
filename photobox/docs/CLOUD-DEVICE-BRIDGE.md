@@ -148,7 +148,7 @@ yang sudah dicache.
 
 ## Checklist sebelum production
 
-- [ ] UI Photoslive yang sebenarnya menggantikan halaman placeholder Vercel.
+- [x] UI Photoslive menggantikan halaman placeholder Vercel.
 - [ ] Database/queue persisten dipilih dan migration dibuat.
 - [ ] Pairing, revoke, rotate credential, dan scope per mesin selesai.
 - [ ] Agent berjalan sebagai service pada Windows, macOS, dan Linux.

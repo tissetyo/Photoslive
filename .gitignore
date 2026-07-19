@@ -43,6 +43,7 @@ next-env.d.ts
 
 # local photobox runtime data
 /photobox/data/photoslive.db*
+/photobox/data/.installation-token
 /photobox/data/photos/
 /photobox/data/jobs/
 /photobox/data/photoslive-photo-strip-test.*

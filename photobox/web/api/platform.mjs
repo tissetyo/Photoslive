@@ -1,4 +1,4 @@
-import { boothKey, getRedis, machineKey, now, randomId, sessionKey, userKey } from "./_store.mjs";
+import { boothKey, getRedis, machineKey, now, randomId, sessionKey, signScopedToken, userKey, verifyScopedToken } from "./_store.mjs";
 
 const encoder = new TextEncoder();
 const json = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), {
@@ -71,6 +71,32 @@ const publicSessionKey = (boothCode, shareCode) => `photoslive:public-session:${
 const publicSessionFileKey = (boothCode, shareCode, slotIndex) => `photoslive:public-session-file:${boothCode}:${shareCode}:${slotIndex}`;
 const auditKey = boothCode => `photoslive:booth:${boothCode}:audit`;
 const ASSET_KINDS = ["background", "frame", "logo", "sticker"];
+
+export function deploymentCapabilities() {
+  return {
+    qris: {
+      available: false,
+      providers: [],
+      reason: "Provider QRIS dan webhook pembayaran production belum dikonfigurasi.",
+    },
+    cloudStorage: {
+      available: false,
+      providers: [],
+      reason: "Object storage R2/S3 untuk foto sesi belum dikonfigurasi.",
+    },
+    sessionDownloads: { available: true, maxFileBytes: 1_800_000, retentionHours: 24 },
+    cloudAssets: { available: true, maxFileBytes: 2_000_000 },
+  };
+}
+
+async function scopedBoothAccess(request, payload, scope) {
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
+  const access = await verifyScopedToken(token);
+  if (!access || access.scope !== scope) return null;
+  if (payload.machineId && access.machineId !== payload.machineId) return null;
+  if (payload.boothCode && access.boothCode !== normalizeCode(payload.boothCode)) return null;
+  return access;
+}
 
 const DEFAULT_CLOUD_SETTINGS = {
   booth: { name: "Photoslive Booth", location: "", dailySessionLimit: 120, sessionTimeoutSeconds: 150, countdownSeconds: 15, retakeLimit: 1, unlimitedRetakes: true, photoSlotsPerSession: 3, printsPerSession: 1, localRetentionHours: 24, cloudRetentionDays: 7, maintenanceMode: false },
@@ -440,7 +466,8 @@ async function resolveResetRequest(redis, request, payload) {
   return json({ request: reset });
 }
 
-async function registerPhotoSession(redis, payload) {
+async function registerPhotoSession(redis, request, payload) {
+  if (!await scopedBoothAccess(request, payload, "booth.hardware")) return json({ error: "Token sesi photobox tidak valid atau sudah kedaluwarsa" }, 401);
   const booth = await resolveBooth(redis, payload.boothCode);
   if (!booth || booth.machineId !== payload.machineId || !booth.enabled) return json({ error: "Photobox tidak valid" }, 403);
   const shareCode = String(payload.shareCode || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
@@ -451,7 +478,8 @@ async function registerPhotoSession(redis, payload) {
   return json({ session: record, url: `/${booth.boothCode}/sesi/${shareCode}` }, 201);
 }
 
-async function uploadPhotoSessionFile(redis, payload) {
+async function uploadPhotoSessionFile(redis, request, payload) {
+  if (!await scopedBoothAccess(request, payload, "booth.hardware")) return json({ error: "Token sesi photobox tidak valid atau sudah kedaluwarsa" }, 401);
   const boothCode = normalizeCode(payload.boothCode);
   const shareCode = String(payload.shareCode || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
   const slotIndex = Math.max(1, Math.min(8, Number(payload.slotIndex || 1)));
@@ -498,12 +526,16 @@ async function cloudData(redis, request, payload) {
 
   if (request.method === "GET" && path === "/api/booth/config") {
     const [settings, assets] = await Promise.all([cloudSettings(redis, booth), cloudAssets(redis, booth.boothCode)]);
+    const capabilities = deploymentCapabilities();
     return json({
       booth: settings.booth,
       appearance: settings.appearance,
-      payment: settings.payment,
+      payment: { ...settings.payment, qrisEnabled: capabilities.qris.available && settings.payment.qrisEnabled, paidPrintEnabled: capabilities.qris.available && settings.payment.paidPrintEnabled },
       devices: settings.devices,
+      storage: { ...settings.storage, cloudEnabled: capabilities.cloudStorage.available && settings.storage.cloudEnabled },
       assets,
+      capabilities,
+      bridgeToken: await signScopedToken({ scope: "booth.hardware", boothCode: booth.boothCode, machineId: booth.machineId, exp: Date.now() + 30 * 60_000 }),
     });
   }
 
@@ -539,13 +571,16 @@ async function cloudData(redis, request, payload) {
   if (!access) return json({ error: "Login admin photobox diperlukan" }, 401);
   if (request.method !== "GET" && access.auth.role === "operator" && (path.startsWith("/api/settings/payment") || path.startsWith("/api/vouchers") || path.startsWith("/api/voucher-events"))) return json({ error: "Peran Operator tidak dapat mengubah pembayaran atau voucher" }, 403);
 
-  if (request.method === "GET" && path === "/api/settings") return json(await cloudSettings(redis, booth));
+  if (request.method === "GET" && path === "/api/settings") return json({ ...await cloudSettings(redis, booth), capabilities: deploymentCapabilities() });
   if (request.method === "PATCH" && (path === "/api/settings" || path.startsWith("/api/settings/"))) {
     const section = path === "/api/settings" ? "" : path.slice("/api/settings/".length);
     const current = await cloudSettings(redis, booth);
     if (section && !(section in DEFAULT_CLOUD_SETTINGS)) return json({ error: "Bagian pengaturan tidak dikenal" }, 404);
     const incoming = payload.data;
     const next = section ? { ...current, [section]: mergeObjects(current[section], incoming) } : mergeObjects(current, incoming);
+    const capabilities = deploymentCapabilities();
+    if ((section === "payment" || (!section && incoming?.payment)) && (next.payment.qrisEnabled || next.payment.paidPrintEnabled) && !capabilities.qris.available) return json({ error: capabilities.qris.reason, capability: "qris" }, 409);
+    if ((section === "storage" || (!section && incoming?.storage)) && next.storage.cloudEnabled && !capabilities.cloudStorage.available) return json({ error: capabilities.cloudStorage.reason, capability: "cloudStorage" }, 409);
     if (JSON.stringify(next).length > 500_000) return json({ error: "Pengaturan terlalu besar" }, 413);
     next.booth.name = String(next.booth.name || booth.name).slice(0, 80);
     next.booth.location = String(next.booth.location || "").slice(0, 120);
@@ -688,8 +723,8 @@ async function handler(request) {
     if (action === "superadmin_overview" && request.method === "GET") return superadminOverview(redis, request);
     if (action === "toggle_machine" && request.method === "POST") return toggleMachine(redis, request, payload);
     if (action === "resolve_reset" && request.method === "POST") return resolveResetRequest(redis, request, payload);
-    if (action === "register_session" && request.method === "POST") return registerPhotoSession(redis, payload);
-    if (action === "upload_session_file" && request.method === "POST") return uploadPhotoSessionFile(redis, payload);
+    if (action === "register_session" && request.method === "POST") return registerPhotoSession(redis, request, payload);
+    if (action === "upload_session_file" && request.method === "POST") return uploadPhotoSessionFile(redis, request, payload);
     if (action === "public_session" && request.method === "GET") return publicPhotoSession(redis, payload);
     if (action === "public_session_file" && request.method === "GET") return publicPhotoSessionFile(redis, payload);
     if (action === "cloud_data") return cloudData(redis, request, payload);

@@ -1,5 +1,6 @@
 const $ = selector => document.querySelector(selector);
 const state = { token: "", status: null };
+const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
 
 const formatBytes = value => {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -90,6 +91,12 @@ $("#create-setup-code").addEventListener("click", async () => { const button = $
 $("#pick-folder").addEventListener("click", async () => { const button = $("#pick-folder"); button.disabled = true; try { const selected = await api("/api/local/storage/pick-folder", { method: "POST", body: "{}" }); await api("/api/settings/storage", { method: "PATCH", body: JSON.stringify({ localPhotoPath: selected.path }) }); toast("Folder foto diperbarui"); await refreshDevices(); } catch (error) { toast(error.message, "error"); } finally { button.disabled = false; } });
 
 async function init() {
+  if (!isLoopback) {
+    document.querySelectorAll("button").forEach(button => { button.disabled = true; });
+    const main = document.querySelector("main");
+    main.innerHTML = `<section class="remote-manager-message"><span><img src="/icons/monitor.svg" alt="" /></span><p class="eyebrow">LOCAL MANAGER</p><h1>Buka di komputer photobox</h1><p>Kontrol Agent, kamera, printer, dan pemilihan folder hanya tersedia pada mesin yang menjalankan Photoslive.</p><code>http://127.0.0.1:8080/local-agent</code><a class="button primary" href="/setup?mode=login">Kembali ke admin cloud</a></section>`;
+    return;
+  }
   try {
     state.token = (await api("/api/local/installation")).token;
     await Promise.all([refreshStatus(), refreshDevices(), refreshLogs()]);
