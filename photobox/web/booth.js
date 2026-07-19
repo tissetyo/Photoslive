@@ -3,6 +3,8 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const routeParts = location.pathname.split("/").filter(Boolean);
 const routeBoothCode = new URLSearchParams(location.search).get("booth") || (routeParts[0] && !["booth","setup","superadmin"].includes(routeParts[0]) ? routeParts[0] : "");
+const boothConfigCacheKey = () => `photoslive.boothConfig.${routeBoothCode || "local"}`;
+const pendingSyncKey = () => `photoslive.pendingSessionSync.${routeBoothCode || "local"}`;
 
 const boothState = {
   config: null,
@@ -64,11 +66,20 @@ async function boothCloudDataApi(path, options = {}) {
   if (typeof options.body === "string" && options.body) data = JSON.parse(options.body);
   const method = String(options.method || "GET").toUpperCase();
   const clientId = Object.entries(options.headers || {}).find(([name]) => name.toLowerCase() === "x-client-id")?.[1] || "";
-  const response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(routeBoothCode)}&path=${encodeURIComponent(path)}`, {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(options.timeoutMs || 8000));
+  let response;
+  try {
+    response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(routeBoothCode)}&path=${encodeURIComponent(path)}`, {
     method,
     headers: { "Content-Type": "application/json" },
     body: method === "GET" ? undefined : JSON.stringify({ data, clientId }),
-  });
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("Cloud terlalu lama merespons. Coba lagi atau gunakan voucher offline pada mesin lokal.");
+    throw error;
+  } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Cloud database gagal (${response.status})`);
   return payload;
@@ -83,15 +94,19 @@ async function boothBridge(action, payload = {}, method = "POST") {
 }
 
 async function boothCloudControllerApi(path, options = {}) {
-  let machineId = localStorage.getItem("photoslive.machineId");
+  const routeMachineKey = `photoslive.machine.${routeBoothCode || "local"}`;
+  let cachedMachine;
+  try { cachedMachine = JSON.parse(localStorage.getItem(routeMachineKey) || "null"); } catch { cachedMachine = null; }
+  let machineId = cachedMachine?.savedAt > Date.now() - 60_000 ? cachedMachine.id : null;
   // The route is authoritative. This prevents a tablet that previously opened
   // another booth from reusing that machine id for the current customer flow.
-  if (routeBoothCode) {
+  if (routeBoothCode && !machineId) {
     const response = await fetch(`/api/platform?action=resolve_booth&booth=${encodeURIComponent(routeBoothCode)}`);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Photobox tidak ditemukan");
     if (!result.booth.enabled) throw new Error("Akses photobox sedang dinonaktifkan");
     machineId = result.booth.machineId;
+    localStorage.setItem(routeMachineKey, JSON.stringify({ id: machineId, savedAt: Date.now() }));
     localStorage.setItem("photoslive.machineId", machineId);
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
   }
@@ -248,11 +263,36 @@ async function refreshCameraPreview() {
     $("#camera-live-pill").classList.remove("is-offline"); $("#camera-live-label").textContent = "KAMERA AKTIF";
     if (boothState.previewUrl) URL.revokeObjectURL(boothState.previewUrl);
     boothState.previewUrl = url;
+    return true;
   } catch (error) {
     $("#frame-camera-fallback").hidden = false; $("#capture-camera-fallback").hidden = false;
     $("#frame-camera-status").textContent = error.message; $("#capture-camera-status").textContent = error.message;
     $("#camera-live-pill").classList.add("is-offline"); $("#camera-live-label").textContent = "KAMERA BELUM TERHUBUNG";
+    return false;
   }
+}
+
+async function pollControllerPreview() {
+  if (boothState.cameraMode !== "controller") return;
+  if (location.hostname === "127.0.0.1" || location.hostname === "localhost") {
+    try {
+      const inventory = await boothApi("/api/devices");
+      const connected = (inventory.devices || []).some(device => device.kind === "camera" && device.status === "connected");
+      if (!connected) {
+        $("#frame-camera-fallback").hidden = false; $("#capture-camera-fallback").hidden = false;
+        $("#frame-camera-status").textContent = "Kamera belum terhubung"; $("#capture-camera-status").textContent = "Kamera belum terhubung";
+        $("#camera-live-pill").classList.add("is-offline"); $("#camera-live-label").textContent = "KAMERA BELUM TERHUBUNG";
+        clearTimeout(boothState.previewTimer);
+        boothState.previewTimer = setTimeout(pollControllerPreview, 15000);
+        return;
+      }
+    } catch { /* Preview request below provides the actionable error state. */ }
+  }
+  const ready = await refreshCameraPreview();
+  clearTimeout(boothState.previewTimer);
+  // A healthy preview remains fluid. Missing/busy hardware is retried slowly
+  // so a 4 GB kiosk does not flood logs and HTTP requests with 503 responses.
+  boothState.previewTimer = setTimeout(pollControllerPreview, ready ? 1600 : 15000);
 }
 
 async function reportClientCapabilities(cameraLabels = []) {
@@ -298,14 +338,13 @@ async function startCameraPreview() {
   } catch (browserError) {
     boothState.cameraMode = "controller";
     $("#frame-camera-status").textContent = `${browserError.message}. Mencoba kamera controller…`;
-    await refreshCameraPreview();
-    boothState.previewTimer = setInterval(refreshCameraPreview, 1600);
+    await pollControllerPreview();
     reportClientCapabilities();
   }
 }
 
 function stopCameraPreview() {
-  clearInterval(boothState.previewTimer); boothState.previewTimer = null;
+  clearTimeout(boothState.previewTimer); boothState.previewTimer = null;
   if (boothState.cameraStream) boothState.cameraStream.getTracks().forEach(track => track.stop());
   boothState.cameraStream = null; boothState.cameraMode = null;
   [$("#frame-camera-video"), $("#capture-camera-video")].forEach(video => { video.srcObject = null; video.classList.remove("has-image"); });
@@ -362,7 +401,7 @@ async function createSession() {
     const boothCode = routeBoothCode || localStorage.getItem("photoslive.boothCode");
     if (boothCode && session.shareToken) {
       fetch("/api/platform?action=register_session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ boothCode, machineId: localStorage.getItem("photoslive.machineId"), shareCode: session.shareToken, localSessionId: session.id, status: session.status, frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }) }).catch(() => {});
-      history.replaceState(null, "", `/${boothCode}/${session.shareToken}`);
+      history.replaceState(null, "", `/${boothCode}/sesi/${session.shareToken}`);
     }
     setScreen("capture"); $(".capture-screen").classList.add("is-waiting"); $("#capture-ready-overlay").hidden = false;
     $("#camera-start").firstChild.textContent = "Ketuk untuk mulai ";
@@ -419,9 +458,70 @@ async function acceptCurrentPhoto() {
       $("#capture-instruction b").textContent = `Bersiap untuk foto ${boothState.currentSlot}`; $("#capture-instruction small").textContent = "Hitung mundur berikutnya akan dimulai.";
       await wait(450); runShotCountdown();
     } else {
-      await boothApi(`/api/sessions/${boothState.session.id}/complete`, { method: "POST", body: "{}" }); showResult();
+      await boothApi(`/api/sessions/${boothState.session.id}/complete`, { method: "POST", body: "{}" });
+      showResult();
+      syncCompletedSession().catch(error => notice(`Foto aman di mesin, tetapi upload cloud tertunda: ${error.message}`, "error"));
     }
   } catch (error) { notice(error.message, "error"); }
+}
+
+async function sessionPhotoBlob(file) {
+  if (location.hostname === "127.0.0.1" || location.hostname === "localhost") {
+    const response = await fetch(file.url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Foto ${file.slotIndex || ""} tidak dapat dibaca`);
+    return response.blob();
+  }
+  const result = await boothCloudControllerApi(file.url, { timeoutMs: 12_000 });
+  if (!result?.bodyBase64) throw new Error("Agent tidak mengirim file foto");
+  const bytes = Uint8Array.from(atob(result.bodyBase64), character => character.charCodeAt(0));
+  return new Blob([bytes], { type: result.contentType || "image/jpeg" });
+}
+
+async function syncCompletedSession() {
+  const boothCode = routeBoothCode || localStorage.getItem("photoslive.boothCode");
+  if (!boothCode || !boothState.session?.shareToken) return;
+  const record = {
+    boothCode,
+    machineId: localStorage.getItem("photoslive.machineId"),
+    session: boothState.session,
+    files: Object.entries(boothState.photos).map(([slotIndex, file]) => ({ ...file, slotIndex: Number(slotIndex) })),
+  };
+  const pending = JSON.parse(localStorage.getItem(pendingSyncKey()) || "[]").filter(item => item.session?.shareToken !== record.session.shareToken);
+  pending.push(record);
+  localStorage.setItem(pendingSyncKey(), JSON.stringify(pending.slice(-20)));
+  await syncSessionRecord(record);
+  localStorage.setItem(pendingSyncKey(), JSON.stringify(pending.filter(item => item.session?.shareToken !== record.session.shareToken)));
+}
+
+async function syncSessionRecord(record) {
+  const { boothCode, machineId, session, files } = record;
+  const metadataResponse = await fetch("/api/platform?action=register_session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ boothCode, machineId, shareCode: session.shareToken, localSessionId: session.id, status: "completed", frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }),
+  });
+  if (!metadataResponse.ok) throw new Error((await metadataResponse.json().catch(() => ({}))).error || "Metadata sesi gagal disimpan");
+  for (const file of files.sort((a, b) => a.slotIndex - b.slotIndex)) {
+    const blob = await sessionPhotoBlob(file);
+    if (blob.size > 1_800_000) throw new Error(`Foto ${file.slotIndex} terlalu besar untuk upload cloud`);
+    const response = await fetch("/api/platform?action=upload_session_file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ boothCode, machineId, shareCode: session.shareToken, slotIndex: Number(file.slotIndex), contentType: blob.type || "image/jpeg", bodyBase64: await boothBlobToBase64(blob), status: "completed" }),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Upload foto ${file.slotIndex} gagal`);
+  }
+}
+
+async function flushPendingSessionSync() {
+  const pending = JSON.parse(localStorage.getItem(pendingSyncKey()) || "[]");
+  if (!pending.length) return;
+  const remaining = [];
+  for (const record of pending) {
+    try { await syncSessionRecord(record); }
+    catch { remaining.push(record); }
+  }
+  localStorage.setItem(pendingSyncKey(), JSON.stringify(remaining.slice(-20)));
 }
 
 function showResult() {
@@ -463,7 +563,7 @@ async function openAccessGate() {
     $("#welcome-button-label").textContent = "Menyiapkan sesi…";
     try {
       boothState.config = await boothApi("/api/booth/config");
-      localStorage.setItem("photoslive.boothConfig", JSON.stringify(boothState.config));
+      localStorage.setItem(boothConfigCacheKey(), JSON.stringify({ value: boothState.config, savedAt: Date.now() }));
       applyConfiguration();
     } catch (error) {
       notice(`Belum dapat memulai: ${error.message}`, "error");
@@ -563,22 +663,32 @@ async function initBooth() {
     $("#booth-admin-entry").href = `/setup?mode=login&booth=${encodeURIComponent(routeBoothCode)}`;
   }
   bindEvents();
+  let startedFromCache = false;
   try {
-    boothState.config = await boothApi("/api/booth/config");
-    localStorage.setItem("photoslive.boothConfig", JSON.stringify(boothState.config));
-    applyConfiguration(); resetBooth(); reportClientCapabilities();
+    const cachedRecord = JSON.parse(localStorage.getItem(boothConfigCacheKey()) || "null");
+    const cached = cachedRecord?.value || cachedRecord;
+    if (cached?.appearance && cached?.booth && cached?.payment) {
+      boothState.config = cached;
+      applyConfiguration();
+      resetBooth();
+      startedFromCache = true;
+    }
+  } catch { localStorage.removeItem(boothConfigCacheKey()); }
+  try {
+    const freshConfig = await boothApi("/api/booth/config", { timeoutMs: startedFromCache ? 5000 : 8000 });
+    boothState.config = freshConfig;
+    localStorage.setItem(boothConfigCacheKey(), JSON.stringify({ value: freshConfig, savedAt: Date.now() }));
+    applyConfiguration();
+    if (!startedFromCache) resetBooth();
+    reportClientCapabilities();
+    flushPendingSessionSync().catch(() => {});
     setInterval(() => reportClientCapabilities(boothState.cameraLabels), 30000);
     if (boothState.config.booth.maintenanceMode) { $("#welcome-start").disabled = true; $("#welcome-button-label").textContent = "Sedang dalam perawatan"; }
   } catch (error) {
-    try {
-      const cached = JSON.parse(localStorage.getItem("photoslive.boothConfig") || "null");
-      if (cached?.appearance && cached?.booth && cached?.payment) {
-        boothState.config = cached;
-        applyConfiguration(); resetBooth();
-        notice(`Mode sementara: Agent belum merespons. ${error.message}`, "error");
-        return;
-      }
-    } catch { localStorage.removeItem("photoslive.boothConfig"); }
+    if (startedFromCache) {
+      notice(`Mode lokal: konfigurasi tersimpan digunakan. ${error.message}`, "error");
+      return;
+    }
     notice(`Mesin belum siap. Tekan Mulai foto untuk mencoba lagi. ${error.message}`, "error");
   }
 }

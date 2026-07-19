@@ -11,15 +11,30 @@ Expand-Archive -Path $Archive -DestinationPath $Extract -Force
 $SourceDir = Join-Path $Extract "photobox"
 if (-not (Test-Path (Join-Path $SourceDir "agent.py"))) { throw "Paket Photoslive Agent tidak valid." }
 $Python = (Get-Command python).Source
+$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+$Settings = New-ScheduledTaskSettingsSet `
+  -StartWhenAvailable `
+  -RestartCount 999 `
+  -RestartInterval (New-TimeSpan -Minutes 1) `
+  -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -MultipleInstances IgnoreNew
 
-schtasks /Delete /TN "Photoslive Controller" /F 2>$null | Out-Null
-schtasks /Delete /TN "Photoslive Agent" /F 2>$null | Out-Null
-schtasks /Create /TN "Photoslive Controller" /SC ONLOGON /TR "`"$Python`" `"$SourceDir\server.py`"" /F | Out-Null
-schtasks /Create /TN "Photoslive Agent" /SC ONLOGON /TR "`"$Python`" `"$SourceDir\agent.py`"" /F | Out-Null
-schtasks /Run /TN "Photoslive Controller" | Out-Null
+Unregister-ScheduledTask -TaskName "Photoslive Controller" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "Photoslive Agent" -Confirm:$false -ErrorAction SilentlyContinue
+Register-ScheduledTask `
+  -TaskName "Photoslive Controller" `
+  -Action (New-ScheduledTaskAction -Execute $Python -Argument "`"$SourceDir\server.py`"" -WorkingDirectory $SourceDir) `
+  -Trigger $Trigger -Principal $Principal -Settings $Settings | Out-Null
+Register-ScheduledTask `
+  -TaskName "Photoslive Agent" `
+  -Action (New-ScheduledTaskAction -Execute $Python -Argument "`"$SourceDir\agent.py`"" -WorkingDirectory $SourceDir) `
+  -Trigger $Trigger -Principal $Principal -Settings $Settings | Out-Null
+
+Start-ScheduledTask -TaskName "Photoslive Controller"
 Start-Sleep -Seconds 3
-schtasks /Run /TN "Photoslive Agent" | Out-Null
+Start-ScheduledTask -TaskName "Photoslive Agent"
 Start-Sleep -Seconds 3
 & $Python "$SourceDir\agent.py" --status
-Write-Host "Photoslive Agent diperbarui, dijalankan ulang, dan otomatis berjalan saat login."
+Write-Host "Photoslive Agent diperbarui. Windows akan menjalankannya saat login dan mengulang otomatis setelah gagal."
 & $Python "$SourceDir\agent.py" --setup-code

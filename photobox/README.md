@@ -9,8 +9,9 @@ standard library; tidak menggunakan Electron, Docker, atau framework frontend.
 python3 photobox/server.py
 ```
 
-Buka dashboard admin di `http://127.0.0.1:8080` dan layar pelanggan di
-`http://127.0.0.1:8080/booth`.
+Buka layar pelanggan di `http://127.0.0.1:8080/booth` dan Local Manager di
+`http://127.0.0.1:8080/local-agent`. Admin cloud tetap dapat dibuka dari
+komputer lain melalui `/{boothCode}/admin`.
 
 ## Integrasi Linux
 
@@ -77,3 +78,14 @@ python3 photobox/agent.py
 Installer production dapat diunduh dari halaman **Photoslive Agent** pada admin
 cloud atau langsung melalui `/downloads/install-linux.sh`,
 `/downloads/install-macos.sh`, dan `/downloads/install-windows.ps1`.
+
+## Redesign local-first
+
+- [Arsitektur dan recovery](docs/LOCAL-FIRST-ARCHITECTURE.md)
+- [Kontrak seluruh kontrol interaktif](docs/INTERACTION-CONTRACT.md)
+- [Status implementasi dan pilot blocker](docs/IMPLEMENTATION-STATUS.md)
+
+Script installer yang ada cocok untuk pilot/teknisi. Paket signed `.exe`,
+notarized `.pkg`, `.deb`, passkey, QRIS production, GIF final, dan soak test 72
+jam belum boleh diklaim production-ready; statusnya dicatat eksplisit agar UI
+tidak menampilkan kontrol palsu.

@@ -711,3 +711,26 @@ dialog .dialog-switch { min-height: 66px; padding: var(--space-2) 0; }
   .voucher-summary { grid-template-columns: 1fr; }
   .voucher-summary > .button { grid-column: auto; }
 }
+
+/* Final readability layer shared by every admin route. */
+.nav-item b { font-size: 14px; }
+.brand small,
+.environment small,
+.operator-card > small,
+.page-help,
+.sync-state small,
+.panel-head p,
+.kpi > p,
+.device-row small,
+.device-protocol,
+.field-help,
+.asset-card > small,
+.asset-select > small,
+.frame-spec small,
+.table-note,
+.voucher-row time { font-size: 12px; }
+.panel h2 { font-size: 16px; }
+.kpi > div span,
+.readiness-meta small,
+.table-head,
+.voucher-summary small { font-size: 11px; }

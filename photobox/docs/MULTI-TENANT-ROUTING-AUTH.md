@@ -9,7 +9,7 @@
 | `/superadmin` | Control center semua mesin dan request pemulihan |
 | `/{boothCode}` | Layar pelanggan untuk satu photobox |
 | `/{boothCode}/admin` | Dashboard admin tenant |
-| `/{boothCode}/{shareCode}` | Galeri publik satu sesi selama maksimal 24 jam |
+| `/{boothCode}/sesi/{shareCode}` | Galeri publik satu sesi selama maksimal 24 jam |
 
 `boothCode` adalah identifier permanen. Kode pairing/setup tetap sekali pakai dan
 berlaku 15 menit; nilainya boleh menjadi `boothCode` pada setup pertama, tetapi

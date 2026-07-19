@@ -65,6 +65,11 @@ const voucherEventIndexKey = boothCode => `photoslive:booth:${boothCode}:voucher
 const voucherEventKey = (boothCode, id) => `photoslive:booth:${boothCode}:voucher-event:${id}`;
 const assetIndexKey = (boothCode, kind) => `photoslive:booth:${boothCode}:assets:${kind}`;
 const assetKey = (boothCode, id) => `photoslive:booth:${boothCode}:asset:${id}`;
+const voucherVersionKey = boothCode => `photoslive:booth:${boothCode}:voucher-version`;
+const settingsVersionKey = boothCode => `photoslive:booth:${boothCode}:settings-version`;
+const publicSessionKey = (boothCode, shareCode) => `photoslive:public-session:${boothCode}:${shareCode}`;
+const publicSessionFileKey = (boothCode, shareCode, slotIndex) => `photoslive:public-session-file:${boothCode}:${shareCode}:${slotIndex}`;
+const auditKey = boothCode => `photoslive:booth:${boothCode}:audit`;
 const ASSET_KINDS = ["background", "frame", "logo", "sticker"];
 
 const DEFAULT_CLOUD_SETTINGS = {
@@ -100,6 +105,39 @@ async function requireBoothAdmin(redis, request, requestedCode) {
   const booth = await resolveBooth(redis, requestedCode || auth?.boothCode);
   if (!auth?.boothCode || !booth || auth.boothCode !== booth.boothCode) return null;
   return { auth, booth };
+}
+
+async function appendAudit(redis, auth, boothCode, action, target = "", detail = {}) {
+  const record = {
+    id: randomId("audit"),
+    boothCode,
+    actorId: auth?.userId || auth?.role || "system",
+    actorRole: auth?.role || "system",
+    action,
+    target: String(target || "").slice(0, 160),
+    detail,
+    createdAt: now(),
+  };
+  const serialized = JSON.stringify(record);
+  const pipeline = redis.pipeline();
+  pipeline.lpush(auditKey(boothCode), serialized);
+  pipeline.ltrim(auditKey(boothCode), 0, 499);
+  pipeline.lpush("photoslive:audit:global", serialized);
+  pipeline.ltrim("photoslive:audit:global", 0, 999);
+  await pipeline.exec();
+  return record;
+}
+
+async function auditLog(redis, request, payload) {
+  const auth = await authenticate(redis, request);
+  const boothCode = normalizeCode(payload.booth || auth?.boothCode);
+  if (!auth || (auth.role !== "superadmin" && (!boothCode || auth.boothCode !== boothCode))) return json({ error: "Akses audit log ditolak" }, 403);
+  const raw = await redis.lrange(auth.role === "superadmin" && !boothCode ? "photoslive:audit:global" : auditKey(boothCode), 0, 99);
+  const records = raw.map(item => {
+    if (typeof item !== "string") return item;
+    try { return JSON.parse(item); } catch { return null; }
+  }).filter(Boolean);
+  return json({ records });
 }
 
 function voucherCode(value = "") {
@@ -154,6 +192,7 @@ async function createCloudVoucher(redis, boothCode, payload) {
   const record = { code, boothCode, eventId: event?.id || null, includesPrint: event ? Boolean(event.includesPrint) : true, createdAt: now(), redeemedAt: null };
   await redis.set(voucherKey(boothCode, code), record);
   await redis.sadd(voucherIndexKey(boothCode), code);
+  await redis.incr(voucherVersionKey(boothCode));
   return json({ voucher: record }, 201);
 }
 
@@ -302,6 +341,7 @@ async function addUser(redis, request, payload) {
   if (await redis.get(`photoslive:email:${email}`)) return json({ error: "Email sudah digunakan" }, 409);
   const user = { id: randomId("user"), boothCode: auth.boothCode, machineId: auth.machineId, email, name: String(payload.name || "Operator").slice(0, 80), role: payload.role === "admin" ? "admin" : "operator", passwordHash: await hashCredential(payload.password), pinHash: await hashCredential(payload.pin), createdAt: now(), active: true };
   await redis.set(userKey(user.id), user); await redis.set(`photoslive:email:${email}`, user.id); await redis.sadd(`photoslive:booth:${auth.boothCode}:users`, user.id);
+  await appendAudit(redis, auth, auth.boothCode, "user.created", user.id, { role: user.role, email: user.email });
   return json({ user: { id: user.id, email, name: user.name, role: user.role, active: true } }, 201);
 }
 
@@ -318,6 +358,7 @@ async function updateProfile(redis, request, payload) {
   if (payload.pin) { if (!/^\d{6}$/.test(String(payload.pin))) return json({ error: "PIN harus 6 angka" }, 400); user.pinHash = await hashCredential(payload.pin); }
   if (payload.name) user.name = String(payload.name).slice(0, 80);
   user.updatedAt = now(); await redis.set(userKey(user.id), user);
+  await appendAudit(redis, auth, user.boothCode, "profile.updated", user.id);
   return json({ user: { id: user.id, email: user.email, name: user.name, role: user.role } });
 }
 
@@ -376,6 +417,7 @@ async function toggleMachine(redis, request, payload) {
   machine.accessEnabled = Boolean(payload.enabled);
   machine.updatedAt = now();
   await redis.set(machineKey(machine.id), machine);
+  await appendAudit(redis, auth, machine.boothCode, machine.accessEnabled ? "booth.enabled" : "booth.disabled", machine.id);
   return json({ booth: await resolveBooth(redis, machine.boothCode) });
 }
 
@@ -389,6 +431,7 @@ async function resolveResetRequest(redis, request, payload) {
   reset.resolvedAt = now();
   reset.note = String(payload.note || "Email pemulihan dikirim manual").slice(0, 500);
   await redis.set(key, reset);
+  await appendAudit(redis, auth, reset.boothCode, "password_recovery.resolved", reset.id);
   return json({ request: reset });
 }
 
@@ -397,15 +440,47 @@ async function registerPhotoSession(redis, payload) {
   if (!booth || booth.machineId !== payload.machineId || !booth.enabled) return json({ error: "Photobox tidak valid" }, 403);
   const shareCode = String(payload.shareCode || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
   if (!shareCode) return json({ error: "Kode sesi tidak valid" }, 400);
-  const record = { boothCode: booth.boothCode, machineId: booth.machineId, shareCode, localSessionId: String(payload.localSessionId || ""), status: String(payload.status || "active"), frameId: String(payload.frameId || ""), photoSlots: Number(payload.photoSlots || 1), createdAt: payload.createdAt || now(), expiresAt: payload.expiresAt || new Date(Date.now() + 86_400_000).toISOString(), updatedAt: now() };
-  await redis.set(`photoslive:public-session:${booth.boothCode}:${shareCode}`, record, { ex: 86_400 });
-  return json({ session: record, url: `/${booth.boothCode}/${shareCode}` }, 201);
+  const previous = await redis.get(publicSessionKey(booth.boothCode, shareCode));
+  const record = { ...previous, boothCode: booth.boothCode, machineId: booth.machineId, shareCode, localSessionId: String(payload.localSessionId || previous?.localSessionId || ""), status: String(payload.status || previous?.status || "active"), frameId: String(payload.frameId || previous?.frameId || ""), photoSlots: Number(payload.photoSlots || previous?.photoSlots || 1), files: Array.isArray(previous?.files) ? previous.files : [], createdAt: payload.createdAt || previous?.createdAt || now(), expiresAt: payload.expiresAt || previous?.expiresAt || new Date(Date.now() + 86_400_000).toISOString(), updatedAt: now() };
+  await redis.set(publicSessionKey(booth.boothCode, shareCode), record, { ex: 86_400 });
+  return json({ session: record, url: `/${booth.boothCode}/sesi/${shareCode}` }, 201);
+}
+
+async function uploadPhotoSessionFile(redis, payload) {
+  const boothCode = normalizeCode(payload.boothCode);
+  const shareCode = String(payload.shareCode || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
+  const slotIndex = Math.max(1, Math.min(8, Number(payload.slotIndex || 1)));
+  const record = await redis.get(publicSessionKey(boothCode, shareCode));
+  if (!record || Date.parse(record.expiresAt) <= Date.now()) return json({ error: "Sesi tidak ditemukan atau sudah kedaluwarsa" }, 404);
+  if (!payload.machineId || payload.machineId !== record.machineId) return json({ error: "Mesin pengunggah tidak sesuai dengan sesi" }, 403);
+  const contentType = String(payload.contentType || "image/jpeg").toLowerCase();
+  if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(contentType)) return json({ error: "Format foto tidak didukung" }, 415);
+  const bodyBase64 = String(payload.bodyBase64 || "");
+  const byteLength = Math.floor(bodyBase64.length * 0.75);
+  if (!bodyBase64 || byteLength > 1_800_000) return json({ error: "Foto cloud maksimal 1,8 MB" }, 413);
+  const file = { id: `slot-${slotIndex}`, slotIndex, contentType, size: byteLength, url: `/api/platform?action=public_session_file&booth=${encodeURIComponent(boothCode)}&session=${encodeURIComponent(shareCode)}&slot=${slotIndex}`, uploadedAt: now() };
+  await redis.set(publicSessionFileKey(boothCode, shareCode, slotIndex), { ...file, bodyBase64 }, { ex: 86_400 });
+  record.files = [...(record.files || []).filter(item => Number(item.slotIndex) !== slotIndex), file].sort((a, b) => a.slotIndex - b.slotIndex);
+  record.status = String(payload.status || record.status || "completed");
+  record.updatedAt = now();
+  await redis.set(publicSessionKey(boothCode, shareCode), record, { ex: 86_400 });
+  return json({ file }, 201);
+}
+
+async function publicPhotoSessionFile(redis, payload) {
+  const boothCode = normalizeCode(payload.booth);
+  const shareCode = String(payload.session || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  const slotIndex = Math.max(1, Math.min(8, Number(payload.slot || 1)));
+  const record = await redis.get(publicSessionFileKey(boothCode, shareCode, slotIndex));
+  if (!record?.bodyBase64) return json({ error: "Foto belum tersedia" }, 404);
+  const bytes = Uint8Array.from(atob(record.bodyBase64), character => character.charCodeAt(0));
+  return new Response(bytes, { headers: { "content-type": record.contentType, "content-length": String(bytes.byteLength), "cache-control": "private, max-age=3600" } });
 }
 
 async function publicPhotoSession(redis, payload) {
   const boothCode = normalizeCode(payload.booth);
   const shareCode = String(payload.session || "").replace(/[^a-zA-Z0-9_-]/g, "");
-  const record = await redis.get(`photoslive:public-session:${boothCode}:${shareCode}`);
+  const record = await redis.get(publicSessionKey(boothCode, shareCode));
   if (!record || Date.parse(record.expiresAt) <= Date.now()) return json({ error: "Sesi tidak ditemukan atau sudah kedaluwarsa" }, 404);
   return json({ session: record, booth: await resolveBooth(redis, boothCode) });
 }
@@ -440,6 +515,7 @@ async function cloudData(redis, request, payload) {
       if (eventExpired(event)) return json({ error: "Voucher event sudah kedaluwarsa" }, 410);
       record.redeemedAt = now();
       await redis.set(voucherKey(booth.boothCode, code), record);
+      await redis.incr(voucherVersionKey(booth.boothCode));
       return json({ voucher: record });
     } finally {
       await redis.del(lockKey);
@@ -456,6 +532,7 @@ async function cloudData(redis, request, payload) {
 
   const access = await requireBoothAdmin(redis, request, booth.boothCode);
   if (!access) return json({ error: "Login admin photobox diperlukan" }, 401);
+  if (request.method !== "GET" && access.auth.role === "operator" && (path.startsWith("/api/settings/payment") || path.startsWith("/api/vouchers") || path.startsWith("/api/voucher-events"))) return json({ error: "Peran Operator tidak dapat mengubah pembayaran atau voucher" }, 403);
 
   if (request.method === "GET" && path === "/api/settings") return json(await cloudSettings(redis, booth));
   if (request.method === "PATCH" && (path === "/api/settings" || path.startsWith("/api/settings/"))) {
@@ -468,6 +545,7 @@ async function cloudData(redis, request, payload) {
     next.booth.name = String(next.booth.name || booth.name).slice(0, 80);
     next.booth.location = String(next.booth.location || "").slice(0, 120);
     await redis.set(cloudSettingsKey(booth.boothCode), next);
+    await redis.incr(settingsVersionKey(booth.boothCode));
     const machine = await redis.get(machineKey(booth.machineId));
     if (machine) {
       machine.name = next.booth.name;
@@ -475,6 +553,7 @@ async function cloudData(redis, request, payload) {
       machine.updatedAt = now();
       await redis.set(machineKey(machine.id), machine);
     }
+    await appendAudit(redis, access.auth, booth.boothCode, "settings.updated", section || "all", { section: section || "all" });
     return json(next);
   }
 
@@ -497,6 +576,7 @@ async function cloudData(redis, request, payload) {
     const record = { id, boothCode: booth.boothCode, kind, name: filename, contentType: String(payload.data?.contentType || "application/octet-stream").slice(0, 100), size: byteLength, createdAt: now(), url: `/api/platform?action=cloud_asset&booth=${encodeURIComponent(booth.boothCode)}&id=${encodeURIComponent(id)}`, data: bodyBase64 };
     await redis.set(assetKey(booth.boothCode, id), record);
     await redis.sadd(assetIndexKey(booth.boothCode, kind), id);
+    await appendAudit(redis, access.auth, booth.boothCode, "asset.created", id, { kind, filename, size: byteLength });
     const { data, ...asset } = record;
     return json({ asset }, 201);
   }
@@ -517,9 +597,14 @@ async function cloudData(redis, request, payload) {
     if (!record) return json({ error: "Aset tidak ditemukan" }, 404);
     await redis.del(assetKey(booth.boothCode, id));
     await redis.srem(assetIndexKey(booth.boothCode, kind), id);
+    await appendAudit(redis, access.auth, booth.boothCode, "asset.deleted", id, { kind });
     return json({ deleted: true });
   }
-  if (request.method === "POST" && path === "/api/vouchers") return createCloudVoucher(redis, booth.boothCode, payload.data || {});
+  if (request.method === "POST" && path === "/api/vouchers") {
+    const response = await createCloudVoucher(redis, booth.boothCode, payload.data || {});
+    if (response.ok) await appendAudit(redis, access.auth, booth.boothCode, "voucher.created");
+    return response;
+  }
   if (request.method === "POST" && path === "/api/vouchers/generate") {
     const count = Math.max(1, Math.min(100, Number(payload.data?.count || 100)));
     const event = payload.data?.eventId ? await redis.get(voucherEventKey(booth.boothCode, String(payload.data.eventId))) : null;
@@ -537,6 +622,8 @@ async function cloudData(redis, request, payload) {
     for (const record of vouchers) pipeline.set(voucherKey(booth.boothCode, record.code), record);
     if (vouchers.length) pipeline.sadd(voucherIndexKey(booth.boothCode), ...vouchers.map(record => record.code));
     await pipeline.exec();
+    await redis.incr(voucherVersionKey(booth.boothCode));
+    await appendAudit(redis, access.auth, booth.boothCode, "voucher.generated", event?.id || "general", { count: vouchers.length });
     return json({ created: vouchers.length, vouchers }, 201);
   }
   if (request.method === "DELETE" && path.startsWith("/api/vouchers/")) {
@@ -545,6 +632,8 @@ async function cloudData(redis, request, payload) {
     if (!record || record.redeemedAt) return json({ error: "Voucher tidak ditemukan atau sudah dipakai" }, 404);
     await redis.del(voucherKey(booth.boothCode, code));
     await redis.srem(voucherIndexKey(booth.boothCode), code);
+    await redis.incr(voucherVersionKey(booth.boothCode));
+    await appendAudit(redis, access.auth, booth.boothCode, "voucher.deleted", code);
     return json({ deleted: true });
   }
   if (request.method === "GET" && path === "/api/voucher-events") return json({ events: (await voucherPayload(redis, booth.boothCode)).events });
@@ -555,6 +644,8 @@ async function cloudData(redis, request, payload) {
     const event = { id: randomId("event"), boothCode: booth.boothCode, name, expiresAt: expiresAt.toISOString(), includesPrint: Boolean(payload.data?.includesPrint), createdAt: now() };
     await redis.set(voucherEventKey(booth.boothCode, event.id), event);
     await redis.sadd(voucherEventIndexKey(booth.boothCode), event.id);
+    await redis.incr(voucherVersionKey(booth.boothCode));
+    await appendAudit(redis, access.auth, booth.boothCode, "voucher_event.created", event.id, { name: event.name, expiresAt: event.expiresAt });
     return json({ event }, 201);
   }
   return json({ error: "Endpoint cloud data tidak ditemukan" }, 404);
@@ -585,13 +676,16 @@ async function handler(request) {
     if (action === "users" && request.method === "GET") return listUsers(redis, request);
     if (action === "users" && request.method === "POST") return addUser(redis, request, payload);
     if (action === "profile" && request.method === "POST") return updateProfile(redis, request, payload);
+    if (action === "audit" && request.method === "GET") return auditLog(redis, request, payload);
     if (action === "logout" && request.method === "POST") return json({ ok: true }, 200, { "set-cookie": clearCookie });
     if (action === "forgot_password" && request.method === "POST") return forgotPassword(redis, payload);
     if (action === "superadmin_overview" && request.method === "GET") return superadminOverview(redis, request);
     if (action === "toggle_machine" && request.method === "POST") return toggleMachine(redis, request, payload);
     if (action === "resolve_reset" && request.method === "POST") return resolveResetRequest(redis, request, payload);
     if (action === "register_session" && request.method === "POST") return registerPhotoSession(redis, payload);
+    if (action === "upload_session_file" && request.method === "POST") return uploadPhotoSessionFile(redis, payload);
     if (action === "public_session" && request.method === "GET") return publicPhotoSession(redis, payload);
+    if (action === "public_session_file" && request.method === "GET") return publicPhotoSessionFile(redis, payload);
     if (action === "cloud_data") return cloudData(redis, request, payload);
     if (action === "cloud_asset" && request.method === "GET") return cloudAsset(redis, payload);
     return json({ error: "Endpoint tidak ditemukan" }, 404);

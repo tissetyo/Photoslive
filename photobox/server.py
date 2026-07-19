@@ -16,6 +16,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -31,12 +32,19 @@ from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
-DATA_ROOT = ROOT / "data"
+DATA_ROOT = Path(os.environ.get("PHOTOSLIVE_DATA_ROOT", ROOT / "data")).expanduser()
 UPLOAD_ROOT = WEB_ROOT / "uploads"
 PHOTO_ROOT = DATA_ROOT / "photos"
 DB_PATH = DATA_ROOT / "photoslive.db"
 SETTINGS_PATH = DATA_ROOT / "settings.json"
+LOCAL_TOKEN_PATH = DATA_ROOT / ".installation-token"
+AGENT_CONFIG_ROOT = Path(os.environ.get("PHOTOSLIVE_CONFIG_DIR", Path.home() / ".config" / "photoslive"))
+AGENT_CONFIG_PATH = AGENT_CONFIG_ROOT / "agent.json"
+AGENT_STATUS_PATH = AGENT_CONFIG_ROOT / "agent-status.json"
+AGENT_CONTROL_PATH = AGENT_CONFIG_ROOT / "agent-control.json"
+AGENT_LOG_PATH = AGENT_CONFIG_ROOT / "agent.log"
 STARTED_AT = time.time()
+SERVICE_VERSION = "0.6.0"
 STORAGE_CACHE_SECONDS = 60
 STORAGE_CACHE: dict[str, Any] = {"createdAt": 0.0, "payload": None}
 STORAGE_CACHE_LOCK = threading.Lock()
@@ -146,6 +154,12 @@ def ensure_data() -> None:
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
     UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     PHOTO_ROOT.mkdir(parents=True, exist_ok=True)
+    if not LOCAL_TOKEN_PATH.exists():
+        LOCAL_TOKEN_PATH.write_text(uuid.uuid4().hex + uuid.uuid4().hex, encoding="utf-8")
+        try:
+            LOCAL_TOKEN_PATH.chmod(0o600)
+        except OSError:
+            pass
     if not SETTINGS_PATH.exists():
         SETTINGS_PATH.write_text(json.dumps(DEFAULT_SETTINGS, indent=2), encoding="utf-8")
     with sqlite3.connect(DB_PATH) as db:
@@ -212,6 +226,22 @@ def ensure_data() -> None:
               expires_at TEXT NOT NULL,
               uploaded_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS sync_queue (
+              id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              payload_json TEXT NOT NULL DEFAULT '{}',
+              status TEXT NOT NULL DEFAULT 'pending',
+              attempts INTEGER NOT NULL DEFAULT 0,
+              next_attempt_at TEXT,
+              last_error TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS local_state (
+              key TEXT PRIMARY KEY,
+              value_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             """
         )
         file_columns = {row[1] for row in db.execute("PRAGMA table_info(photo_files)").fetchall()}
@@ -242,15 +272,104 @@ def ensure_data() -> None:
             "event_id": "TEXT",
             "includes_print": "INTEGER NOT NULL DEFAULT 1",
             "created_at": "TEXT",
+            "source": "TEXT NOT NULL DEFAULT 'local'",
         }.items():
             if name not in voucher_columns:
                 db.execute(f"ALTER TABLE vouchers ADD COLUMN {name} {definition}")
         db.execute("UPDATE vouchers SET created_at = COALESCE(created_at, ?)", (utc_now(),))
         db.execute("CREATE INDEX IF NOT EXISTS idx_vouchers_event ON vouchers(event_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_vouchers_active ON vouchers(redeemed_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_vouchers_source ON vouchers(source, redeemed_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, next_attempt_at)")
         today = datetime.now().date().isoformat()
         db.execute("INSERT OR IGNORE INTO daily_usage(day) VALUES (?)", (today,))
         db.commit()
+
+
+def read_json_file(path: Path, fallback: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return fallback
+
+
+def installation_token() -> str:
+    return LOCAL_TOKEN_PATH.read_text(encoding="utf-8").strip()
+
+
+def public_agent_config() -> dict[str, Any]:
+    config = read_json_file(AGENT_CONFIG_PATH, {})
+    return {
+        "cloud": config.get("cloud"),
+        "controller": config.get("controller"),
+        "name": config.get("name"),
+        "machineId": config.get("machineId"),
+        "boothCode": config.get("boothCode"),
+        "pairingCode": config.get("pairingCode"),
+        "configured": bool(config.get("machineId") and config.get("agentToken")),
+    }
+
+
+def agent_control() -> dict[str, Any]:
+    control = read_json_file(AGENT_CONTROL_PATH, {})
+    return {"paused": bool(control.get("paused")), "updatedAt": control.get("updatedAt")}
+
+
+def set_agent_paused(paused: bool) -> dict[str, Any]:
+    AGENT_CONFIG_ROOT.mkdir(parents=True, exist_ok=True)
+    control = {"paused": paused, "updatedAt": utc_now()}
+    temporary = AGENT_CONTROL_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(control, indent=2), encoding="utf-8")
+    temporary.replace(AGENT_CONTROL_PATH)
+    add_event("agent", "Koneksi Agent dijeda" if paused else "Koneksi Agent dilanjutkan")
+    return control
+
+
+def tail_agent_logs(limit: int = 120) -> list[str]:
+    try:
+        lines = AGENT_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return lines[-max(1, min(limit, 500)):]
+
+
+def sync_status() -> dict[str, Any]:
+    with sqlite3.connect(DB_PATH) as db:
+        rows = db.execute("SELECT status, COUNT(*) FROM sync_queue GROUP BY status").fetchall()
+        last_error = db.execute(
+            "SELECT last_error, updated_at FROM sync_queue WHERE last_error IS NOT NULL ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+    counts = {status: count for status, count in rows}
+    return {
+        "pending": counts.get("pending", 0),
+        "running": counts.get("running", 0),
+        "failed": counts.get("failed", 0),
+        "completed": counts.get("completed", 0),
+        "lastError": last_error[0] if last_error else None,
+        "lastErrorAt": last_error[1] if last_error else None,
+    }
+
+
+def local_agent_status() -> dict[str, Any]:
+    status = read_json_file(AGENT_STATUS_PATH, {})
+    updated_at = float(status.get("updatedAt") or 0)
+    recent = bool(updated_at and time.time() - updated_at < 90)
+    controller_ok = True
+    config = public_agent_config()
+    return {
+        "agentState": "paused" if agent_control()["paused"] else ("online" if recent else "offline"),
+        "controllerState": "online" if controller_ok else "offline",
+        "desiredState": "paused" if agent_control()["paused"] else "running",
+        "lastSeenAt": datetime.fromtimestamp(updated_at, timezone.utc).isoformat() if updated_at else None,
+        "version": status.get("version"),
+        "uptimeSeconds": int(time.time() - STARTED_AT),
+        "lastError": status.get("error"),
+        "lastHeartbeatAt": status.get("lastHeartbeatAt"),
+        "lastJobPollAt": status.get("lastJobPollAt"),
+        "config": config,
+        "control": agent_control(),
+        "sync": sync_status(),
+    }
 
 
 def load_settings() -> dict[str, Any]:
@@ -1032,6 +1151,101 @@ def redeem_voucher(payload: dict[str, Any]) -> dict[str, Any]:
     return {"code": code, "eventId": row[0], "eventName": row[3], "includesPrint": bool(row[1]), "redeemedAt": redeemed_at}
 
 
+def sync_cloud_vouchers(payload: dict[str, Any]) -> dict[str, Any]:
+    """Replace the active cloud voucher cache without losing offline redemptions."""
+    vouchers = payload.get("vouchers") if isinstance(payload.get("vouchers"), list) else []
+    events = payload.get("events") if isinstance(payload.get("events"), list) else []
+    version = max(0, int(payload.get("version") or 0))
+    synced_at = utc_now()
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("BEGIN IMMEDIATE")
+        locally_redeemed = {
+            row[0]: row[1]
+            for row in db.execute(
+                "SELECT code, redeemed_at FROM vouchers WHERE source = 'cloud' AND redeemed_at IS NOT NULL"
+            ).fetchall()
+        }
+        db.execute("DELETE FROM voucher_events")
+        for item in events[:500]:
+            if not isinstance(item, dict):
+                continue
+            event_id = str(item.get("id") or "").strip()[:80]
+            expires_at = str(item.get("expiresAt") or "").strip()
+            if not event_id or not expires_at:
+                continue
+            db.execute(
+                """INSERT OR REPLACE INTO voucher_events(id, name, expires_at, includes_print, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    event_id,
+                    str(item.get("name") or "Event")[:80],
+                    expires_at,
+                    int(bool(item.get("includesPrint", True))),
+                    str(item.get("createdAt") or synced_at),
+                ),
+            )
+        db.execute("DELETE FROM vouchers WHERE source = 'cloud' AND redeemed_at IS NULL")
+        imported = 0
+        for item in vouchers[:5000]:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip().upper()[:40]
+            if not code or not re.fullmatch(r"[A-Z0-9-]+", code):
+                continue
+            cloud_redeemed = str(item.get("redeemedAt") or "").strip() or None
+            redeemed_at = locally_redeemed.get(code) or cloud_redeemed
+            db.execute(
+                """INSERT INTO vouchers(code, package_name, expires_at, redeemed_at, event_id,
+                                          includes_print, created_at, source)
+                   VALUES (?, '1 sesi', NULL, ?, ?, ?, ?, 'cloud')
+                   ON CONFLICT(code) DO UPDATE SET
+                     redeemed_at = COALESCE(vouchers.redeemed_at, excluded.redeemed_at),
+                     event_id = excluded.event_id,
+                     includes_print = excluded.includes_print,
+                     created_at = excluded.created_at,
+                     source = CASE WHEN vouchers.source = 'local' THEN vouchers.source ELSE 'cloud' END""",
+                (
+                    code,
+                    redeemed_at,
+                    str(item.get("eventId") or "").strip() or None,
+                    int(bool(item.get("includesPrint", True))),
+                    str(item.get("createdAt") or synced_at),
+                ),
+            )
+            imported += 1
+        db.execute(
+            "INSERT OR REPLACE INTO local_state(key, value_json, updated_at) VALUES ('voucher_snapshot', ?, ?)",
+            (json.dumps({"version": version, "imported": imported}), synced_at),
+        )
+        db.commit()
+    return {"version": version, "imported": imported, "events": min(len(events), 500), "syncedAt": synced_at}
+
+
+def offline_voucher_redemptions(limit: int = 500) -> list[dict[str, str]]:
+    safe_limit = max(1, min(500, int(limit)))
+    with sqlite3.connect(DB_PATH) as db:
+        rows = db.execute(
+            """SELECT code, redeemed_at FROM vouchers
+               WHERE source = 'cloud' AND redeemed_at IS NOT NULL
+               ORDER BY redeemed_at ASC LIMIT ?""",
+            (safe_limit,),
+        ).fetchall()
+    return [{"code": row[0], "redeemedAt": row[1]} for row in rows]
+
+
+def set_local_state(key: str, value: Any) -> None:
+    """Persist small controller metadata without expanding settings.json."""
+    clean_key = re.sub(r"[^a-z0-9_.-]", "", str(key).lower())[:80]
+    if not clean_key:
+        raise ValueError("Key local state tidak valid")
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            "INSERT OR REPLACE INTO local_state(key, value_json, updated_at) VALUES (?, ?, ?)",
+            (clean_key, json.dumps(value), utc_now()),
+        )
+        db.commit()
+
+
 def printable_vouchers(event_id: str | None) -> bytes:
     with sqlite3.connect(DB_PATH) as db:
         if event_id:
@@ -1420,12 +1634,50 @@ def request_qris_payment(session_id: str, purpose: str = "session") -> dict[str,
 def diagnostics() -> dict[str, Any]:
     return {
         "generatedAt": utc_now(),
-        "service": {"version": "0.4.0", "uptimeSeconds": int(time.time() - STARTED_AT)},
+        "service": {"version": SERVICE_VERSION, "uptimeSeconds": int(time.time() - STARTED_AT)},
         "system": {"disk": disk_metrics(), "memory": memory_metrics(), "network": network_metrics()},
         "devices": [asdict(device) for device in detect_devices()],
         "queue": queue_status(),
+        "sync": sync_status(),
+        "agent": local_agent_status(),
         "settings": load_settings(),
     }
+
+
+def supervisor_restart_commands() -> list[list[str]]:
+    system = platform.system().lower()
+    if system == "darwin":
+        uid = str(os.getuid()) if hasattr(os, "getuid") else ""
+        return [["launchctl", "kickstart", "-k", f"gui/{uid}/app.photoslive.agent"]]
+    if system == "windows":
+        return [["schtasks", "/Run", "/TN", "Photoslive Agent"]]
+    return [
+        ["systemctl", "--user", "restart", "photoslive-agent.service"],
+        ["systemctl", "restart", "photoslive-agent.service"],
+    ]
+
+
+def restart_agent_service() -> tuple[bool, str]:
+    errors: list[str] = []
+    for command in supervisor_restart_commands():
+        ok, output = command_output(command, timeout=12)
+        if ok:
+            add_event("agent", "Restart Agent diminta melalui OS supervisor")
+            return True, output or "Restart Agent dijalankan"
+        errors.append(output)
+    return False, "; ".join(filter(None, errors)) or "OS supervisor Agent tidak tersedia"
+
+
+def create_agent_setup_code() -> dict[str, Any]:
+    ok, output = command_output([sys.executable, str(ROOT / "agent.py"), "--setup-code"], timeout=25)
+    if not ok:
+        raise ValueError(output or "Kode setup gagal dibuat. Pastikan Agent terhubung ke internet.")
+    match = re.search(r"Kode setup baru:\s*([A-Z0-9-]+)", output)
+    if not match:
+        raise ValueError("Agent tidak mengembalikan kode setup")
+    code = match.group(1)
+    add_event("agent", "Kode setup baru dibuat dari Local Manager")
+    return {"code": code, "expiresInSeconds": 900, "setupUrl": f"https://photoslive.vercel.app/setup?code={code}"}
 
 
 def system_status() -> dict[str, Any]:
@@ -1498,6 +1750,15 @@ class ApiHandler(SimpleHTTPRequestHandler):
             raise ValueError(f"Payload harus 1-{maximum // 1_000_000} MB")
         return self.rfile.read(length)
 
+    def local_token_valid(self) -> bool:
+        return self.headers.get("X-Photoslive-Token", "") == installation_token()
+
+    def require_local_token(self) -> bool:
+        if self.local_token_valid():
+            return True
+        self.send_json({"error": "Token instalasi lokal tidak valid"}, HTTPStatus.UNAUTHORIZED)
+        return False
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1507,7 +1768,23 @@ class ApiHandler(SimpleHTTPRequestHandler):
         if path in {"/api/status", "/api/overview"}:
             return self.send_json(system_status())
         if path == "/api/health":
-            return self.send_json({"status": "ok", "time": utc_now()})
+            return self.send_json({"status": "ok", "time": utc_now(), "version": SERVICE_VERSION})
+        if path == "/api/local/installation":
+            return self.send_json({"token": installation_token()})
+        if path == "/api/local/agent/status":
+            return self.send_json(local_agent_status())
+        if path == "/api/local/agent/logs":
+            try:
+                limit = int(query.get("limit", ["120"])[0])
+            except ValueError:
+                limit = 120
+            return self.send_json({"lines": tail_agent_logs(limit)})
+        if path == "/api/local/sync/status":
+            return self.send_json(sync_status())
+        if path == "/api/local/vouchers/redemptions":
+            if not self.require_local_token():
+                return
+            return self.send_json({"redemptions": offline_voucher_redemptions()})
         if path == "/api/devices":
             return self.send_json({"devices": [asdict(device) for device in detect_devices()]})
         if path == "/api/devices/camera/preview.jpg":
@@ -1558,6 +1835,8 @@ class ApiHandler(SimpleHTTPRequestHandler):
             return self.send_bytes(b"Sesi tidak ditemukan atau sudah kedaluwarsa", "text/plain; charset=utf-8", HTTPStatus.NOT_FOUND)
         if path in {"/booth", "/kiosk"}:
             self.path = "/booth.html"
+        elif path == "/local-agent":
+            self.path = "/local-agent.html"
         elif path == "/":
             self.path = "/index.html"
         return super().do_GET()
@@ -1580,6 +1859,58 @@ class ApiHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path in {"/api/local/agent/pause", "/api/local/agent/resume"}:
+            if not self.require_local_token():
+                return
+            return self.send_json({"control": set_agent_paused(path.endswith("pause")), "status": local_agent_status()})
+        if path == "/api/local/agent/restart":
+            if not self.require_local_token():
+                return
+            ok, message = restart_agent_service()
+            return self.send_json({"accepted": ok, "message": message}, HTTPStatus.ACCEPTED if ok else HTTPStatus.CONFLICT)
+        if path == "/api/local/agent/setup-code":
+            if not self.require_local_token():
+                return
+            try:
+                return self.send_json(create_agent_setup_code(), HTTPStatus.CREATED)
+            except ValueError as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+        if path == "/api/local/agent/diagnose":
+            if not self.require_local_token():
+                return
+            return self.send_json(diagnostics())
+        if path == "/api/local/devices/refresh":
+            if not self.require_local_token():
+                return
+            add_event("device", "Pendeteksian perangkat dijalankan dari Local Manager")
+            return self.send_json({"devices": [asdict(device) for device in detect_devices()]})
+        if path == "/api/local/storage/pick-folder":
+            if not self.require_local_token():
+                return
+            try:
+                return self.send_json(pick_local_folder())
+            except ValueError as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+        if path == "/api/local/vouchers/sync":
+            if not self.require_local_token():
+                return
+            try:
+                return self.send_json(sync_cloud_vouchers(self.read_json()))
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        if path == "/api/local/settings/sync":
+            if not self.require_local_token():
+                return
+            try:
+                payload = self.read_json()
+                incoming = payload.get("settings") if isinstance(payload, dict) else None
+                if not isinstance(incoming, dict):
+                    raise ValueError("Snapshot pengaturan cloud tidak valid")
+                updated = save_settings(incoming)
+                set_local_state("settings_version", str(max(0, int(payload.get("version") or 0))))
+                return self.send_json({"settings": updated, "version": int(payload.get("version") or 0)})
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         if path == "/api/devices/refresh":
             add_event("device", "Pendeteksian perangkat dijalankan")
             return self.send_json({"devices": [asdict(device) for device in detect_devices()]})

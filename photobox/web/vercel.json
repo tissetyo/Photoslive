@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["sin1"],
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
@@ -7,6 +8,7 @@
     { "source": "/superadmin", "destination": "/superadmin" },
     { "source": "/booth", "destination": "/booth" },
     { "source": "/:booth/admin", "destination": "/admin?booth=:booth" },
+    { "source": "/:booth/sesi/:session", "destination": "/session?booth=:booth&session=:session" },
     { "source": "/:booth/:session", "destination": "/session?booth=:booth&session=:session" },
     { "source": "/:booth", "destination": "/booth?booth=:booth" }
   ],

@@ -38,14 +38,25 @@ function publicMachine(machine) {
   if (!machine) return null;
   const safe = { ...machine };
   delete safe.agentTokenHash;
+  delete safe.commandKey;
   const lastSeen = safe.lastSeenAt ? Date.parse(safe.lastSeenAt) : 0;
   safe.online = Boolean(lastSeen && Date.now() - lastSeen < 90_000);
+  safe.agentState = safe.online ? (safe.agentState || "running") : "offline";
+  safe.controllerState = safe.online && safe.controller?.online ? "online" : "offline";
+  safe.desiredState ||= "running";
   return safe;
 }
 
 function persistentBoothCode(machine, preferred = "") {
   const clean = String(preferred || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
   return clean || machine.boothCode || `pl-${String(machine.id).replace(/^machine_/, "").slice(0, 8)}`;
+}
+
+async function commandSignature(secret, job) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const value = JSON.stringify({ id: job.id, machineId: job.machineId, type: job.type, payload: job.payload, expiresAt: job.expiresAt });
+  const bytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function createPairing(redis, payload) {
@@ -67,10 +78,15 @@ async function createPairing(redis, payload) {
     lastSeenAt: null,
     telemetry: {},
     devices: [],
+    agentState: "starting",
+    controllerState: "offline",
+    desiredState: "running",
+    update: { status: "idle" },
+    commandKey: randomId("command"),
   };
   await redis.set(machineKey(machineId), machine);
   await redis.set(`photoslive:pairing:${code}`, machineId, { ex: 900 });
-  return { machineId, agentToken, pairingCode: code, expiresInSeconds: 900 };
+  return { machineId, agentToken, commandKey: machine.commandKey, pairingCode: code, expiresInSeconds: 900 };
 }
 
 async function claimPairing(redis, payload) {
@@ -118,11 +134,58 @@ async function heartbeat(redis, request, payload) {
   machine.telemetry = payload.telemetry && typeof payload.telemetry === "object" ? payload.telemetry : {};
   machine.devices = Array.isArray(payload.devices) ? payload.devices.slice(0, 24) : [];
   machine.controller = payload.controller && typeof payload.controller === "object" ? payload.controller : {};
+  machine.agentState = payload.agentState === "paused" ? "paused" : "running";
+  machine.controllerState = machine.controller?.online ? "online" : "offline";
+  machine.desiredState ||= "running";
+  machine.update = payload.update && typeof payload.update === "object" ? payload.update : (machine.update || { status: "idle" });
+  machine.commandKey ||= randomId("command");
   machine.boothCode = persistentBoothCode(machine);
   await redis.set(machineKey(machine.id), machine);
   await redis.sadd("photoslive:machines", machine.id);
   if (machine.paired) await redis.set(boothKey(machine.boothCode), machine.id);
-  return json({ ok: true, paired: machine.paired, boothCode: machine.boothCode, serverTime: now() });
+  const voucherVersion = machine.paired ? Number(await redis.get(`photoslive:booth:${machine.boothCode}:voucher-version`) || 0) : 0;
+  const settingsVersion = machine.paired ? Number(await redis.get(`photoslive:booth:${machine.boothCode}:settings-version`) || 0) : 0;
+  return json({ ok: true, paired: machine.paired, boothCode: machine.boothCode, desiredState: machine.desiredState, commandKey: machine.commandKey, voucherVersion, settingsVersion, serverTime: now() });
+}
+
+async function settingsSnapshot(redis, request, payload) {
+  const machine = await authenticateAgent(redis, request, payload.machineId);
+  if (!machine?.paired) return json({ error: "Credential Agent tidak valid" }, 401);
+  const boothCode = persistentBoothCode(machine);
+  return json({
+    boothCode,
+    version: Number(await redis.get(`photoslive:booth:${boothCode}:settings-version`) || 0),
+    settings: await redis.get(`photoslive:booth:${boothCode}:settings`) || null,
+  });
+}
+
+async function voucherSnapshot(redis, request, payload) {
+  const machine = await authenticateAgent(redis, request, payload.machineId);
+  if (!machine?.paired) return json({ error: "Credential Agent tidak valid" }, 401);
+  const boothCode = persistentBoothCode(machine);
+  const codes = await redis.smembers(`photoslive:booth:${boothCode}:vouchers`);
+  const eventIds = await redis.smembers(`photoslive:booth:${boothCode}:voucher-events`);
+  const vouchers = (await Promise.all(codes.slice(0, 5000).map(code => redis.get(`photoslive:booth:${boothCode}:voucher:${code}`)))).filter(Boolean);
+  const events = (await Promise.all(eventIds.slice(0, 500).map(id => redis.get(`photoslive:booth:${boothCode}:voucher-event:${id}`)))).filter(Boolean);
+  return json({ boothCode, version: Number(await redis.get(`photoslive:booth:${boothCode}:voucher-version`) || 0), vouchers, events });
+}
+
+async function syncVoucherRedemptions(redis, request, payload) {
+  const machine = await authenticateAgent(redis, request, payload.machineId);
+  if (!machine?.paired) return json({ error: "Credential Agent tidak valid" }, 401);
+  const boothCode = persistentBoothCode(machine);
+  let updated = 0;
+  for (const item of (Array.isArray(payload.redemptions) ? payload.redemptions : []).slice(0, 500)) {
+    const code = String(item.code || "").toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 32);
+    const record = code ? await redis.get(`photoslive:booth:${boothCode}:voucher:${code}`) : null;
+    if (!record || record.redeemedAt) continue;
+    record.redeemedAt = item.redeemedAt || now();
+    record.redeemedOffline = true;
+    await redis.set(`photoslive:booth:${boothCode}:voucher:${code}`, record);
+    updated += 1;
+  }
+  if (updated) await redis.incr(`photoslive:booth:${boothCode}:voucher-version`);
+  return json({ updated });
 }
 
 async function enqueueJob(redis, payload) {
@@ -130,10 +193,21 @@ async function enqueueJob(redis, payload) {
   const machine = await redis.get(machineKey(machineId));
   if (!machine?.paired) return json({ error: "Mesin belum dipasangkan" }, 409);
   if (machine.accessEnabled === false) return json({ error: "Akses photobox dinonaktifkan oleh superadmin" }, 403);
+  const rateKey = `photoslive:machine:${machineId}:enqueue-rate:${Math.floor(Date.now() / 10_000)}`;
+  const requestCount = Number(await redis.incr(rateKey));
+  if (requestCount === 1) await redis.expire(rateKey, 15);
+  if (requestCount > 40) return json({ error: "Terlalu banyak perintah. Tunggu beberapa detik." }, 429);
   const allowed = new Set(["devices.refresh", "camera.test", "camera.capture", "printer.test", "printer.print", "storage.cleanup", "service.restart", "controller.request"]);
   const type = String(payload.type || "");
   if (!allowed.has(type)) return json({ error: "Jenis job tidak didukung" }, 400);
+  const idempotencyKey = String(payload.idempotencyKey || "").replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 120);
+  if (idempotencyKey) {
+    const existingId = await redis.get(`photoslive:machine:${machineId}:job-idempotency:${idempotencyKey}`);
+    const existing = existingId ? await redis.get(jobKey(existingId)) : null;
+    if (existing) return json({ job: existing, reused: true });
+  }
   const id = randomId("job");
+  const ttlSeconds = Math.max(30, Math.min(900, Number(payload.ttlSeconds || 120)));
   const job = {
     id,
     machineId,
@@ -143,8 +217,12 @@ async function enqueueJob(redis, payload) {
     createdAt: now(),
     updatedAt: now(),
     attempts: 0,
+    idempotencyKey: idempotencyKey || null,
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
   };
+  job.signature = await commandSignature(machine.commandKey || "", job);
   await redis.set(jobKey(id), job, { ex: 86_400 });
+  if (idempotencyKey) await redis.set(`photoslive:machine:${machineId}:job-idempotency:${idempotencyKey}`, id, { ex: ttlSeconds });
   await redis.rpush(queueKey(machineId), id);
   return json({ job }, 201);
 }
@@ -156,6 +234,13 @@ async function claimJob(redis, request, payload) {
   if (!id) return json({ job: null });
   const job = await redis.get(jobKey(id));
   if (!job) return json({ job: null });
+  if (job.expiresAt && Date.parse(job.expiresAt) <= Date.now()) {
+    job.status = "expired";
+    job.error = "Command kedaluwarsa sebelum dijalankan";
+    job.updatedAt = now();
+    await redis.set(jobKey(id), job, { ex: 86_400 });
+    return claimJob(redis, request, payload);
+  }
   job.status = "claimed";
   job.claimedAt = now();
   job.updatedAt = now();
@@ -198,6 +283,9 @@ async function handler(request) {
     if (action === "claim_pairing" && request.method === "POST") return claimPairing(redis, payload);
     if (action === "create_setup_code" && request.method === "POST") return createSetupCode(redis, request, payload);
     if (action === "heartbeat" && request.method === "POST") return heartbeat(redis, request, payload);
+    if (action === "settings_snapshot" && request.method === "POST") return settingsSnapshot(redis, request, payload);
+    if (action === "voucher_snapshot" && request.method === "POST") return voucherSnapshot(redis, request, payload);
+    if (action === "sync_voucher_redemptions" && request.method === "POST") return syncVoucherRedemptions(redis, request, payload);
     if (action === "machine_status" && request.method === "GET") return json({ machine: publicMachine(await redis.get(machineKey(String(payload.machineId || "")))) });
     if (action === "enqueue_job" && request.method === "POST") return enqueueJob(redis, payload);
     if (action === "claim_job" && request.method === "POST") return claimJob(redis, request, payload);

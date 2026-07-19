@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Photoslive Local Manager</title>
+  <link rel="icon" href="/icons/camera.svg">
+  <link rel="stylesheet" href="/local-agent.css">
+</head>
+<body>
+  <header class="local-topbar">
+    <a class="brand" href="/booth"><span><img src="/icons/camera.svg" alt=""></span><b>Photoslive</b></a>
+    <div class="top-actions">
+      <span class="connection-state" id="connection-state"><i></i><span>Memeriksa</span></span>
+      <button class="button secondary" id="refresh-status"><img src="/icons/refresh-cw.svg" alt="">Periksa</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div><p class="eyebrow">LOCAL MANAGER</p><h1>Mesin photobox</h1><p>Kontrol perangkat lokal. Menutup halaman ini tidak menghentikan Photoslive.</p></div>
+      <div class="hero-actions">
+        <a class="button secondary" id="open-admin" href="/"><img src="/icons/sliders-horizontal.svg" alt="">Buka admin</a>
+        <a class="button primary" href="/booth"><img src="/icons/monitor.svg" alt="">Buka booth</a>
+      </div>
+    </section>
+
+    <section class="status-grid" aria-label="Status utama">
+      <article class="status-card"><span><img src="/icons/activity.svg" alt=""></span><div><small>CONTROLLER</small><strong id="controller-value">Memeriksa</strong><p id="controller-detail">127.0.0.1:8080</p></div></article>
+      <article class="status-card"><span><img src="/icons/cloud.svg" alt=""></span><div><small>AGENT</small><strong id="agent-value">Memeriksa</strong><p id="agent-detail">Belum ada data</p></div></article>
+      <article class="status-card"><span><img src="/icons/wifi.svg" alt=""></span><div><small>SINKRONISASI</small><strong id="sync-value">Memeriksa</strong><p id="sync-detail">Antrean belum dibaca</p></div></article>
+      <article class="status-card"><span><img src="/icons/clock.svg" alt=""></span><div><small>UPTIME</small><strong id="uptime-value">—</strong><p id="version-detail">Versi belum tersedia</p></div></article>
+    </section>
+
+    <div class="content-grid">
+      <section class="panel">
+        <header><div><h2>Perangkat & penyimpanan</h2><p>Data diperbarui saat Anda menekan Periksa.</p></div><button class="icon-button" id="refresh-devices" aria-label="Periksa perangkat"><img src="/icons/refresh-cw.svg" alt=""></button></header>
+        <div class="device-grid">
+          <article><span><img src="/icons/camera.svg" alt=""></span><div><small>KAMERA</small><strong id="camera-value">Belum diperiksa</strong><p id="camera-detail">—</p></div></article>
+          <article><span><img src="/icons/printer.svg" alt=""></span><div><small>PRINTER</small><strong id="printer-value">Belum diperiksa</strong><p id="printer-detail">—</p></div></article>
+        </div>
+        <div class="storage-block">
+          <div><span><img src="/icons/folder-open.svg" alt=""></span><div><small>FOLDER FOTO</small><strong id="storage-path">Memuat…</strong></div></div>
+          <p id="storage-usage">Kapasitas belum tersedia</p>
+          <button class="button secondary" id="pick-folder"><img src="/icons/folder-open.svg" alt="">Pilih folder</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header><div><h2>Kontrol Agent</h2><p>Pause hanya menghentikan command cloud. Heartbeat tetap berjalan.</p></div></header>
+        <div class="control-list">
+          <button id="toggle-pause"><span><img src="/icons/power.svg" alt=""></span><div><b id="pause-label">Pause koneksi</b><small id="pause-help">Command cloud sementara tidak dijalankan</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+          <button id="restart-agent"><span><img src="/icons/rotate-cw.svg" alt=""></span><div><b>Restart Agent</b><small>Dijalankan oleh supervisor sistem operasi</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+          <button id="run-diagnosis"><span><img src="/icons/wrench.svg" alt=""></span><div><b>Diagnosis</b><small>Periksa service, perangkat, storage, dan antrean</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+          <button id="create-setup-code"><span><img src="/icons/ticket-check.svg" alt=""></span><div><b>Buat kode setup</b><small>Kode pairing baru berlaku selama 15 menit</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel logs-panel">
+      <header><div><h2>Log terbaru</h2><p>Token Agent tidak pernah ditampilkan.</p></div><button class="button secondary" id="refresh-logs"><img src="/icons/refresh-cw.svg" alt="">Muat ulang</button></header>
+      <pre id="agent-logs" aria-live="polite">Belum ada log.</pre>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/local-agent.js" defer></script>
+</body>
+</html>

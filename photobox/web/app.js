@@ -86,11 +86,20 @@ async function cloudDataApi(path, options = {}) {
       filename: Object.entries(options.headers || {}).find(([name]) => name.toLowerCase() === "x-filename")?.[1] || "asset.webp",
     };
   }
-  const response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(adminBoothCode)}&path=${encodeURIComponent(path)}`, {
-    method: String(options.method || "GET").toUpperCase(),
-    headers: { "Content-Type": "application/json" },
-    body: String(options.method || "GET").toUpperCase() === "GET" ? undefined : JSON.stringify({ data }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(options.timeoutMs || 10_000));
+  let response;
+  try {
+    response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(adminBoothCode)}&path=${encodeURIComponent(path)}`, {
+      method: String(options.method || "GET").toUpperCase(),
+      headers: { "Content-Type": "application/json" },
+      body: String(options.method || "GET").toUpperCase() === "GET" ? undefined : JSON.stringify({ data }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("Cloud tidak merespons dalam 10 detik. Perubahan belum tersimpan.");
+    throw error;
+  } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Cloud database gagal (${response.status})`);
   return payload;
@@ -109,15 +118,19 @@ async function directBridge(action, payload = {}, method = "POST") {
 }
 
 async function cloudControllerApi(path, options = {}) {
-  let machineId = localStorage.getItem("photoslive.machineId");
+  const routeMachineKey = `photoslive.machine.${adminBoothCode || "unknown"}`;
+  let cachedMachine;
+  try { cachedMachine = JSON.parse(localStorage.getItem(routeMachineKey) || "null"); } catch { cachedMachine = null; }
+  let machineId = cachedMachine?.savedAt > Date.now() - 60_000 ? cachedMachine.id : null;
   // A browser can administer more than one booth. Always resolve the machine
   // from the booth in the current URL so an old localStorage value never sends
   // settings, uploads, or device commands to a different photobox.
-  if (adminBoothCode) {
+  if (adminBoothCode && !machineId) {
     const response = await fetch(`/api/platform?action=resolve_booth&booth=${encodeURIComponent(adminBoothCode)}`);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Photobox tidak ditemukan");
     machineId = result.booth.machineId;
+    localStorage.setItem(routeMachineKey, JSON.stringify({ id: machineId, savedAt: Date.now() }));
     localStorage.setItem("photoslive.machineId", machineId);
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
   }
@@ -178,10 +191,13 @@ function showView(name) {
   if (name === "storage" && state.settings) loadStorageData(false);
   if (name === "agent") loadAgentStatus();
   if (name === "users") loadUsers();
+  if (name === "system") loadAuditLog();
 }
 
 async function platformApi(action, options = {}) {
-  const response = await fetch(`/api/platform?action=${encodeURIComponent(action)}`, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+  const query = options.query ? `&${new URLSearchParams(options.query)}` : "";
+  const { query: _query, ...fetchOptions } = options;
+  const response = await fetch(`/api/platform?action=${encodeURIComponent(action)}${query}`, { ...fetchOptions, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Request gagal (${response.status})`);
   return payload;
@@ -194,6 +210,15 @@ async function loadUsers() {
     $("#user-rows").innerHTML = users.map(user => `<tr><td>${escapeHtml(user.name)}</td><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.role)}</td><td><span class="device-state ${user.active ? "connected" : "attention"}">${user.active ? "AKTIF" : "NONAKTIF"}</span></td></tr>`).join("") || '<tr><td colspan="4">Belum ada pengguna.</td></tr>';
     $("#profile-name").value = me.user?.name || ""; $("#profile-email").value = me.user?.email || "";
   } catch (error) { toast(error.message, "error"); }
+}
+
+async function loadAuditLog() {
+  const rows = $("#audit-rows");
+  if (!rows) return;
+  try {
+    const { records } = await platformApi("audit", { query: { booth: adminBoothCode } });
+    rows.innerHTML = records.length ? records.map(record => `<tr><td>${new Date(record.createdAt).toLocaleString("id-ID")}</td><td><b>${escapeHtml(record.action)}</b></td><td>${escapeHtml(record.target || "—")}</td><td>${escapeHtml(record.actorRole || "system")}</td></tr>`).join("") : '<tr><td colspan="4">Belum ada perubahan tercatat.</td></tr>';
+  } catch (error) { rows.innerHTML = `<tr><td colspan="4">${escapeHtml(error.message)}</td></tr>`; }
 }
 
 const agentState = { machineId: localStorage.getItem("photoslive.machineId") || "", timer: null };
@@ -391,19 +416,24 @@ function frameTemplateMarkup(frameUrl, options = {}) {
 async function saveSettings() {
   if (!state.dirtySections.size) return toast("Tidak ada perubahan yang perlu disimpan");
   const sections = [...state.dirtySections];
+  const button = $("#save-button");
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.innerHTML = '<img src="/icons/refresh-cw.svg" alt="" />Menyimpan…';
   try {
     for (const section of sections) {
       await api(`/api/settings/${section}`, { method: "PATCH", body: JSON.stringify(state.settings[section]) });
-      if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
-        // Keep the local controller in sync when it is online, but never make
-        // cloud saving wait for Agent hardware polling.
-        cloudControllerApi(`/api/settings/${section}`, { method: "PATCH", body: JSON.stringify(state.settings[section]), timeoutMs: 5000 }).catch(() => {});
-      }
     }
     state.dirtySections.clear();
     toast("Pengaturan berhasil disimpan");
     updatePreview();
   } catch (error) { toast(`Gagal menyimpan: ${error.message}`, "error"); }
+  finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.innerHTML = original;
+  }
 }
 
 function updatePreview() {
@@ -979,26 +1009,36 @@ async function loadVouchers() {
 
 async function createVoucher() {
   const body = { code: $("#voucher-code").value.trim() };
+  const button = $("#submit-voucher");
+  button.disabled = true; button.setAttribute("aria-busy", "true");
   try { const { voucher } = await api("/api/vouchers", { method: "POST", body: JSON.stringify(body) }); $("#voucher-dialog").close(); await loadVouchers(); toast(`Voucher ${voucher.code} berhasil dibuat`); }
   catch (error) { toast(`Gagal membuat voucher: ${error.message}`, "error"); }
+  finally { button.disabled = false; button.removeAttribute("aria-busy"); }
 }
 
 async function generateVouchers(eventId = null) {
+  const button = eventId ? $(`[data-generate-event="${CSS.escape(eventId)}"]`) : $("#generate-vouchers");
+  const original = button?.innerHTML;
+  if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); button.innerHTML = '<img src="/icons/refresh-cw.svg" alt="" />Membuat…'; }
   try {
     const result = await api("/api/vouchers/generate", { method: "POST", body: JSON.stringify({ count: 100, eventId }) });
     await loadVouchers();
     toast(`${result.created} voucher baru ditambahkan${eventId ? " ke event" : ""}`);
   } catch (error) { toast(`Gagal membuat voucher: ${error.message}`, "error"); }
+  finally { if (button) { button.disabled = false; button.removeAttribute("aria-busy"); button.innerHTML = original; } }
 }
 
 async function createVoucherEvent() {
   const body = { name: $("#voucher-event-name").value.trim(), expiresAt: $("#voucher-event-expiry").value, includesPrint: $("#voucher-event-print").checked };
+  const button = $("#submit-voucher-event");
+  button.disabled = true; button.setAttribute("aria-busy", "true");
   try {
     const { event } = await api("/api/voucher-events", { method: "POST", body: JSON.stringify(body) });
     $("#voucher-event-dialog").close();
     await loadVouchers();
     toast(`Event ${event.name} dibuat. Tekan Generate 100 untuk menambahkan kode.`);
   } catch (error) { toast(`Gagal membuat event: ${error.message}`, "error"); }
+  finally { button.disabled = false; button.removeAttribute("aria-busy"); }
 }
 
 async function printVouchers(eventId = null) {
@@ -1102,6 +1142,7 @@ function bindEvents() {
   $("#save-button").addEventListener("click", saveSettings);
   $("#pick-storage-folder").addEventListener("click", pickStorageFolder);
   $("#refresh-button").addEventListener("click", () => refreshStatus(true));
+  $("#refresh-audit").addEventListener("click", loadAuditLog);
   $("#add-background").addEventListener("click", () => chooseAsset("background"));
   $("#add-frame").addEventListener("click", () => chooseAsset("frame"));
   $("#add-logo").addEventListener("click", () => chooseAsset("logo"));

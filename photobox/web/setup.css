@@ -486,3 +486,36 @@
   .setup-frame-crop-stage { min-height: 400px; }
   #setup-frame-upload-preview { height: 340px; }
 }
+
+/* Operator-facing type and controls stay readable on small touchscreens. */
+.setup-step { animation: none; }
+.auth-head p,
+.setup-step,
+.setup-step label,
+.device-onboarding-grid select,
+.device-onboarding-grid .device-test,
+.starter-frame b,
+.agent-platform-switch button,
+.installer-links button { font-size: 14px; }
+.wizard-progress b,
+.machine-summary b,
+.device-onboarding-grid article small,
+.starter-frame small,
+.inline-status,
+.setup-storage-field small,
+.required-note,
+.ready-copy p,
+.ready-checklist b,
+.ready-checklist small,
+.install-steps b,
+.install-steps p,
+.command-label,
+.platform-hint,
+.existing-agent summary,
+.tablet-capability b,
+.tablet-capability p,
+.tablet-limit p { font-size: 12px; }
+.device-onboarding-grid select,
+.device-onboarding-grid .device-test,
+.agent-platform-switch button,
+.installer-links button { min-height: 44px; }
