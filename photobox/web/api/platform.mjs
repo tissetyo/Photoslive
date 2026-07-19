@@ -316,6 +316,11 @@ async function superadminLogin(redis, payload) {
   return json({ user: { email, role: "superadmin" } }, 200, { "set-cookie": sessionCookie(token) });
 }
 
+async function superadminSession(redis, request) {
+  const auth = await readSession(redis, request);
+  return json({ authenticated: auth?.role === "superadmin" });
+}
+
 async function currentUser(redis, request) {
   const auth = await authenticate(redis, request);
   if (!auth) return json({ user: null }, 401);
@@ -672,6 +677,7 @@ async function handler(request) {
     if (action === "setup" && request.method === "POST") return setupBooth(redis, payload);
     if (action === "login" && request.method === "POST") return login(redis, payload);
     if (action === "superadmin_login" && request.method === "POST") return superadminLogin(redis, payload);
+    if (action === "superadmin_session" && request.method === "GET") return superadminSession(redis, request);
     if (action === "me" && request.method === "GET") return currentUser(redis, request);
     if (action === "users" && request.method === "GET") return listUsers(redis, request);
     if (action === "users" && request.method === "POST") return addUser(redis, request, payload);
