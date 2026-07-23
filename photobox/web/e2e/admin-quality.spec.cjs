@@ -75,7 +75,6 @@ test.describe("persistence pengaturan admin", () => {
   test("seluruh kontrol setting aktif tetap sama setelah reload", async ({ page }) => {
     await openLocalAdmin(page);
     await expect(page.locator('[data-setting="booth.countdownSeconds"]')).toBeVisible();
-    await expect(page.locator("#save-button")).toBeEnabled();
     const expected = await page.evaluate(() => {
       const values = {};
       const seen = new Set();
@@ -121,6 +120,7 @@ test.describe("persistence pengaturan admin", () => {
     });
 
     expect(Object.keys(expected).length).toBeGreaterThan(20);
+    await expect(page.locator("#save-button")).toBeEnabled();
     await page.locator("#save-button").click();
     await expect(page.locator("#notice-message")).toContainText("berhasil disimpan");
     await page.reload();

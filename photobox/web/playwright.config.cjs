@@ -11,6 +11,7 @@ module.exports = defineConfig({
   testDir: "./e2e",
   outputDir: "./output/playwright",
   timeout: 45_000,
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}",
   expect: { timeout: 8_000 },
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),

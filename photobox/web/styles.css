@@ -714,6 +714,10 @@ dialog .dialog-switch { min-height: 66px; padding: var(--space-2) 0; }
   .storage-kpi-grid, .admin-kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .dashboard-grid { grid-template-columns: 1fr 1fr; }
   .dashboard-grid .span-2 { grid-column: 1 / -1; }
+  .topbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+  .top-actions { width: 100%; max-width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .top-actions .button { min-width: 0; padding-inline: var(--space-3); }
+  .sync-state { display: none; }
   .workspace-grid { grid-template-columns: 1fr; }
   .preview-card { display: none; }
   .color-config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
