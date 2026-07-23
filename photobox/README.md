@@ -1,17 +1,28 @@
 # Photoslive local control
 
-Dashboard admin ringan untuk mini PC Linux. Runtime hanya membutuhkan Python 3
-standard library; tidak menggunakan Electron, Docker, atau framework frontend.
+Dashboard admin ringan untuk mini PC Linux. Controller memakai Python 3 dan
+Python 3.10+ dan Pillow pada virtual environment terisolasi untuk membuat hasil frame/lembar
+cetak; tidak menggunakan Electron, Docker, atau framework frontend berat.
 
 ## Menjalankan
 
 ```bash
-python3 photobox/server.py
+python3 -m venv .venv
+.venv/bin/pip install -r photobox/requirements-controller.txt
+.venv/bin/python photobox/server.py
 ```
 
 Buka layar pelanggan di `http://127.0.0.1:8080/booth` dan Local Manager di
 `http://127.0.0.1:8080/local-agent`. Admin cloud tetap dapat dibuka dari
 komputer lain melalui `/{boothCode}/admin`.
+
+Local Manager juga dapat membuat QR pairing tablet companion pada jaringan
+lokal. Listener companion terpisah dan hanya membuka endpoint pairing/status/
+tes; panduan serta batas browsernya ada di
+[`docs/TABLET-COMPANION.md`](docs/TABLET-COMPANION.md).
+
+Lifecycle update Agent dan rollback lokal dijelaskan di
+[`docs/AGENT-UPDATES.md`](docs/AGENT-UPDATES.md).
 
 ## Integrasi Linux
 
@@ -45,11 +56,28 @@ Jika utilitas belum tersedia, dashboard tetap berjalan dan menampilkan status
   capture/retake, dan hasil/cetak dengan timer sesi 2:30 serta goodbye 15 detik
   yang dapat dilewati. Tombol Welcome membuka access gate full-screen berdasarkan
   metode QRIS/voucher yang diaktifkan admin.
+- Controller membuat `result-frame.jpg` dan `result-print-sheet.jpg` secara
+  deterministik dari foto final serta snapshot konfigurasi frame. Metadata dan
+  checksum keduanya disimpan di SQLite; hanya hasil pelanggan yang masuk antrean
+  upload cloud.
+- Antrean print berjalan pada worker terpisah. Booth tidak menunggu CUPS, file
+  siap cetak tetap aman bila printer offline, dan job gagal dapat dicoba ulang.
+- Paket Agent dibangun dengan allowlist melalui
+  `scripts/build-agent-archive.sh`; `.env`, config mesin, database, dan file
+  pengembangan tidak boleh masuk archive installer.
+- Link hasil pelanggan berakhir maksimal 24 jam. Cleanup cloud fisik memakai
+  cron terautentikasi dan pelanggan dapat meminta penghapusan lebih awal;
+  salinan lokal dihapus melalui job Agent yang tahan offline hingga tujuh hari.
+  Lihat `docs/CLOUD-RETENTION.md` untuk `CRON_SECRET` dan failure mode.
+- Quality CI mencakup dependency audit npm/Python dan full-history secret scan;
+  aturan operasionalnya ada di `docs/SUPPLY-CHAIN-SECURITY.md`.
 
-Endpoint capture kamera sudah tersedia, tetapi kualitas, resolusi, dan kestabilan
-tetap perlu divalidasi memakai perangkat fisik yang akan dipasang. Integrasi QRIS
-provider, upload R2/Drive, dan print file asli masih memerlukan credential serta
-perangkat fisik untuk validasi.
+Endpoint capture, compositor, dan pengiriman file asli ke CUPS sudah tersedia,
+tetapi kualitas, resolusi, kestabilan kamera, margin, serta hasil printer tetap
+perlu divalidasi memakai perangkat fisik yang akan dipasang. Integrasi QRIS
+masih memerlukan provider production. Adapter R2/S3 sudah memiliki upload
+langsung bertanda tangan, tetapi tetap memerlukan credential, bucket, lifecycle,
+dan acceptance test terhadap provider production sebelum dinyatakan siap.
 
 ## Kontrak aplikasi photobox
 
@@ -83,9 +111,35 @@ cloud atau langsung melalui `/downloads/install-linux.sh`,
 
 - [Arsitektur dan recovery](docs/LOCAL-FIRST-ARCHITECTURE.md)
 - [Kontrak seluruh kontrol interaktif](docs/INTERACTION-CONTRACT.md)
+- [Inventaris Redis, SQLite, filesystem, browser cache, dan Base64](docs/DATA-INVENTORY.md)
+- [Matriks status capability dan gate produksi](docs/PRODUCT-CAPABILITY-MATRIX.md)
 - [Status implementasi dan pilot blocker](docs/IMPLEMENTATION-STATUS.md)
+- [Konfigurasi dan batas object storage](docs/OBJECT-STORAGE.md)
+- [Feature flags dan prosedur rollback](docs/FEATURE-FLAGS.md)
+- [Prosedur release dan rollback lintas komponen](docs/RELEASE-ROLLBACK.md)
+- [Benchmark dan kontrak kompatibilitas hardware](docs/PERFORMANCE-HARDWARE-BASELINE.md)
+- [Matriks capability Linux, Windows, macOS, iPad, dan Android](docs/HARDWARE-COMPATIBILITY.md)
+- [Pairing dan batas tablet companion](docs/TABLET-COMPANION.md)
+- [Known limitations build saat ini](docs/KNOWN-LIMITATIONS.md)
+- [Backup dan restore database lokal](docs/LOCAL-BACKUP-RESTORE.md)
+- [Metrik dan observability lokal yang bounded](docs/LOCAL-OBSERVABILITY.md)
+- [Fleet health dan incident timeline superadmin](docs/FLEET-HEALTH-INCIDENTS.md)
+- [Health backend superadmin](docs/BACKEND-HEALTH.md)
+- [Public status page dan projection aman](docs/PUBLIC-STATUS-PAGE.md)
+- [Permission matrix control-plane superadmin](docs/PLATFORM-RBAC.md)
+- [Threat model dan security gate](docs/THREAT-MODEL.md)
+- [Prosedur respons insiden produksi](docs/INCIDENT-RESPONSE.md)
+- [Keamanan link hasil pelanggan](docs/CUSTOMER-DOWNLOAD-SECURITY.md)
+- [Redaksi log dan diagnosis](docs/LOG-REDACTION.md)
+- [Rate limiting autentikasi dan setup](docs/RATE-LIMITING.md)
+- [Proteksi CSRF Cloud Platform](docs/CSRF-PROTECTION.md)
+- [Proteksi pengambilalihan pairing](docs/PAIRING-TAKEOVER-PROTECTION.md)
+- [Persetujuan pemrosesan foto](docs/PHOTO-CONSENT.md)
+- [Monitoring dan retry antrean remote superadmin](docs/REMOTE-JOB-QUEUE.md)
+- [Payout manual, maker-checker, bukti, ledger, dan recovery](docs/PAYOUTS.md)
+- [Target RPO/RTO dan gap disaster recovery](docs/DISASTER-RECOVERY-SLO.md)
 
 Script installer yang ada cocok untuk pilot/teknisi. Paket signed `.exe`,
-notarized `.pkg`, `.deb`, passkey, QRIS production, GIF final, dan soak test 72
+notarized `.pkg`, `.deb`, passkey, QRIS production, acceptance GIF di mini PC, dan soak test 72
 jam belum boleh diklaim production-ready; statusnya dicatat eksplisit agar UI
 tidak menampilkan kontrol palsu.

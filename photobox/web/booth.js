@@ -4,7 +4,7 @@ const wait = milliseconds => new Promise(resolve => setTimeout(resolve, millisec
 const routeParts = location.pathname.split("/").filter(Boolean);
 const routeBoothCode = new URLSearchParams(location.search).get("booth") || (routeParts[0] && !["booth","setup","superadmin"].includes(routeParts[0]) ? routeParts[0] : "");
 const boothConfigCacheKey = () => `photoslive.boothConfig.${routeBoothCode || "local"}`;
-const pendingSyncKey = () => `photoslive.pendingSessionSync.${routeBoothCode || "local"}`;
+const boothSessionRecoveryKey = () => `photoslive.activeSession.${routeBoothCode || "local"}`;
 
 const boothState = {
   config: null,
@@ -23,9 +23,15 @@ const boothState = {
   goodbyeTimer: null,
   expired: false,
   framePage: 0,
+  frameQuery: "",
   accessMethod: null,
   printIncluded: false,
   voucherCode: "",
+  cloudOnline: false,
+  pendingConfig: null,
+  consent: null,
+  paymentPollTimer: null,
+  paymentPollToken: 0,
 };
 
 const BUILTIN_BACKGROUNDS = {
@@ -58,13 +64,27 @@ async function boothApi(path, options = {}) {
 
 function isBoothCloudDataPath(path) {
   const pathname = String(path).split("?")[0];
-  return pathname === "/api/booth/config" || pathname === "/api/booth/client" || pathname === "/api/vouchers/redeem";
+  return pathname === "/api/booth/config"
+    || pathname === "/api/booth/client"
+    || pathname === "/api/booth/qris"
+    || /^\/api\/booth\/payments\/[^/]+$/.test(pathname)
+    || pathname === "/api/vouchers/redeem";
+}
+
+function boothClientId() {
+  let clientId = localStorage.getItem("photoslive-client-id");
+  if (!clientId) {
+    clientId = `client-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+    localStorage.setItem("photoslive-client-id", clientId);
+  }
+  return clientId;
 }
 
 async function boothCloudDataApi(path, options = {}) {
   let data = {};
   if (typeof options.body === "string" && options.body) data = JSON.parse(options.body);
   const method = String(options.method || "GET").toUpperCase();
+  const idempotencyKey = method === "GET" ? "" : String(options.idempotencyKey || crypto.randomUUID());
   const clientId = Object.entries(options.headers || {}).find(([name]) => name.toLowerCase() === "x-client-id")?.[1] || "";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number(options.timeoutMs || 8000));
@@ -72,7 +92,7 @@ async function boothCloudDataApi(path, options = {}) {
   try {
     response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(routeBoothCode)}&path=${encodeURIComponent(path)}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
     body: method === "GET" ? undefined : JSON.stringify({ data, clientId }),
       signal: controller.signal,
     });
@@ -139,12 +159,119 @@ function boothBinaryUrl(result) {
   return URL.createObjectURL(new Blob([bytes], { type: result.contentType || "application/octet-stream" }));
 }
 
+async function recoverableFileUrl(file) {
+  const url = file?.url || (file?.id ? `/api/session-files/${file.id}` : "");
+  if (!url) return "";
+  if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return url;
+  return boothBinaryUrl(await boothApi(url));
+}
+
+function rememberSession(session) {
+  if (!session?.shareToken) return;
+  localStorage.setItem(boothSessionRecoveryKey(), JSON.stringify({ shareToken: session.shareToken, savedAt: Date.now() }));
+}
+
+async function recoverPersistedSession() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(boothSessionRecoveryKey()) || "null"); }
+  catch { localStorage.removeItem(boothSessionRecoveryKey()); return false; }
+  if (!saved?.shareToken) return false;
+  const { session } = await boothApi(`/api/sessions/${encodeURIComponent(saved.shareToken)}`);
+  if (!session || !["active", "completed"].includes(session.status)) {
+    localStorage.removeItem(boothSessionRecoveryKey());
+    return false;
+  }
+  if (session.status === "active" && new Date(session.deadlineAt).getTime() <= Date.now()) {
+    localStorage.removeItem(boothSessionRecoveryKey());
+    return false;
+  }
+
+  boothState.session = { ...session, shareToken: saved.shareToken };
+  boothState.selectedFrame = boothState.frames.find(frame => frame.url === session.frameId) || boothState.selectedFrame || boothState.frames[0];
+  boothState.photos = {};
+  const selectedCaptures = (session.files || []).filter(file => file.kind === "capture" && file.selected);
+  for (const file of selectedCaptures) {
+    boothState.photos[file.slotIndex] = { ...file, url: await recoverableFileUrl(file) };
+  }
+
+  if (session.status === "completed") {
+    const composite = (session.files || []).find(file => file.kind === "composite");
+    showResult(composite ? await recoverableFileUrl(composite) : "");
+    notice("Sesi terakhir dipulihkan dari penyimpanan lokal.", "success");
+    return true;
+  }
+
+  const pending = (session.slots || []).find(slot => !slot.selectedFileId);
+  if (!pending) {
+    const completed = await boothApi(`/api/sessions/${session.id}/complete`, { method: "POST", body: "{}" });
+    const composite = completed.session?.outputs?.composite?.url;
+    showResult(composite ? await recoverableFileUrl({ url: composite }) : "");
+    notice("Sesi dipulihkan dan hasil akhir diselesaikan.", "success");
+    return true;
+  }
+  boothState.currentSlot = pending.index;
+  boothState.currentPhoto = null;
+  boothState.expired = false;
+  setScreen("capture");
+  $(".capture-screen").classList.add("is-waiting");
+  $("#capture-ready-overlay").hidden = false;
+  renderSlotStrip();
+  startSessionTimer();
+  startCameraPreview();
+  notice(`Sesi dipulihkan. Lanjutkan dari foto ${pending.index}.`, "success");
+  return true;
+}
+
+const localControllerAvailable = () => ["127.0.0.1", "localhost"].includes(location.hostname);
+let localRecoveryRequestActive = false;
+
+async function discoverLocalRecoverableSession() {
+  if (!localControllerAvailable() || localRecoveryRequestActive || $("#booth-app")?.dataset.screen !== "welcome") return false;
+  localRecoveryRequestActive = true;
+  try {
+    const { session } = await boothApi("/api/booth/recovery", { timeoutMs: 2500 });
+    if (!session?.shareToken) return false;
+    rememberSession(session);
+    return recoverPersistedSession();
+  } finally { localRecoveryRequestActive = false; }
+}
+
+function startLocalRecoveryWatcher() {
+  if (!localControllerAvailable() || startLocalRecoveryWatcher.timer) return;
+  startLocalRecoveryWatcher.timer = setInterval(() => discoverLocalRecoverableSession().catch(() => false), 5000);
+}
+
 function notice(message, kind = "default") {
   const element = $("#booth-notice");
   element.textContent = message;
   element.className = `booth-notice show ${kind}`;
   clearTimeout(notice.timer);
   notice.timer = setTimeout(() => { element.className = "booth-notice"; }, 3600);
+}
+
+function setWelcomeButtonState(state) {
+  const button = $("#welcome-start");
+  const label = $("#welcome-button-label");
+  const configuredLabel = boothState.config?.appearance?.startButtonLabel || "Mulai foto";
+  const states = {
+    loading: { disabled: true, busy: true, label: "Menyiapkan photobox…" },
+    ready: { disabled: false, busy: false, label: configuredLabel },
+    retry: { disabled: false, busy: false, label: "Coba hubungkan lagi" },
+    maintenance: { disabled: true, busy: false, label: "Sedang dalam perawatan" },
+  };
+  const next = states[state] || states.ready;
+  button.disabled = next.disabled;
+  button.setAttribute("aria-busy", String(next.busy));
+  label.textContent = next.label;
+}
+
+function configReportsCloudOnline(config) {
+  const loopback = location.hostname === "127.0.0.1" || location.hostname === "localhost";
+  return loopback ? Boolean(config?.offlinePolicy?.online) : true;
+}
+
+function cacheBoothConfig(config) {
+  localStorage.setItem(boothConfigCacheKey(), JSON.stringify({ value: config, savedAt: Date.now() }));
 }
 
 function setScreen(name) {
@@ -215,10 +342,20 @@ function renderFrames() {
   const list = $("#frame-list");
   list.innerHTML = "";
   const pageSize = framePageSize();
-  const pageCount = Math.max(1, Math.ceil(boothState.frames.length / pageSize));
+  const query = boothState.frameQuery.trim().toLocaleLowerCase("id-ID");
+  const filteredFrames = query
+    ? boothState.frames.filter(frame => frameDisplayName(frame).toLocaleLowerCase("id-ID").includes(query))
+    : boothState.frames;
+  const pageCount = Math.max(1, Math.ceil(filteredFrames.length / pageSize));
   boothState.framePage = Math.max(0, Math.min(boothState.framePage, pageCount - 1));
-  const visibleFrames = boothState.frames.slice(boothState.framePage * pageSize, (boothState.framePage + 1) * pageSize);
+  const visibleFrames = filteredFrames.slice(boothState.framePage * pageSize, (boothState.framePage + 1) * pageSize);
   list.style.setProperty("--frame-page-size", pageSize);
+  if (!visibleFrames.length) {
+    const empty = document.createElement("div");
+    empty.className = "frame-empty";
+    empty.innerHTML = '<img src="/icons/images.svg" alt="" /><b>Frame tidak ditemukan</b><span>Coba kata kunci lain.</span>';
+    list.append(empty);
+  }
   visibleFrames.forEach(frame => {
     const button = document.createElement("button");
     button.type = "button";
@@ -233,8 +370,8 @@ function renderFrames() {
     thumb.append(slots, check); button.append(thumb, title, meta); list.append(button);
   });
   $("#frame-page-count").textContent = `${boothState.framePage + 1} dari ${pageCount}`;
-  $("#frame-page-prev").disabled = boothState.framePage === 0;
-  $("#frame-page-next").disabled = boothState.framePage >= pageCount - 1;
+  $("#frame-page-prev").disabled = !filteredFrames.length || boothState.framePage === 0;
+  $("#frame-page-next").disabled = !filteredFrames.length || boothState.framePage >= pageCount - 1;
   updateFrameSelection();
 }
 
@@ -296,8 +433,7 @@ async function pollControllerPreview() {
 }
 
 async function reportClientCapabilities(cameraLabels = []) {
-  let clientId = localStorage.getItem("photoslive-client-id");
-  if (!clientId) { clientId = `client-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`; localStorage.setItem("photoslive-client-id", clientId); }
+  const clientId = boothClientId();
   const payload = {
     platform: navigator.userAgentData?.platform || navigator.platform || "Unknown",
     userAgent: navigator.userAgent,
@@ -313,9 +449,10 @@ async function startBrowserCamera() {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("Browser ini tidak menyediakan akses kamera");
   if (!boothState.cameraStream) {
     const configuredId = boothState.config?.devices?.browserCameraId;
+    const preferredFacingMode = localStorage.getItem("photoslive.tabletCameraFacingMode") === "environment" ? "environment" : "user";
     const video = configuredId
       ? { deviceId: { exact: configuredId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-      : { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } };
+      : { facingMode: { ideal: preferredFacingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } };
     boothState.cameraStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
   }
   const videos = [$("#frame-camera-video"), $("#capture-camera-video")];
@@ -396,13 +533,8 @@ function renderSlotStrip() {
 async function createSession() {
   try {
     $("#frame-continue").disabled = true;
-    const { session } = await boothApi("/api/booth/sessions", { method: "POST", body: JSON.stringify({ frameId: boothState.selectedFrame.url }) });
-    boothState.session = session; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false;
-    const boothCode = routeBoothCode || localStorage.getItem("photoslive.boothCode");
-    if (boothCode && session.shareToken) {
-      fetch("/api/platform?action=register_session", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${boothState.config?.bridgeToken || ""}` }, body: JSON.stringify({ boothCode, machineId: localStorage.getItem("photoslive.machineId"), shareCode: session.shareToken, localSessionId: session.id, status: session.status, frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }) }).catch(() => {});
-      history.replaceState(null, "", `/${boothCode}/sesi/${session.shareToken}`);
-    }
+    const { session } = await boothApi("/api/booth/sessions", { method: "POST", body: JSON.stringify({ frameId: boothState.selectedFrame.url, consent: boothState.consent }) });
+    boothState.session = session; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false; rememberSession(session);
     setScreen("capture"); $(".capture-screen").classList.add("is-waiting"); $("#capture-ready-overlay").hidden = false;
     $("#camera-start").firstChild.textContent = "Ketuk untuk mulai ";
     renderSlotStrip(); startSessionTimer(); startCameraPreview();
@@ -458,94 +590,108 @@ async function acceptCurrentPhoto() {
       $("#capture-instruction b").textContent = `Bersiap untuk foto ${boothState.currentSlot}`; $("#capture-instruction small").textContent = "Hitung mundur berikutnya akan dimulai.";
       await wait(450); runShotCountdown();
     } else {
-      await boothApi(`/api/sessions/${boothState.session.id}/complete`, { method: "POST", body: "{}" });
-      showResult();
-      syncCompletedSession().catch(error => notice(`Foto aman di mesin, tetapi upload cloud tertunda: ${error.message}`, "error"));
+      const completed = await boothApi(`/api/sessions/${boothState.session.id}/complete`, { method: "POST", body: "{}" });
+      const outputUrl = completed.session?.outputs?.composite?.url;
+      let compositeUrl = outputUrl || "";
+      if (outputUrl && location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
+        compositeUrl = boothBinaryUrl(await boothApi(outputUrl));
+      }
+      showResult(compositeUrl);
+      notice("Foto aman di mesin. Upload cloud berjalan otomatis di latar belakang.", "success");
     }
   } catch (error) { notice(error.message, "error"); }
 }
 
-async function sessionPhotoBlob(file) {
-  if (location.hostname === "127.0.0.1" || location.hostname === "localhost") {
-    const response = await fetch(file.url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Foto ${file.slotIndex || ""} tidak dapat dibaca`);
-    return response.blob();
-  }
-  const result = await boothCloudControllerApi(file.url, { timeoutMs: 12_000 });
-  if (!result?.bodyBase64) throw new Error("Agent tidak mengirim file foto");
-  const bytes = Uint8Array.from(atob(result.bodyBase64), character => character.charCodeAt(0));
-  return new Blob([bytes], { type: result.contentType || "image/jpeg" });
-}
 
-async function syncCompletedSession() {
-  const boothCode = routeBoothCode || localStorage.getItem("photoslive.boothCode");
-  if (!boothCode || !boothState.session?.shareToken) return;
-  const record = {
-    boothCode,
-    machineId: localStorage.getItem("photoslive.machineId"),
-    session: boothState.session,
-    files: Object.entries(boothState.photos).map(([slotIndex, file]) => ({ ...file, slotIndex: Number(slotIndex) })),
-  };
-  const pending = JSON.parse(localStorage.getItem(pendingSyncKey()) || "[]").filter(item => item.session?.shareToken !== record.session.shareToken);
-  pending.push(record);
-  localStorage.setItem(pendingSyncKey(), JSON.stringify(pending.slice(-20)));
-  await syncSessionRecord(record);
-  localStorage.setItem(pendingSyncKey(), JSON.stringify(pending.filter(item => item.session?.shareToken !== record.session.shareToken)));
-}
-
-async function syncSessionRecord(record) {
-  const { boothCode, machineId, session, files } = record;
-  const metadataResponse = await fetch("/api/platform?action=register_session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${boothState.config?.bridgeToken || ""}` },
-    body: JSON.stringify({ boothCode, machineId, shareCode: session.shareToken, localSessionId: session.id, status: "completed", frameId: session.frameId, photoSlots: session.rules.photoSlots, createdAt: session.createdAt, expiresAt: session.expiresAt }),
-  });
-  if (!metadataResponse.ok) throw new Error((await metadataResponse.json().catch(() => ({}))).error || "Metadata sesi gagal disimpan");
-  for (const file of files.sort((a, b) => a.slotIndex - b.slotIndex)) {
-    const blob = await sessionPhotoBlob(file);
-    if (blob.size > 1_800_000) throw new Error(`Foto ${file.slotIndex} terlalu besar untuk upload cloud`);
-    const response = await fetch("/api/platform?action=upload_session_file", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${boothState.config?.bridgeToken || ""}` },
-      body: JSON.stringify({ boothCode, machineId, shareCode: session.shareToken, slotIndex: Number(file.slotIndex), contentType: blob.type || "image/jpeg", bodyBase64: await boothBlobToBase64(blob), status: "completed" }),
-    });
-    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Upload foto ${file.slotIndex} gagal`);
-  }
-}
-
-async function flushPendingSessionSync() {
-  const pending = JSON.parse(localStorage.getItem(pendingSyncKey()) || "[]");
-  if (!pending.length) return;
-  const remaining = [];
-  for (const record of pending) {
-    try { await syncSessionRecord(record); }
-    catch { remaining.push(record); }
-  }
-  localStorage.setItem(pendingSyncKey(), JSON.stringify(remaining.slice(-20)));
-}
-
-function showResult() {
+function showResult(compositeUrl = "") {
   stopCameraPreview(); setScreen("result");
   const frame = boothState.selectedFrame; const finalFrame = $("#final-frame"); finalFrame.style.backgroundImage = frameBackground(frame);
   const slots = $("#final-slots"); slots.innerHTML = ""; slots.style.gridTemplateRows = `repeat(${boothState.session.rules.photoSlots},1fr)`;
-  Object.keys(boothState.photos).sort((a,b) => a-b).forEach(index => { const image = document.createElement("img"); image.src = boothState.photos[index].url; image.alt = `Foto final ${index}`; slots.append(image); });
+  finalFrame.classList.toggle("has-rendered-output", Boolean(compositeUrl));
+  if (compositeUrl) {
+    finalFrame.style.backgroundImage = "none";
+    slots.style.gridTemplateRows = "1fr";
+    const image = document.createElement("img"); image.className = "rendered-output"; image.src = compositeUrl; image.alt = "Hasil foto dengan frame"; slots.append(image);
+  } else {
+    Object.keys(boothState.photos).sort((a,b) => a-b).forEach(index => { const image = document.createElement("img"); image.src = boothState.photos[index].url; image.alt = `Foto final ${index}`; slots.append(image); });
+  }
   $("#result-frame-name").textContent = frame.name.replace(/^\d+-/, "");
   $("#print-result").hidden = Number(boothState.config.booth.printsPerSession || 0) < 1;
 }
 
 function enterFrameSelection() {
+  stopPaymentPolling();
   setScreen("frames");
   $("#session-countdown").textContent = formatTimer(boothState.config.booth.sessionTimeoutSeconds);
   startCameraPreview();
 }
 
+function stopPaymentPolling() {
+  boothState.paymentPollToken += 1;
+  clearTimeout(boothState.paymentPollTimer);
+  boothState.paymentPollTimer = null;
+}
+
+function paymentFailureMessage(payment) {
+  if (payment.status === "expired") return "QRIS sudah kedaluwarsa. Tutup lalu mulai lagi untuk membuat QR baru.";
+  if (payment.status === "failed") return "Pembayaran gagal diproses. Silakan coba lagi.";
+  if (payment.status === "refunded" || payment.status === "chargeback") return "Pembayaran tidak dapat digunakan. Hubungi operator.";
+  return "Status pembayaran belum dapat dilanjutkan.";
+}
+
+function pollQrisPayment(payment, { dialog, errorContainer, errorMessage, onPaid }) {
+  stopPaymentPolling();
+  const token = boothState.paymentPollToken;
+  const poll = async () => {
+    if (token !== boothState.paymentPollToken || !dialog.open) return;
+    try {
+      const result = await boothApi(`/api/booth/payments/${encodeURIComponent(payment.id)}`, {
+        headers: { "X-Client-Id": boothClientId() },
+        timeoutMs: 6000,
+      });
+      const current = result.payment;
+      if (["paid", "settled"].includes(current?.status)) {
+        stopPaymentPolling();
+        await onPaid(current);
+        return;
+      }
+      if (["expired", "failed", "refunded", "chargeback"].includes(current?.status)) {
+        stopPaymentPolling();
+        errorContainer.hidden = false;
+        errorMessage.textContent = paymentFailureMessage(current);
+        return;
+      }
+    } catch (error) {
+      errorContainer.hidden = false;
+      errorMessage.textContent = `${error.message} Status akan diperiksa lagi otomatis.`;
+    }
+    boothState.paymentPollTimer = setTimeout(poll, 1500);
+  };
+  boothState.paymentPollTimer = setTimeout(poll, 750);
+}
+
 async function loadAccessQris() {
+  stopPaymentPolling();
   $("#access-payment-loading").hidden = false; $("#access-payment-error").hidden = true; $("#access-payment-qr").hidden = true;
   try {
-    const { payment } = await boothApi("/api/booth/qris", { method: "POST", body: JSON.stringify({ sessionId: "access", purpose: "session" }) });
+    const { payment } = await boothApi("/api/booth/qris", {
+      method: "POST",
+      headers: { "X-Client-Id": boothClientId() },
+      body: JSON.stringify({ sessionId: "access", purpose: "session" }),
+    });
     if (payment.qrImageUrl) {
       $("#access-payment-loading").hidden = true; $("#access-payment-qr").hidden = false;
       $("#access-payment-qr-image").src = payment.qrImageUrl; $("#access-payment-amount").textContent = formatMoney(boothState.config.payment.price);
+      pollQrisPayment(payment, {
+        dialog: $("#access-dialog"),
+        errorContainer: $("#access-payment-error"),
+        errorMessage: $("#access-payment-error-message"),
+        onPaid: async () => {
+          boothState.accessMethod = "qris";
+          $("#access-dialog").close();
+          enterFrameSelection();
+        },
+      });
     } else if (payment.status === "paid") {
       boothState.accessMethod = "qris"; $("#access-dialog").close(); enterFrameSelection();
     } else {
@@ -557,30 +703,37 @@ async function loadAccessQris() {
 }
 
 async function openAccessGate() {
-  const startButton = $("#welcome-start");
   if (!boothState.config) {
-    startButton.disabled = true;
-    $("#welcome-button-label").textContent = "Menyiapkan sesi…";
-    try {
-      boothState.config = await boothApi("/api/booth/config");
-      localStorage.setItem(boothConfigCacheKey(), JSON.stringify({ value: boothState.config, savedAt: Date.now() }));
-      applyConfiguration();
-    } catch (error) {
-      notice(`Belum dapat memulai: ${error.message}`, "error");
-      return;
-    } finally {
-      startButton.disabled = false;
-      $("#welcome-button-label").textContent = boothState.config?.appearance?.startButtonLabel || "Mulai foto";
-    }
+    await retryBoothConfig();
+    if (!boothState.config) return;
   }
-  const qrisEnabled = Boolean(boothState.config.payment.qrisEnabled);
+  boothState.consent = { accepted: true, version: "2026-07-21", method: "welcome_continue" };
+  const qrisConfigured = Boolean(boothState.config.payment.configuredQrisEnabled ?? boothState.config.payment.qrisEnabled);
+  const qrisEnabled = qrisConfigured && boothState.cloudOnline;
   const voucherEnabled = Boolean(boothState.config.payment.voucherEnabled);
-  if (!qrisEnabled && !voucherEnabled) { enterFrameSelection(); return; }
+  if (!qrisConfigured && !voucherEnabled) { enterFrameSelection(); return; }
   $("#access-qris-section").hidden = !qrisEnabled; $("#access-voucher-section").hidden = !voucherEnabled;
+  $("#access-offline-section").hidden = qrisEnabled || voucherEnabled || !qrisConfigured;
   $("#access-voucher-code").value = ""; $("#access-voucher-status").textContent = "";
   if (!$("#access-dialog").open) $("#access-dialog").showModal();
   if (qrisEnabled) loadAccessQris();
-  else setTimeout(() => $("#access-voucher-code").focus(), 80);
+  else if (voucherEnabled) setTimeout(() => $("#access-voucher-code").focus(), 80);
+}
+
+async function retryBoothConfig() {
+  setWelcomeButtonState("loading");
+  try {
+    const config = await boothApi("/api/booth/config", { timeoutMs: 8000 });
+    boothState.config = config;
+    boothState.cloudOnline = configReportsCloudOnline(config);
+    cacheBoothConfig(config);
+    applyConfiguration();
+    reportClientCapabilities();
+    setWelcomeButtonState(config.booth.maintenanceMode ? "maintenance" : "ready");
+  } catch (error) {
+    setWelcomeButtonState("retry");
+    notice(`Belum dapat memulai: ${error.message}`, "error");
+  }
 }
 
 async function redeemAccessVoucher() {
@@ -598,11 +751,25 @@ async function redeemAccessVoucher() {
 
 async function openPrintDialog() {
   if (!boothState.config.payment.paidPrintEnabled || boothState.printIncluded) { await queuePrint(); return; }
+  stopPaymentPolling();
   const dialog = $("#print-dialog"); dialog.showModal(); $("#payment-loading").hidden = false; $("#payment-error").hidden = true; $("#payment-qr").hidden = true; $("#confirm-direct-print").hidden = true;
   $("#print-dialog-title").textContent = "Bayar untuk mencetak"; $("#print-dialog-copy").textContent = "Pindai QRIS dan selesaikan pembayaran sebelum timer berakhir.";
   try {
-    const { payment } = await boothApi("/api/booth/qris", { method: "POST", body: JSON.stringify({ sessionId: boothState.session.id, purpose: "print" }) });
-    if (payment.qrImageUrl) { $("#payment-loading").hidden = true; $("#payment-qr").hidden = false; $("#payment-qr-image").src = payment.qrImageUrl; $("#payment-amount").textContent = formatMoney(boothState.config.payment.printPrice); }
+    const { payment } = await boothApi("/api/booth/qris", {
+      method: "POST",
+      headers: { "X-Client-Id": boothClientId() },
+      body: JSON.stringify({ sessionId: boothState.session.id, purpose: "print" }),
+    });
+    if (["paid", "settled"].includes(payment.status)) { await queuePrint(); return; }
+    if (payment.qrImageUrl) {
+      $("#payment-loading").hidden = true; $("#payment-qr").hidden = false; $("#payment-qr-image").src = payment.qrImageUrl; $("#payment-amount").textContent = formatMoney(boothState.config.payment.printPrice);
+      pollQrisPayment(payment, {
+        dialog,
+        errorContainer: $("#payment-error"),
+        errorMessage: $("#payment-error-message"),
+        onPaid: queuePrint,
+      });
+    } else throw new Error("QRIS belum mengembalikan kode pembayaran. Hubungi operator.");
   } catch (error) {
     $("#payment-loading").hidden = true; $("#payment-error").hidden = false; $("#payment-error-message").textContent = error.message;
   }
@@ -627,15 +794,22 @@ function expireSession() {
   startGoodbye("Waktu sesi telah selesai", "Foto yang sudah tersimpan tetap aman. Layar akan disiapkan untuk pelanggan berikutnya.");
 }
 
-function resetBooth() {
-  clearInterval(boothState.goodbyeTimer); clearInterval(boothState.sessionTimer); stopCameraPreview();
+function resetBooth({ preserveRecovery = false } = {}) {
+  clearInterval(boothState.goodbyeTimer); clearInterval(boothState.sessionTimer); stopPaymentPolling(); stopCameraPreview();
   if ($("#goodbye-dialog").open) $("#goodbye-dialog").close(); if ($("#print-dialog").open) $("#print-dialog").close(); if ($("#access-dialog").open) $("#access-dialog").close();
-  boothState.session = null; boothState.currentSlot = 1; boothState.currentPhoto = null; boothState.photos = {}; boothState.expired = false; boothState.accessMethod = null; boothState.printIncluded = false; boothState.voucherCode = "";
+  boothState.session = null; boothState.currentSlot = 1; boothState.currentPhoto = null; boothState.photos = {}; boothState.expired = false; boothState.accessMethod = null; boothState.printIncluded = false; boothState.voucherCode = ""; boothState.consent = null;
+  if (!preserveRecovery) localStorage.removeItem(boothSessionRecoveryKey());
   $("#capture-heading").textContent = "Sudah siap?"; $(".ready-card>p:not(.eyebrow)").textContent = "Pastikan semua orang terlihat. Setelah ditekan, hitung mundur akan langsung dimulai."; $("#camera-start").firstChild.textContent = "Ketuk untuk mulai ";
   $("#session-countdown").textContent = formatTimer(boothState.config.booth.sessionTimeoutSeconds); $("#session-time").classList.remove("urgent");
   $("#photo-review").hidden = true; $("#countdown-overlay").hidden = true; $("#capture-ready-overlay").hidden = false; $(".capture-screen").classList.remove("is-waiting");
   updateFrameSelection(); setScreen("welcome");
   if (routeBoothCode) history.replaceState(null, "", `/${routeBoothCode}`);
+  if (boothState.pendingConfig) {
+    boothState.config = boothState.pendingConfig;
+    boothState.pendingConfig = null;
+    applyConfiguration();
+    setWelcomeButtonState(boothState.config.booth.maintenanceMode ? "maintenance" : "ready");
+  }
 }
 
 function bindEvents() {
@@ -643,53 +817,72 @@ function bindEvents() {
   $("#frame-list").addEventListener("click", event => { const option = event.target.closest(".frame-option"); if (!option) return; boothState.selectedFrame = boothState.frames.find(frame => frame.url === option.dataset.frameUrl); updateFrameSelection(); });
   $("#frame-page-prev").addEventListener("click", () => { boothState.framePage -= 1; renderFrames(); });
   $("#frame-page-next").addEventListener("click", () => { boothState.framePage += 1; renderFrames(); });
+  $("#frame-search").addEventListener("input", event => { boothState.frameQuery = event.target.value; boothState.framePage = 0; renderFrames(); });
   $("#frame-continue").addEventListener("click", createSession);
   $("#camera-start").addEventListener("click", runShotCountdown);
   $("#retake-photo").addEventListener("click", () => { $("#photo-review").hidden = true; runShotCountdown(); });
   $("#accept-photo").addEventListener("click", acceptCurrentPhoto);
   $("#print-result").addEventListener("click", openPrintDialog);
   $("#finish-session").addEventListener("click", () => startGoodbye());
-  $("#close-print-dialog").addEventListener("click", () => $("#print-dialog").close());
+  $("#close-print-dialog").addEventListener("click", () => { stopPaymentPolling(); $("#print-dialog").close(); });
   $("#confirm-direct-print").addEventListener("click", queuePrint);
-  $("#close-access-dialog").addEventListener("click", () => $("#access-dialog").close());
+  $("#close-access-dialog").addEventListener("click", () => { stopPaymentPolling(); $("#access-dialog").close(); });
+  $("#close-offline-access").addEventListener("click", () => { stopPaymentPolling(); $("#access-dialog").close(); });
   $("#redeem-access-voucher").addEventListener("click", redeemAccessVoucher);
   $("#access-voucher-code").addEventListener("keydown", event => { if (event.key === "Enter") redeemAccessVoucher(); });
   $("#skip-goodbye").addEventListener("click", resetBooth);
 }
 
 async function initBooth() {
+  if ("serviceWorker" in navigator && (window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  }
   if (routeBoothCode) {
     localStorage.setItem("photoslive.boothCode", routeBoothCode);
     $("#booth-admin-entry").href = `/setup?mode=login&booth=${encodeURIComponent(routeBoothCode)}`;
   }
   bindEvents();
+  startLocalRecoveryWatcher();
+  setWelcomeButtonState("loading");
   let startedFromCache = false;
+  let recoveredSession = false;
   try {
     const cachedRecord = JSON.parse(localStorage.getItem(boothConfigCacheKey()) || "null");
     const cached = cachedRecord?.value || cachedRecord;
     if (cached?.appearance && cached?.booth && cached?.payment) {
       boothState.config = cached;
+      boothState.cloudOnline = false;
       applyConfiguration();
-      resetBooth();
+      resetBooth({ preserveRecovery: true });
+      setWelcomeButtonState(cached.booth.maintenanceMode ? "maintenance" : "ready");
       startedFromCache = true;
+      recoveredSession = await recoverPersistedSession().catch(error => { notice(`Sesi lama belum dapat dipulihkan: ${error.message}`, "error"); return false; });
+      if (!recoveredSession) recoveredSession = await discoverLocalRecoverableSession().catch(() => false);
     }
   } catch { localStorage.removeItem(boothConfigCacheKey()); }
   try {
     const freshConfig = await boothApi("/api/booth/config", { timeoutMs: startedFromCache ? 5000 : 8000 });
-    boothState.config = freshConfig;
-    localStorage.setItem(boothConfigCacheKey(), JSON.stringify({ value: freshConfig, savedAt: Date.now() }));
-    applyConfiguration();
-    if (!startedFromCache) resetBooth();
+    boothState.cloudOnline = configReportsCloudOnline(freshConfig);
+    cacheBoothConfig(freshConfig);
+    if (startedFromCache && $("#booth-app").dataset.screen !== "welcome") boothState.pendingConfig = freshConfig;
+    else {
+      boothState.config = freshConfig;
+      applyConfiguration();
+      if (!startedFromCache) resetBooth({ preserveRecovery: true });
+    }
+    if (!recoveredSession) recoveredSession = await recoverPersistedSession().catch(error => { notice(`Sesi lama belum dapat dipulihkan: ${error.message}`, "error"); return false; });
+    if (!recoveredSession) recoveredSession = await discoverLocalRecoverableSession().catch(() => false);
     reportClientCapabilities();
-    flushPendingSessionSync().catch(() => {});
     setInterval(() => reportClientCapabilities(boothState.cameraLabels), 30000);
-    if (boothState.config.booth.maintenanceMode) { $("#welcome-start").disabled = true; $("#welcome-button-label").textContent = "Sedang dalam perawatan"; }
+    setWelcomeButtonState(freshConfig.booth.maintenanceMode ? "maintenance" : "ready");
   } catch (error) {
+    boothState.cloudOnline = false;
     if (startedFromCache) {
       notice(`Mode lokal: konfigurasi tersimpan digunakan. ${error.message}`, "error");
       return;
     }
-    notice(`Mesin belum siap. Tekan Mulai foto untuk mencoba lagi. ${error.message}`, "error");
+    setWelcomeButtonState("retry");
+    notice(`Mesin belum siap. Tekan Coba hubungkan lagi. ${error.message}`, "error");
   }
 }
 

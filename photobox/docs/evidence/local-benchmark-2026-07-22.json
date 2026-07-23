@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "kind": "synthetic-local-controller",
+  "productionAcceptance": false,
+  "generatedAt": "2026-07-21T23:26:03.190475+00:00",
+  "host": {
+    "system": "Darwin",
+    "release": "23.2.0",
+    "machine": "arm64",
+    "cpu": {
+      "available": true,
+      "cores": 8,
+      "load1m": 3.13,
+      "load5m": 3.59,
+      "load15m": 3.52,
+      "loadPercent": 39.2
+    },
+    "memory": {
+      "available": true,
+      "totalBytes": 8589934592,
+      "usedBytes": 7143260160,
+      "usedPercent": 83.2
+    }
+  },
+  "iterations": 20,
+  "startupMs": 22.12,
+  "metrics": {
+    "saveSettings": {
+      "samples": 20,
+      "minMs": 2.02,
+      "medianMs": 2.61,
+      "p95Ms": 5.89,
+      "maxMs": 7.45
+    },
+    "generate100Vouchers": {
+      "samples": 3,
+      "minMs": 2.23,
+      "medianMs": 2.41,
+      "p95Ms": 2.45,
+      "maxMs": 2.45
+    },
+    "startSession": {
+      "samples": 20,
+      "minMs": 2.13,
+      "medianMs": 3.27,
+      "p95Ms": 5.73,
+      "maxMs": 7.1
+    },
+    "captureUpload": {
+      "samples": 60,
+      "minMs": 4.33,
+      "medianMs": 5.82,
+      "p95Ms": 12.74,
+      "maxMs": 28.66
+    },
+    "completeRender": {
+      "samples": 20,
+      "minMs": 59.56,
+      "medianMs": 76.73,
+      "p95Ms": 133.04,
+      "maxMs": 239.33
+    },
+    "enqueuePrint": {
+      "samples": 20,
+      "minMs": 1.51,
+      "medianMs": 2.32,
+      "p95Ms": 4.12,
+      "maxMs": 5.41
+    }
+  },
+  "targetsMs": {
+    "saveSettings": 1000,
+    "generate100Vouchers": 2000,
+    "startSession": 200,
+    "completeRender": 3000,
+    "enqueuePrint": 1000
+  },
+  "targetChecks": {
+    "saveSettings": true,
+    "generate100Vouchers": true,
+    "startSession": true,
+    "completeRender": true,
+    "enqueuePrint": true
+  },
+  "outputBytes": 1528500,
+  "unmeasured": [
+    "real-camera-capture",
+    "physical-print",
+    "cloud-network-p95",
+    "4gb-72-hour-soak"
+  ]
+}

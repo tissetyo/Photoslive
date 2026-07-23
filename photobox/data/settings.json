@@ -1,6 +1,6 @@
 {
   "booth": {
-    "name": "Photoslive Booth 01",
+    "name": "ZOEY",
     "location": "Main Hall",
     "dailySessionLimit": 120,
     "sessionTimeoutSeconds": 150,
@@ -14,9 +14,9 @@
     "maintenanceMode": false
   },
   "payment": {
-    "qrisEnabled": true,
-    "voucherEnabled": true,
-    "price": 35000,
+    "qrisEnabled": false,
+    "voucherEnabled": false,
+    "price": 0,
     "currency": "IDR",
     "provider": "Not configured",
     "paidPrintEnabled": false,
@@ -90,7 +90,8 @@
     "cloudEnabled": false,
     "provider": "Cloudflare R2",
     "uploadFinalOnly": true,
-    "deleteOnlyAfterUpload": true
+    "deleteOnlyAfterUpload": true,
+    "localPhotoPath": ""
   },
   "devices": {
     "preferredCamera": "auto",
@@ -100,6 +101,8 @@
     "stripsPerSheet": 2,
     "borderless": true,
     "cameraMirror": false,
-    "cameraRotation": "0"
+    "cameraRotation": "0",
+    "cameraSource": "browser",
+    "browserCameraId": "0d87f06babc4f6a58d477e9349f113e646dd6088e4c85fbb1eec745e2de6c35f"
   }
 }

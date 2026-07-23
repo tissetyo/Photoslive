@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 2,
+  "updatedAt": "2026-07-22",
+  "status": "baseline-not-certification",
+  "capabilityStatuses": ["supported", "limited", "unavailable", "planned"],
+  "minimumComputer": {
+    "cpuCores": 2,
+    "ramBytes": 4294967296,
+    "storageBytes": 17179869184,
+    "freeStorageBytes": 4294967296
+  },
+  "platforms": [
+    {
+      "id": "linux-computer",
+      "label": "Linux computer",
+      "releaseStatus": "pilot",
+      "minimum": { "ramBytes": 4294967296, "storageBytes": 17179869184, "freeStorageBytes": 4294967296 },
+      "cameraAdapters": ["browser-media-devices", "v4l2", "gphoto2"],
+      "printerAdapters": ["cups-ipp"],
+      "serviceSupervisor": "systemd",
+      "capabilities": {
+        "controller": "supported",
+        "agent": "supported",
+        "browserCamera": "supported",
+        "dedicatedCamera": "limited",
+        "silentPrint": "supported",
+        "usbPrinter": "limited",
+        "localStorage": "supported",
+        "offlineSession": "supported"
+      },
+      "notes": ["gPhoto2 and CUPS support depends on the exact model, driver, and production acceptance test"]
+    },
+    {
+      "id": "windows-computer",
+      "label": "Windows computer",
+      "releaseStatus": "pilot",
+      "minimum": { "ramBytes": 4294967296, "storageBytes": 68719476736, "freeStorageBytes": 4294967296 },
+      "cameraAdapters": ["browser-media-devices", "media-foundation", "gphoto2"],
+      "printerAdapters": ["windows-spooler", "ipp"],
+      "serviceSupervisor": "scheduled-task-watchdog",
+      "capabilities": {
+        "controller": "supported",
+        "agent": "supported",
+        "browserCamera": "supported",
+        "dedicatedCamera": "limited",
+        "silentPrint": "limited",
+        "usbPrinter": "limited",
+        "localStorage": "supported",
+        "offlineSession": "supported"
+      },
+      "notes": ["Silent print and USB hardware require a compatible signed driver and pilot acceptance"]
+    },
+    {
+      "id": "macos-computer",
+      "label": "macOS computer",
+      "releaseStatus": "pilot",
+      "minimum": { "ramBytes": 4294967296, "storageBytes": 34359738368, "freeStorageBytes": 4294967296 },
+      "cameraAdapters": ["browser-media-devices", "avfoundation", "gphoto2"],
+      "printerAdapters": ["cups-ipp", "airprint"],
+      "serviceSupervisor": "launchagent",
+      "capabilities": {
+        "controller": "supported",
+        "agent": "supported",
+        "browserCamera": "supported",
+        "dedicatedCamera": "limited",
+        "silentPrint": "limited",
+        "usbPrinter": "limited",
+        "localStorage": "supported",
+        "offlineSession": "supported"
+      },
+      "notes": ["Camera and printer support depends on macOS permission, driver, model, and pilot acceptance"]
+    },
+    {
+      "id": "ipad-standalone",
+      "label": "iPad standalone",
+      "releaseStatus": "limited-browser",
+      "cameraAdapters": ["browser-media-devices"],
+      "printerAdapters": ["airprint-user-dialog"],
+      "serviceSupervisor": null,
+      "capabilities": {
+        "controller": "unavailable",
+        "agent": "unavailable",
+        "browserCamera": "limited",
+        "dedicatedCamera": "unavailable",
+        "silentPrint": "unavailable",
+        "usbPrinter": "unavailable",
+        "localStorage": "limited",
+        "offlineSession": "limited"
+      },
+      "notes": ["Browser storage can be evicted", "Background sync is not guaranteed", "Printing requires the system AirPrint dialog"]
+    },
+    {
+      "id": "android-tablet-standalone",
+      "label": "Android tablet standalone",
+      "releaseStatus": "limited-browser",
+      "cameraAdapters": ["browser-media-devices"],
+      "printerAdapters": ["system-print-dialog"],
+      "serviceSupervisor": null,
+      "capabilities": {
+        "controller": "unavailable",
+        "agent": "unavailable",
+        "browserCamera": "limited",
+        "dedicatedCamera": "unavailable",
+        "silentPrint": "unavailable",
+        "usbPrinter": "unavailable",
+        "localStorage": "limited",
+        "offlineSession": "limited"
+      },
+      "notes": ["Browser storage and background sync depend on the vendor", "Printing uses a system or vendor dialog"]
+    },
+    {
+      "id": "tablet-companion",
+      "label": "Tablet companion with computer",
+      "releaseStatus": "partial-local-pairing",
+      "cameraAdapters": ["browser-media-devices", "local-companion-handshake"],
+      "printerAdapters": ["computer-controller"],
+      "serviceSupervisor": "computer-dependent",
+      "capabilities": {
+        "controller": "limited",
+        "agent": "limited",
+        "browserCamera": "limited",
+        "dedicatedCamera": "unavailable",
+        "silentPrint": "limited",
+        "usbPrinter": "limited",
+        "localStorage": "limited",
+        "offlineSession": "planned"
+      },
+      "notes": [
+        "One-time five-minute LAN pairing and a narrow companion API are implemented",
+        "Plain LAN HTTP cannot provide live getUserMedia on every browser, so system-camera capture is the fallback until trusted local HTTPS or a relay is added",
+        "Full booth-session integration and physical tablet/printer acceptance remain open"
+      ]
+    }
+  ],
+  "testedDevices": [],
+  "acceptanceRequired": [
+    "camera-preview",
+    "camera-capture",
+    "twenty-consecutive-captures",
+    "printer-test-page",
+    "twenty-consecutive-prints",
+    "disconnect-reconnect",
+    "reboot-recovery",
+    "offline-session",
+    "seventy-two-hour-soak"
+  ],
+  "evidence": [
+    "docs/HARDWARE-COMPATIBILITY.md",
+    "docs/PERFORMANCE-HARDWARE-BASELINE.md",
+    "scripts/probe_hardware.py"
+  ]
+}

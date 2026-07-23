@@ -48,6 +48,34 @@ admin. Password dan PIN yang tersedia di-hash menggunakan PBKDF2-SHA256 dengan s
 Session browser ditandatangani HMAC dan disimpan pada cookie `HttpOnly`, `Secure`,
 `SameSite=Lax` selama tujuh hari.
 
+### Login remote dan PIN lokal
+
+Admin yang membuka `/{boothCode}/admin` dari komputer lain masuk memakai email
+dan password. Opsi **PIN lokal** disembunyikan secara default dan baru muncul
+setelah halaman setup berhasil menemukan Local Controller pada loopback
+`127.0.0.1` milik komputer photobox tersebut.
+
+Controller tidak pernah mengirim `commandKey`, installation token, atau Agent
+token ke browser. Sebagai gantinya, Controller menerbitkan assertion HMAC yang:
+
+- terikat pada `machineId`, `boothCode`, dan tujuan `admin-pin`;
+- memiliki nonce acak dan masa berlaku maksimal 60 detik;
+- hanya diterbitkan melalui endpoint loopback dengan origin cloud yang sama;
+- hanya dapat digunakan sekali karena nonce dikonsumsi atomik di cloud.
+
+Cloud menolak login PIN tanpa assertion yang valid, walaupun PIN benar. Jika
+browser tidak dapat menjangkau Controller atau kebijakan Private Network Access
+memblokir request, opsi PIN tetap tersembunyi dan operator memakai email serta
+password. Dengan demikian, PIN enam angka bukan kredensial admin remote.
+
+Setiap session juga dicatat pada indeks per pengguna. Halaman **Pengguna admin**
+menampilkan jumlah session aktif dan menyediakan aksi **Cabut sesi**. Aksi ini
+menghapus record session di server, bukan hanya cookie browser, sehingga session
+lama langsung tidak dapat dipakai lagi. Owner dapat mencabut session admin dan
+operator; admin tidak dapat mencabut session owner. Pencabutan diri sendiri
+menghapus cookie saat ini dan mengarahkan pengguna kembali ke halaman login.
+Seluruh pencabutan tercatat sebagai `user.sessions_revoked` pada audit log booth.
+
 ## Wizard onboarding mesin baru
 
 1. **Kode setup (wajib):** cloud memvalidasi kode dari Agent tanpa langsung

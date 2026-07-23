@@ -51,3 +51,10 @@ next-env.d.ts
 # local browser verification artifacts
 /.playwright-cli/
 /output/
+/photobox/.playwright-cli/
+/photobox/web/.playwright-cli/
+/photobox/web/output/
+
+# python runtime cache
+__pycache__/
+*.py[cod]

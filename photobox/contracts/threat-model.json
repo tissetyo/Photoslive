@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-21",
+  "scope": "Photoslive local-first booth, cloud control plane, providers, and customer delivery",
+  "statuses": ["mitigated", "partial", "blocked", "open"],
+  "assets": [
+    "customer photos and rendered results",
+    "booth configuration and offline vouchers",
+    "admin and platform identities",
+    "installation, provider, and signing secrets",
+    "payment, ledger, and payout records",
+    "audit logs and machine telemetry"
+  ],
+  "trustBoundaries": [
+    "public browser to cloud API",
+    "authenticated admin or superadmin browser to cloud API",
+    "cloud API to database, cache, object storage, and external providers",
+    "cloud command queue to Photoslive Agent",
+    "Agent to loopback-only Local Controller",
+    "Local Controller to SQLite, filesystem, camera, and printer",
+    "customer download link to session assets"
+  ],
+  "threats": [
+    {
+      "id": "T01",
+      "category": "pairing-takeover",
+      "title": "Attacker claims a machine using a stolen or replayed setup code",
+      "status": "partial",
+      "controls": ["15-minute setup-code expiry", "machine-bound pairing state", "installation token kept outside browser UI"],
+      "residualRisk": "One-time consumption, brute-force rate limiting, and physical installer provenance still need production verification.",
+      "owner": "platform-security",
+      "verification": ["web/tests/setup-contract.test.mjs", "docs/CLOUD-DEVICE-BRIDGE.md"]
+    },
+    {
+      "id": "T02",
+      "category": "session-theft",
+      "title": "Stolen browser session is used to control a booth",
+      "status": "partial",
+      "controls": ["server-side session records", "secure cookie attributes in production", "role-scoped platform permissions"],
+      "residualRisk": "Remote passkeys, complete session revocation, and full CSRF verification remain open.",
+      "owner": "identity",
+      "verification": ["web/api/platform.mjs", "docs/PLATFORM-RBAC.md"]
+    },
+    {
+      "id": "T03",
+      "category": "tenant-isolation",
+      "title": "An authenticated user reads or mutates another booth tenant",
+      "status": "partial",
+      "controls": ["booth membership checks", "PostgreSQL row-level security policies", "bounded superadmin projections"],
+      "residualRisk": "Production Supabase runtime tests and complete cutover from legacy Redis are not finished.",
+      "owner": "cloud-platform",
+      "verification": ["../supabase/migrations", "web/tests/postgres-contract.test.mjs"]
+    },
+    {
+      "id": "T04",
+      "category": "remote-command",
+      "title": "Forged or replayed hardware command reaches a booth",
+      "status": "mitigated",
+      "controls": ["HMAC signature", "short expiry", "idempotency key", "command allowlist", "bounded rate limit", "audit log"],
+      "residualRisk": "Signing-key rotation and production clock-skew monitoring must be exercised during rollout.",
+      "owner": "agent-platform",
+      "verification": ["web/tests/remote-jobs.test.mjs", "docs/REMOTE-JOB-QUEUE.md"]
+    },
+    {
+      "id": "T05",
+      "category": "local-api",
+      "title": "Network attacker invokes privileged Local Controller operations",
+      "status": "mitigated",
+      "controls": ["loopback-only bind", "installation-token authentication", "remote Local Manager controls rejected", "secret-redacted diagnosis"],
+      "residualRisk": "A fully compromised operating-system account remains in the local trust boundary.",
+      "owner": "controller",
+      "verification": ["tests/test_local_first.py", "docs/LOCAL-FIRST-ARCHITECTURE.md"]
+    },
+    {
+      "id": "T06",
+      "category": "secret-exposure",
+      "title": "Provider or installation credentials leak through client bundles, logs, or telemetry",
+      "status": "partial",
+      "controls": ["server-side provider registry", "masked capability projection", "diagnostic redaction", "no Agent token in UI"],
+      "residualRisk": "Central encrypted credential rotation and production secret-scanning gates remain open.",
+      "owner": "platform-security",
+      "verification": ["web/api/_providers.mjs", "web/tests/product-capabilities.test.mjs"]
+    },
+    {
+      "id": "T07",
+      "category": "customer-photos",
+      "title": "Customer session assets are guessed, retained too long, or exposed to another customer",
+      "status": "partial",
+      "controls": ["opaque session share code", "24-hour session metadata expiry", "short-lived object download URL", "upload-aware local retention"],
+      "residualRisk": "Early deletion workflow, consent records, cloud lifecycle acceptance, and privacy drill remain open.",
+      "owner": "privacy",
+      "verification": ["web/tests/booth-flow.test.mjs", "docs/SESSION-FLOW.md"]
+    },
+    {
+      "id": "T08",
+      "category": "offline-replay",
+      "title": "An offline voucher is redeemed more than once or replayed after reconnect",
+      "status": "mitigated",
+      "controls": ["SQLite atomic allocation", "local redemption record", "transactional sync outbox", "cloud idempotency"],
+      "residualRisk": "Extended clock drift and multi-device allocation conflicts require pilot fault testing.",
+      "owner": "controller",
+      "verification": ["tests/test_local_first.py", "web/tests/cloud-idempotency.test.mjs"]
+    },
+    {
+      "id": "T09",
+      "category": "storage-safety",
+      "title": "Disk exhaustion or cleanup deletes unsynced customer photos",
+      "status": "mitigated",
+      "controls": ["2 GB reserve", "20/10 percent warnings", "new-session block at critical level", "dry-run cleanup", "unsynced-file protection", "atomic file replacement"],
+      "residualRisk": "Physical SSD failure still requires tested external backup and restore procedures.",
+      "owner": "controller",
+      "verification": ["tests/test_local_first.py", "docs/LOCAL-BACKUP-RESTORE.md"]
+    },
+    {
+      "id": "T10",
+      "category": "payment-webhook",
+      "title": "Forged or replayed payment webhook unlocks a session or print",
+      "status": "blocked",
+      "controls": ["QRIS capability hidden until a production adapter is configured"],
+      "residualRisk": "Webhook signature verification, replay protection, transaction idempotency, and reconciliation are not implemented.",
+      "owner": "payments",
+      "verification": ["docs/PRODUCT-CAPABILITY-MATRIX.md", "docs/KNOWN-LIMITATIONS.md"]
+    },
+    {
+      "id": "T11",
+      "category": "payout-fraud",
+      "title": "Unauthorized payout or bank-account change transfers booth funds",
+      "status": "blocked",
+      "controls": ["append-only payout ledger", "maker-checker approval", "encrypted and verified bank account", "per-record mutation lock", "server-side re-authentication for sensitive actions", "unique transfer reference claim", "persistent finance risk engine", "role-protected risk review", "audit log", "production capability remains gated"],
+      "residualRisk": "KYC, live bank reconciliation, and production payout acceptance must pass before enablement.",
+      "owner": "finance",
+      "verification": ["web/tests/finance-risk.test.mjs", "docs/FINANCE-RISK.md", "docs/IMPLEMENTATION-STATUS.md"]
+    },
+    {
+      "id": "T12",
+      "category": "supply-chain",
+      "title": "Tampered installer or Agent update gains control of a machine",
+      "status": "blocked",
+      "controls": ["pilot archive allowlist", "documented checksum and rollback requirement", "signed installer feature remains unavailable"],
+      "residualRisk": "Signed Windows, notarized macOS, signed Debian packages, atomic update, and rollback health checks are not production-complete.",
+      "owner": "release-engineering",
+      "verification": ["scripts/build-agent-archive.sh", "docs/RELEASE-ROLLBACK.md"]
+    },
+    {
+      "id": "T13",
+      "category": "telemetry-and-audit",
+      "title": "Telemetry or audit views disclose secrets or excessive personal data",
+      "status": "partial",
+      "controls": ["bounded projections", "redacted error and diagnostic output", "bounded incident and request registries"],
+      "residualRisk": "Formal data classification, retention enforcement, and redaction regression coverage remain incomplete.",
+      "owner": "observability",
+      "verification": ["web/api/_observability.mjs", "docs/FLEET-HEALTH-INCIDENTS.md"]
+    },
+    {
+      "id": "T14",
+      "category": "denial-of-service",
+      "title": "Public or authenticated traffic exhausts cloud or local resources",
+      "status": "partial",
+      "controls": ["hardware command rate limit", "bounded queues", "bounded logs and caches", "upload size limits"],
+      "residualRisk": "Global API rate limits, abuse analytics, and production load testing remain open.",
+      "owner": "cloud-platform",
+      "verification": ["web/api/_remote_jobs.mjs", "docs/PERFORMANCE-HARDWARE-BASELINE.md"]
+    },
+    {
+      "id": "T15",
+      "category": "device-permission",
+      "title": "Camera, printer, or remote preview is used without clear operator/customer intent",
+      "status": "partial",
+      "controls": ["explicit browser camera permission", "local device selection", "no continuous remote camera streaming"],
+      "residualRisk": "Remote snapshot consent, expiry, and cross-platform real-device acceptance remain open.",
+      "owner": "booth-experience",
+      "verification": ["docs/HARDWARE-COMPATIBILITY.md", "docs/SESSION-FLOW.md"]
+    }
+  ]
+}

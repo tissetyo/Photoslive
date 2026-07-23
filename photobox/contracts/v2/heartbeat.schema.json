@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photoslive.local/contracts/v2/heartbeat.schema.json",
+  "title": "Photoslive Agent heartbeat v2",
+  "type": "object",
+  "required": ["machineId", "agentVersion", "protocolVersion", "agentState", "platform", "telemetry", "devices", "controller"],
+  "properties": {
+    "machineId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "agentVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "protocolVersion": { "const": 2 },
+    "agentState": { "enum": ["running", "paused"] },
+    "platform": { "type": "string", "maxLength": 120 },
+    "telemetry": { "type": "object" },
+    "devices": { "type": "array", "maxItems": 24, "items": { "type": "object" } },
+    "controller": { "type": "object", "required": ["online"] },
+    "update": { "type": "object" }
+  },
+  "additionalProperties": false
+}
