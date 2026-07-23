@@ -32,6 +32,17 @@ test("connection desired state travels through audited cloud state and heartbeat
   assert.match(agent, /CONTROL_PATH\.write_text/);
 });
 
+test("heartbeat is throttled and Redis quota exhaustion is surfaced as actionable cloud state", () => {
+  assert.match(bridge, /HEARTBEAT_MIN_INTERVAL_MS/);
+  assert.match(bridge, /cachedHeartbeatResponse/);
+  assert.match(bridge, /storeHeartbeatResponse/);
+  assert.match(bridge, /minimumHeartbeatSeconds/);
+  assert.match(bridge, /UPSTASH_MAX_REQUESTS_EXCEEDED/);
+  assert.match(bridge, /retry-after/);
+  assert.match(platform, /isUpstashMaxRequestsError/);
+  assert.match(platform, /UPSTASH_MAX_REQUESTS_EXCEEDED/);
+});
+
 test("heartbeat carries bounded operational summaries instead of remote file payloads", () => {
   assert.match(agent, /"sync": local_status\.get\("sync"\)/);
   assert.match(agent, /"queue": local_status\.get\("queue"\)/);

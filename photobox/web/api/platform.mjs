@@ -1,4 +1,4 @@
-import { boothKey, getRedis, jobKey, machineKey, now, randomId, sessionKey, sha256, signScopedToken, userKey, verifyScopedToken } from "./_store.mjs";
+import { boothKey, getRedis, isUpstashMaxRequestsError, jobKey, machineKey, now, randomId, sessionKey, sha256, signScopedToken, userKey, verifyScopedToken } from "./_store.mjs";
 import { requestContext, observedError, observedResponse } from "./_observability.mjs";
 import { appendPostgresLedgerEntry, readPostgresChargebackByPaymentId, readPostgresLedgerEntries, readPostgresPaymentById, readPostgresPaymentByProviderId, writePostgresChargeback, writePostgresPaymentIntent, writePostgresPayout, writePostgresPayoutAccount, writePostgresPayoutPolicy, writePostgresReconciliationJob, writePostgresRefund, writePostgresShadowEvent } from "./_postgres.mjs";
 import { deploymentCapabilities } from "./_providers.mjs";
@@ -3260,6 +3260,13 @@ async function handler(request) {
     return observedResponse(await dispatch(request, context), context, { action });
   } catch (error) {
     observedError(error, context, { action });
+    if (isUpstashMaxRequestsError(error)) return observedResponse(json({
+      error: "Kuota Redis Upstash habis. Cloud sementara tidak bisa menyimpan atau membaca data.",
+      code: "UPSTASH_MAX_REQUESTS_EXCEEDED",
+      retryable: true,
+      actionRequired: "Upgrade/reset Upstash Redis atau ganti credential Redis di Vercel. Setelah itu coba ulang aksi ini.",
+      correlationId: context.id,
+    }, 503, { "retry-after": "300" }), context, { action });
     return observedResponse(json({ error: error instanceof Error ? error.message : "Kesalahan server", correlationId: context.id }, 500), context, { action });
   }
 }

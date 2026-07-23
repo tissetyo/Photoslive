@@ -1,6 +1,7 @@
 import {
   authenticateWebSession,
   getRedis,
+  isUpstashMaxRequestsError,
   boothKey,
   jobKey,
   machineKey,
@@ -29,7 +30,7 @@ import { trackPublicSessionFileRetention, trackPublicSessionRetention } from "./
 import { resolveProviderRuntime, resolveProviderRuntimeForCapability } from "./_provider_connections.mjs";
 import { persistPostgresSession, postgresSessionStatus } from "./_postgres_sessions.mjs";
 
-const json = (response, status = 200) => new Response(JSON.stringify(response), {
+const json = (response, status = 200, headers = {}) => new Response(JSON.stringify(response), {
   status,
   headers: {
     "content-type": "application/json; charset=utf-8",
@@ -37,6 +38,7 @@ const json = (response, status = 200) => new Response(JSON.stringify(response), 
     "access-control-allow-origin": "*",
     "access-control-allow-headers": "authorization, content-type",
     "access-control-allow-methods": "GET, POST, OPTIONS",
+    ...headers,
   },
 });
 
@@ -101,6 +103,8 @@ const PUBLIC_SESSION_CODE_PATTERN = /^[A-Za-z0-9_-]{32,100}$/;
 const SESSION_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const SESSION_FILE_KINDS = new Set(["capture", "composite", "gif"]);
 const MULTIPART_MIN_PART_BYTES = 5 * 1024 * 1024;
+const HEARTBEAT_MIN_INTERVAL_MS = Math.max(10_000, Number(process.env.PHOTOSLIVE_HEARTBEAT_MIN_INTERVAL_MS || 45_000));
+const heartbeatCache = globalThis.__photosliveHeartbeatCache ||= new Map();
 
 function normalizedPublicSessionCode(value) {
   const code = String(value || "").trim();
@@ -118,6 +122,45 @@ function multipartPartSize() {
 
 function multipartThreshold() {
   return Math.max(MULTIPART_MIN_PART_BYTES, Number(process.env.PHOTOSLIVE_MULTIPART_THRESHOLD_BYTES || MULTIPART_MIN_PART_BYTES));
+}
+
+async function heartbeatCacheKey(request, payload) {
+  const machineId = String(payload.machineId || "");
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
+  return machineId && token ? `${machineId}:${await sha256(token)}` : "";
+}
+
+function cachedHeartbeatResponse(cacheKey) {
+  const cached = cacheKey ? heartbeatCache.get(cacheKey) : null;
+  if (!cached || Date.now() - Number(cached.acceptedAt || 0) > HEARTBEAT_MIN_INTERVAL_MS) return null;
+  return json({
+    ...cached.response,
+    ok: true,
+    cached: true,
+    minimumHeartbeatSeconds: Math.ceil(HEARTBEAT_MIN_INTERVAL_MS / 1000),
+    serverTime: now(),
+  });
+}
+
+function storeHeartbeatResponse(cacheKey, response) {
+  if (!cacheKey) return;
+  heartbeatCache.set(cacheKey, { acceptedAt: Date.now(), response });
+  if (heartbeatCache.size <= 500) return;
+  const cutoff = Date.now() - HEARTBEAT_MIN_INTERVAL_MS * 2;
+  for (const [key, value] of heartbeatCache) {
+    if (Number(value.acceptedAt || 0) < cutoff) heartbeatCache.delete(key);
+    if (heartbeatCache.size <= 400) break;
+  }
+}
+
+function redisQuotaResponse(contextId = "") {
+  return json({
+    error: "Kuota Redis Upstash habis. Cloud sementara tidak bisa menulis atau membaca data.",
+    code: "UPSTASH_MAX_REQUESTS_EXCEEDED",
+    retryable: true,
+    actionRequired: "Upgrade/reset Upstash Redis atau ganti credential Redis di Vercel, lalu pause Agent heartbeat bila masih memakai Redis gratis.",
+    correlationId: contextId || undefined,
+  }, 503, { "retry-after": "300" });
 }
 
 function normalizedSessionFile(payload) {
@@ -438,8 +481,13 @@ export async function createSetupCode(redis, request, payload) {
 }
 
 async function heartbeat(redis, request, payload) {
+  const cacheKey = await heartbeatCacheKey(request, payload);
+  const cached = cachedHeartbeatResponse(cacheKey);
+  if (cached) return cached;
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
+  const protocolVersion = Math.max(1, Number(payload.protocolVersion || request.headers.get("x-photoslive-protocol-version") || 1));
+  if (protocolVersion > 2) return json({ error: "Versi protokol Agent lebih baru daripada Cloud", minimumProtocolVersion: 1, protocolVersion: 2 }, 426);
   machine.lastSeenAt = now();
   machine.status = machine.paired ? "online" : "waiting_pairing";
   machine.agentVersion = String(payload.agentVersion || machine.agentVersion).slice(0, 40);
@@ -466,25 +514,24 @@ async function heartbeat(redis, request, payload) {
   } : { sessions: [] };
   machine.commandKey ||= randomId("command");
   machine.boothCode = persistentBoothCode(machine);
-  await redis.set(machineKey(machine.id), machine);
   await recordTelemetrySnapshot(redis, machine).catch(() => null);
   await resolveMachineIncident(redis, machine, machine.lastSeenAt);
   await redis.sadd("photoslive:machines", machine.id);
   if (machine.paired) await redis.set(boothKey(machine.boothCode), machine.id);
   const voucherVersion = machine.paired ? Number(await redis.get(`photoslive:booth:${machine.boothCode}:voucher-version`) || 0) : 0;
   const settingsVersion = machine.paired ? Number(await redis.get(`photoslive:booth:${machine.boothCode}:settings-version`) || 0) : 0;
-  const protocolVersion = Math.max(1, Number(payload.protocolVersion || request.headers.get("x-photoslive-protocol-version") || 1));
-  if (protocolVersion > 2) return json({ error: "Versi protokol Agent lebih baru daripada Cloud", minimumProtocolVersion: 1, protocolVersion: 2 }, 426);
   machine.protocolVersion = protocolVersion;
   await redis.set(machineKey(machine.id), machine);
   const accessEnabled = machine.accessEnabled !== false;
-  return json({
+  const response = {
     ok: true, paired: machine.paired, boothCode: machine.boothCode,
     desiredState: machine.desiredState, commandKey: machine.commandKey,
     voucherVersion, settingsVersion, accessEnabled,
     offlinePolicy: { version: 1, validForSeconds: 72 * 60 * 60, accessEnabled, qrisAllowed: accessEnabled },
-    minimumProtocolVersion: 1, protocolVersion: 2, serverTime: now(),
-  });
+    minimumProtocolVersion: 1, protocolVersion: 2, minimumHeartbeatSeconds: Math.ceil(HEARTBEAT_MIN_INTERVAL_MS / 1000), serverTime: now(),
+  };
+  storeHeartbeatResponse(cacheKey, response);
+  return json(response);
 }
 
 async function settingsSnapshot(redis, request, payload) {
@@ -636,6 +683,7 @@ async function handler(request) {
     return observedResponse(await dispatch(request), context, { action });
   } catch (error) {
     observedError(error, context, { action });
+    if (isUpstashMaxRequestsError(error)) return observedResponse(redisQuotaResponse(context.id), context, { action });
     return observedResponse(json({ error: error instanceof Error ? error.message : "Kesalahan server", correlationId: context.id }, 500), context, { action });
   }
 }

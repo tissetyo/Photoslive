@@ -13,6 +13,11 @@ export function getRedis() {
   return redis;
 }
 
+export function isUpstashMaxRequestsError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /ERR max requests limit exceeded/i.test(message);
+}
+
 export function now() {
   return new Date().toISOString();
 }
