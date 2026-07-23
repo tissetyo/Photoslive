@@ -38,8 +38,13 @@ test("heartbeat is throttled and Redis quota exhaustion is surfaced as actionabl
   assert.match(bridge, /storeHeartbeatResponse/);
   assert.match(bridge, /minimumHeartbeatSeconds/);
   assert.match(bridge, /UPSTASH_MAX_REQUESTS_EXCEEDED/);
+  assert.match(bridge, /REDIS_QUOTA_RETRY_AFTER_SECONDS/);
   assert.match(bridge, /retry-after/);
   assert.match(bridge, /http\.error\.log_failed/);
+  assert.match(agent, /HEARTBEAT_SECONDS = max\(60, int\(os\.environ\.get\("PHOTOSLIVE_HEARTBEAT_SECONDS", "300"\)\)\)/);
+  assert.match(agent, /JOB_POLL_SECONDS = max\(10, int\(os\.environ\.get\("PHOTOSLIVE_JOB_POLL_SECONDS", "60"\)\)\)/);
+  assert.match(agent, /class CloudRequestError/);
+  assert.match(agent, /retry_after/);
   assert.match(platform, /isUpstashMaxRequestsError/);
   assert.match(platform, /UPSTASH_MAX_REQUESTS_EXCEEDED/);
   assert.match(platform, /http\.error\.log_failed/);

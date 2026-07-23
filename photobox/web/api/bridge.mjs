@@ -103,7 +103,8 @@ const PUBLIC_SESSION_CODE_PATTERN = /^[A-Za-z0-9_-]{32,100}$/;
 const SESSION_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const SESSION_FILE_KINDS = new Set(["capture", "composite", "gif"]);
 const MULTIPART_MIN_PART_BYTES = 5 * 1024 * 1024;
-const HEARTBEAT_MIN_INTERVAL_MS = Math.max(10_000, Number(process.env.PHOTOSLIVE_HEARTBEAT_MIN_INTERVAL_MS || 45_000));
+const HEARTBEAT_MIN_INTERVAL_MS = Math.max(60_000, Number(process.env.PHOTOSLIVE_HEARTBEAT_MIN_INTERVAL_MS || 300_000));
+const REDIS_QUOTA_RETRY_AFTER_SECONDS = Math.max(300, Number(process.env.PHOTOSLIVE_REDIS_QUOTA_RETRY_AFTER_SECONDS || 1_800));
 const heartbeatCache = globalThis.__photosliveHeartbeatCache ||= new Map();
 
 function normalizedPublicSessionCode(value) {
@@ -158,9 +159,10 @@ function redisQuotaResponse(contextId = "") {
     error: "Kuota Redis Upstash habis. Cloud sementara tidak bisa menulis atau membaca data.",
     code: "UPSTASH_MAX_REQUESTS_EXCEEDED",
     retryable: true,
-    actionRequired: "Upgrade/reset Upstash Redis atau ganti credential Redis di Vercel, lalu pause Agent heartbeat bila masih memakai Redis gratis.",
+    actionRequired: "Redis gratis sedang mencapai batas request. Agent akan otomatis menunggu lebih lama. Reset/ganti credential Redis jika pairing perlu langsung dipakai.",
+    retryAfterSeconds: REDIS_QUOTA_RETRY_AFTER_SECONDS,
     correlationId: contextId || undefined,
-  }, 503, { "retry-after": "300" });
+  }, 503, { "retry-after": String(REDIS_QUOTA_RETRY_AFTER_SECONDS) });
 }
 
 function normalizedSessionFile(payload) {

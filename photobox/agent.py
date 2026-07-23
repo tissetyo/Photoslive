@@ -35,10 +35,19 @@ CONFIG_PATH = CONFIG_DIR / "agent.json"
 STATUS_PATH = CONFIG_DIR / "agent-status.json"
 CONTROL_PATH = CONFIG_DIR / "agent-control.json"
 LOG_PATH = CONFIG_DIR / "agent.log"
-HEARTBEAT_SECONDS = max(30, int(os.environ.get("PHOTOSLIVE_HEARTBEAT_SECONDS", "60")))
-JOB_POLL_SECONDS = max(1, int(os.environ.get("PHOTOSLIVE_JOB_POLL_SECONDS", "2")))
+HEARTBEAT_SECONDS = max(60, int(os.environ.get("PHOTOSLIVE_HEARTBEAT_SECONDS", "300")))
+JOB_POLL_SECONDS = max(10, int(os.environ.get("PHOTOSLIVE_JOB_POLL_SECONDS", "60")))
 STATUS_WRITE_SECONDS = 15
 LOG_MAX_BYTES = 512_000
+MAX_CLOUD_RETRY_SECONDS = max(300, int(os.environ.get("PHOTOSLIVE_MAX_CLOUD_RETRY_SECONDS", "1800")))
+
+
+class CloudRequestError(RuntimeError):
+    def __init__(self, message: str, status_code: int | None = None, retry_after: int | None = None, code: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.code = code
 
 
 def request_json(url: str, method: str = "GET", payload: dict[str, Any] | None = None, token: str | None = None, timeout: int = 12, extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -59,11 +68,20 @@ def request_json(url: str, method: str = "GET", payload: dict[str, Any] | None =
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as error:
+        retry_after: int | None = None
         try:
-            message = json.loads(error.read().decode("utf-8")).get("error")
+            retry_after = int(str(error.headers.get("retry-after") or "").strip())
+        except (TypeError, ValueError):
+            retry_after = None
+        try:
+            detail = json.loads(error.read().decode("utf-8"))
+            message = detail.get("error")
+            code = detail.get("code")
+            retry_after = int(detail.get("retryAfterSeconds") or retry_after or 0) or retry_after
         except (ValueError, AttributeError):
             message = None
-        raise RuntimeError(message or f"HTTP {error.code}") from error
+            code = None
+        raise CloudRequestError(message or f"HTTP {error.code}", status_code=error.code, retry_after=retry_after, code=code) from error
 
 
 def upload_presigned_file(url: str, raw: bytes, headers: dict[str, Any] | None = None, timeout: int = 120) -> str:
@@ -779,11 +797,13 @@ def main() -> int:
             return 0
         except Exception as error:
             save_status({"online": False, "version": VERSION, "machineId": config.get("machineId"), "pairingCode": config.get("pairingCode"), "updatedAt": time.time(), "lastHeartbeatAt": heartbeat_at, "lastJobPollAt": job_poll_at, "error": str(error)})
-            log_event("error", str(error), retrySeconds=retry)
-            print(f"Photoslive Agent: {error}; mencoba lagi dalam {retry} detik", file=sys.stderr, flush=True)
+            cloud_retry = getattr(error, "retry_after", None)
+            retry_seconds = min(MAX_CLOUD_RETRY_SECONDS, max(retry, int(cloud_retry or 0))) if cloud_retry else retry
+            log_event("error", str(error), retrySeconds=retry_seconds, statusCode=getattr(error, "status_code", None), code=getattr(error, "code", None))
+            print(f"Photoslive Agent: {error}; mencoba lagi dalam {retry_seconds} detik", file=sys.stderr, flush=True)
             if arguments.once:
                 return 1
-            time.sleep(retry)
+            time.sleep(retry_seconds)
             retry = min(retry * 2, 60)
 
 
