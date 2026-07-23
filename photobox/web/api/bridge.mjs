@@ -682,7 +682,18 @@ async function handler(request) {
     action = new URL(request.url).searchParams.get("action") || "health";
     return observedResponse(await dispatch(request), context, { action });
   } catch (error) {
-    observedError(error, context, { action });
+    try {
+      observedError(error, context, { action });
+    } catch (logError) {
+      console.error(JSON.stringify({
+        level: "error",
+        event: "http.error.log_failed",
+        correlationId: context.id,
+        surface: context.surface,
+        action,
+        error: logError instanceof Error ? logError.message : String(logError),
+      }));
+    }
     if (isUpstashMaxRequestsError(error)) return observedResponse(redisQuotaResponse(context.id), context, { action });
     return observedResponse(json({ error: error instanceof Error ? error.message : "Kesalahan server", correlationId: context.id }, 500), context, { action });
   }

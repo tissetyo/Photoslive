@@ -39,8 +39,10 @@ test("heartbeat is throttled and Redis quota exhaustion is surfaced as actionabl
   assert.match(bridge, /minimumHeartbeatSeconds/);
   assert.match(bridge, /UPSTASH_MAX_REQUESTS_EXCEEDED/);
   assert.match(bridge, /retry-after/);
+  assert.match(bridge, /http\.error\.log_failed/);
   assert.match(platform, /isUpstashMaxRequestsError/);
   assert.match(platform, /UPSTASH_MAX_REQUESTS_EXCEEDED/);
+  assert.match(platform, /http\.error\.log_failed/);
 });
 
 test("heartbeat carries bounded operational summaries instead of remote file payloads", () => {
