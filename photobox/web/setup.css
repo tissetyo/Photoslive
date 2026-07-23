@@ -3,7 +3,7 @@
   isolation: isolate;
   grid-template-columns: minmax(360px, 1fr) minmax(460px, 680px);
   grid-template-areas: "helper card";
-  align-items: center;
+  align-items: start;
   gap: clamp(44px, 8vw, 130px);
   padding: clamp(40px, 7vw, 96px) clamp(24px, 9vw, 140px);
   overflow: hidden;
@@ -277,9 +277,32 @@
   font-weight: 800;
 }
 
-.method-switch button img { width: 17px; height: 17px; opacity: .75; }
 .method-switch button.active { background: #fff; color: #17191f; box-shadow: 0 3px 12px rgba(0, 0, 0, .08); }
-.method-switch button.active img { opacity: 1; }
+.method-switch button.active .setup-icon { opacity: 1; }
+.login-method-note {
+  display: none;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 13px;
+  border: 1px solid #dde1e8;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #17191f;
+  font-size: 13px;
+  font-weight: 850;
+}
+.login-methods.single-method .method-switch { display: none; }
+.login-methods.single-method .login-method-note { display: flex; }
+.login-methods.single-method #local-pin-status {
+  display: block;
+  margin-top: 8px;
+  color: #6f7580;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.45;
+}
 .login-method-panel { margin-top: 18px; }
 #login-recovery-email-field { margin-top: 15px; }
 #login-recovery-email-field small { display: block; margin-top: 7px; color: #747984; font-size: 10px; font-weight: 600; line-height: 1.45; }
@@ -420,10 +443,28 @@
   cursor: pointer;
 }
 
-.agent-platform-switch button img { width: 16px; height: 16px; opacity: .75; filter: invert(1); }
+.setup-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: inline-block;
+  background: currentColor;
+  opacity: .86;
+  -webkit-mask: var(--setup-icon) center / contain no-repeat;
+  mask: var(--setup-icon) center / contain no-repeat;
+}
+
+.setup-icon.monitor { --setup-icon: url('/icons/monitor.svg'); }
+.setup-icon.tablet { --setup-icon: url('/icons/tablet.svg'); }
+.setup-icon.windows { --setup-icon: url('/icons/windows.svg'); }
+.setup-icon.apple { --setup-icon: url('/icons/apple.svg'); }
+.setup-icon.linux { --setup-icon: url('/icons/linux.svg'); }
+.setup-icon.download { --setup-icon: url('/icons/download.svg'); }
+.setup-icon.shield { --setup-icon: url('/icons/shield-check.svg'); }
+.setup-icon.user { --setup-icon: url('/icons/user-round.svg'); }
+
 .agent-platform-switch button.active { background: #fff; color: #17191f; box-shadow: 0 3px 12px rgba(18, 20, 29, .16); }
-.agent-platform-switch button.active img { filter: none; }
-.agent-platform-switch button.active img { opacity: 1; }
+.agent-platform-switch button.active .setup-icon { opacity: 1; }
 .agent-platform-panel { margin-top: 16px; }
 .install-steps { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .install-steps li { display: grid; grid-template-columns: 25px 1fr; gap: 10px; align-items: start; }
@@ -432,11 +473,14 @@
 .install-steps p { margin: 3px 0 0; color: rgba(255,255,255,.66); font-size: 10px; line-height: 1.5; }
 .installer-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 11px; }
 .installer-links button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 6px 9px; border: 1px solid rgba(255,255,255,.22); border-radius: 7px; background: rgba(255,255,255,.08); color: #fff; font: inherit; font-size: 10px; font-weight: 900; cursor: pointer; }
-.installer-links button img { width: 16px; height: 16px; filter: invert(1); }
 .installer-links button:hover { border-color: #7770e8; background: #fafaff; color: #17191f; }
-.installer-links button:hover img { filter: none; }
 .installer-links button.active { border-color: #fff; background: #fff; color: #17191f; box-shadow: 0 0 0 3px rgba(255,255,255,.12); }
-.installer-links button.active img { filter: none; }
+.primary-installer-download { min-height: 48px; display: grid; grid-template-columns: 20px 1fr 18px; gap: 10px; align-items: center; margin-top: 12px; padding: 0 14px; border: 1px solid #514ad8; border-radius: 7px; background: #5d56e8; color: #fff; font-size: 12px; font-weight: 900; text-decoration: none; }
+.primary-installer-download:hover { background: #4d46cf; }
+.primary-installer-download .setup-icon { width: 18px; height: 18px; opacity: 1; }
+.installer-alternatives { margin-top: 9px; }
+.installer-alternatives summary { color: rgba(255,255,255,.82); font-size: 11px; font-weight: 800; cursor: pointer; }
+.technician-install { margin-top: 11px; }
 .command-label { display: block; margin-top: 13px; color: rgba(255,255,255,.7); font-size: 10px; }
 .platform-hint { margin: 9px 0 0; color: #707581; font-size: 10px; line-height: 1.5; }
 .existing-agent { margin-top: 11px; padding-top: 11px; border-top: 1px solid rgba(255,255,255,.16); }
@@ -453,6 +497,15 @@
 .tablet-limit p { margin: 0; color: #66583d; }
 .use-companion-agent { width: 100%; margin-top: 10px; }
 .use-companion-agent img { width: 15px; height: 15px; }
+.tablet-standalone-controls { display: grid; gap: 10px; margin-top: 10px; padding: 13px; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; background: rgba(255,255,255,.07); }
+.tablet-standalone-controls label { display: grid; gap: 6px; color: #fff; font-size: 12px; font-weight: 800; }
+.tablet-standalone-controls select { min-height: 44px; padding: 0 40px 0 12px; border: 1px solid rgba(255,255,255,.24); border-radius: 7px; background: #fff url('/icons/chevron-down.svg') calc(100% - 13px) center/15px no-repeat; color: #17191f; font: inherit; appearance: none; }
+#tablet-camera-preview { width: 100%; aspect-ratio: 16/9; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; background: #11151c; object-fit: cover; }
+.tablet-action-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.tablet-action-grid .btn { min-height: 48px; justify-content: center; padding: 8px; font-size: 11px; }
+.tablet-action-grid .btn img { width: 15px; height: 15px; }
+.tablet-runtime-status,.tablet-print-status { margin: 0; color: rgba(255,255,255,.76); font-size: 11px; line-height: 1.5; }
+.tablet-print-status { padding-top: 9px; border-top: 1px solid rgba(255,255,255,.14); }
 
 @media (prefers-reduced-motion: reduce) {
   .setup-step { animation: none; }
@@ -473,6 +526,7 @@
   .command-box { grid-template-columns: 1fr; }
   .command-box button { justify-content: center; border-left: 0; border-top: 1px solid #343740; padding: 11px; }
   .installer-links { grid-template-columns: 1fr; }
+  .tablet-action-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 980px) {
@@ -519,3 +573,50 @@
 .device-onboarding-grid .device-test,
 .agent-platform-switch button,
 .installer-links button { min-height: 44px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior:auto!important; animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; }
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 3px solid rgba(99, 91, 255, .58);
+  outline-offset: 3px;
+}
+
+body { font-size: 14px; }
+button,
+input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+select,
+textarea { min-height: 44px; }
+
+@media (pointer: coarse) {
+  a[href], button, summary, [role="button"], [tabindex]:not([tabindex="-1"]) { min-width: 48px; min-height: 48px; }
+  a[href] { display: inline-flex; align-items: center; }
+  input:not([type="hidden"]), select, textarea, label:has(input[type="checkbox"]), label:has(input[type="radio"]) { min-height: 48px; }
+}
+
+/* Shared field affordances: keep the native arrow/spinner from colliding with
+   values, units, or touch targets on every setup step. */
+select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-inline-end: 48px !important;
+  background-image: url('/icons/chevron-down.svg') !important;
+  background-repeat: no-repeat !important;
+  background-position: right 16px center !important;
+  background-size: 16px !important;
+}
+input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  display: none;
+}

@@ -1,1 +1,398 @@
-<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Photoslive Superadmin</title><link rel="stylesheet" href="/platform.css"></head><body><div class="platform-shell"><nav class="platform-nav"><a class="platform-brand" href="/"><span class="platform-mark"><img src="/icons/shield-check.svg" alt=""></span>Photoslive Superadmin</a><button class="btn" id="super-logout" hidden>Keluar</button></nav><main class="auth-layout" id="super-login-view"><section class="auth-card"><header class="auth-head"><p class="eyebrow">AKSES TERBATAS</p><h1>Masuk superadmin</h1><p>Kelola seluruh mesin, akses tenant, dan permintaan pemulihan akun.</p></header><form id="super-login"><div class="form-grid"><label class="full">Email<input id="super-email" type="email" required></label><label class="full">Password<input id="super-password" type="password" required></label></div><div class="form-actions"><button class="btn primary">Masuk</button></div></form><p class="status" id="super-login-status"></p></section></main><main class="dashboard hidden" id="super-dashboard"><div class="dashboard-title"><div><p class="eyebrow">CONTROL CENTER</p><h1>Semua photobox</h1><p>Pantau Agent, controller, dan hak akses dari satu tempat.</p></div><button class="btn" id="super-refresh">Perbarui</button></div><div class="metric-grid"><article class="metric"><small>TOTAL MESIN</small><strong id="metric-total">0</strong></article><article class="metric"><small>ONLINE</small><strong id="metric-online">0</strong></article><article class="metric"><small>DINONAKTIFKAN</small><strong id="metric-disabled">0</strong></article><article class="metric"><small>RESET PENDING</small><strong id="metric-reset">0</strong></article></div><section class="dashboard-card"><div class="card-head"><h2>Perangkat terpasang</h2></div><div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>STATUS</th><th>AGENT</th><th>AKSES</th><th>BUKA</th></tr></thead><tbody id="machine-rows"></tbody></table></div></section><section class="dashboard-card"><div class="card-head"><h2>Permintaan lupa password</h2></div><div class="table-wrap"><table><thead><tr><th>EMAIL</th><th>PHOTOBOX</th><th>WAKTU</th><th>STATUS</th></tr></thead><tbody id="reset-rows"></tbody></table></div></section></main></div><script src="/superadmin.js?v=2" defer></script></body></html>
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Photoslive Superadmin</title>
+  <link rel="stylesheet" href="/platform.css">
+</head>
+<body>
+  <div class="platform-shell">
+    <nav class="platform-nav">
+      <a class="platform-brand" href="/"><span class="platform-mark"><img src="/icons/shield-check.svg" alt=""></span>Photoslive Superadmin</a>
+      <button class="btn" id="super-logout" hidden>Keluar</button>
+    </nav>
+    <main class="auth-layout" id="super-login-view">
+      <section class="auth-card">
+        <header class="auth-head"><p class="eyebrow">AKSES TERBATAS</p><h1 id="super-login-title">Masuk superadmin</h1><p id="super-login-copy">Kelola seluruh mesin, akses tenant, dan pemulihan akun.</p></header>
+        <form id="super-login">
+          <div class="form-grid"><label class="full">Email<input id="super-email" type="email" autocomplete="username" required></label><label class="full">Password<input id="super-password" type="password" autocomplete="current-password" required></label></div>
+          <div class="form-actions"><button class="btn primary">Masuk</button></div>
+        </form>
+        <form id="platform-activate" hidden>
+          <div class="form-grid">
+            <label class="full">Email<input id="platform-activate-email" type="email" autocomplete="username" readonly required></label>
+            <label class="full">Password baru<input id="platform-activate-password" type="password" minlength="12" maxlength="200" autocomplete="new-password" required></label>
+            <label class="full">Ulangi password<input id="platform-activate-confirm" type="password" minlength="12" maxlength="200" autocomplete="new-password" required></label>
+          </div>
+          <div class="form-actions"><button class="btn primary" type="submit">Aktifkan akun</button></div>
+        </form>
+        <p class="status" id="super-login-status" role="status"></p>
+      </section>
+    </main>
+    <main class="dashboard hidden" id="super-dashboard">
+      <div class="dashboard-title"><div><p class="eyebrow">CONTROL CENTER · <span id="platform-role">PLATFORM OWNER</span></p><h1>Semua photobox</h1><p>Pantau fleet dan rollout dari satu tempat.</p></div><button class="btn" id="super-refresh">Perbarui</button></div>
+      <nav class="super-domain-nav" id="super-domain-nav" aria-label="Bagian superadmin">
+        <button type="button" data-super-domain="overview">Ringkasan</button>
+        <button type="button" data-super-domain="fleet">Fleet</button>
+        <button type="button" data-super-domain="integrations">Integrasi</button>
+        <button type="button" data-super-domain="finance">Finance</button>
+        <button type="button" data-super-domain="access">Akses</button>
+        <button type="button" data-super-domain="platform">Platform</button>
+      </nav>
+      <header class="super-domain-heading"><div><p class="eyebrow" id="super-domain-eyebrow">RINGKASAN</p><h2 id="super-domain-title">Kondisi platform</h2><p id="super-domain-copy">Hal penting yang perlu diperiksa sekarang.</p></div></header>
+      <p class="status" id="super-status" role="status"></p>
+      <div class="metric-grid super-metric-grid" id="super-overview-metrics"><article class="metric"><small>TOTAL MESIN</small><strong id="metric-total">0</strong></article><article class="metric"><small>SIAP</small><strong id="metric-online">0</strong></article><article class="metric"><small>ALERT AKTIF</small><strong id="metric-alert">0</strong></article><article class="metric"><small>DINONAKTIFKAN</small><strong id="metric-disabled">0</strong></article><article class="metric"><small>RESET PENDING</small><strong id="metric-reset">0</strong></article></div>
+      <section class="dashboard-card" id="platform-frame-card">
+        <div class="card-head"><div><h2>Perpustakaan frame</h2><p>Upload satu kali. Admin setiap photobox dapat melihat dan mengunduh file aslinya.</p></div><div class="card-actions"><button class="btn" id="platform-frame-retry" type="button">Perbarui</button><button class="btn primary" id="platform-frame-upload" type="button"><img src="/icons/image-plus.svg" alt="">Upload frame</button></div></div>
+        <input id="platform-frame-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        <p class="form-note">PNG, JPEG, atau WebP · maksimal 25 MB. File tersimpan pada object storage global dan tidak otomatis dipasang ke photobox.</p>
+        <p class="status" id="platform-frame-status" role="status" aria-live="polite"></p>
+        <div class="platform-frame-grid" id="platform-frame-grid"><p class="empty">Memuat perpustakaan frame…</p></div>
+      </section>
+      <section class="dashboard-card" id="fleet-health-card">
+        <div class="card-head"><div><h2>Kesehatan fleet</h2><p id="fleet-health-summary">Memeriksa heartbeat Agent…</p></div><button class="btn" id="health-retry" type="button">Periksa sekarang</button></div>
+        <p class="status" id="health-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>INSIDEN</th><th>DIMULAI</th><th>STATUS</th><th>TINDAKAN</th></tr></thead><tbody id="incident-rows"><tr><td colspan="5" class="empty">Memuat incident timeline…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="telemetry-history-card">
+        <div class="card-head"><div><h2>Histori kesehatan mesin</h2><p id="telemetry-history-summary">Pilih photobox untuk melihat tren RAM dan disk.</p></div><div class="telemetry-controls"><label>Photobox<select id="telemetry-machine"><option value="">Memuat mesin…</option></select></label><label>Rentang<select id="telemetry-range"><option value="6">6 jam</option><option value="24" selected>24 jam</option><option value="72">3 hari</option><option value="168">7 hari</option></select></label><button class="btn" id="telemetry-history-retry" type="button">Perbarui</button></div></div>
+        <p class="form-note">Snapshot disimpan maksimal setiap 5 menit selama 7 hari agar monitoring tetap ringan.</p>
+        <p class="status" id="telemetry-history-status" role="status"></p>
+        <div class="telemetry-chart" id="telemetry-chart" role="img" aria-label="Belum ada histori telemetry"><div class="empty">Memuat histori telemetry…</div></div>
+        <div class="telemetry-legend"><span><i class="disk"></i>Disk kosong</span><span><i class="memory"></i>RAM tersedia</span></div>
+      </section>
+      <section class="dashboard-card" id="alert-routing-card">
+        <div class="card-head"><div><h2>Routing alert</h2><p id="alert-routing-summary">Memuat antrean notifikasi insiden…</p></div><div class="card-actions"><button class="btn" id="alert-routing-retry" type="button">Perbarui</button><button class="btn primary" id="alert-routing-process" type="button">Kirim antrean</button></div></div>
+        <p class="form-note">Insiden dikirim lewat provider Monitoring webhook. Pengiriman berjalan terpisah dan tidak menghambat booth atau Agent.</p>
+        <p class="status" id="alert-routing-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>WAKTU</th><th>EVENT</th><th>PHOTOBOX</th><th>STATUS</th><th>COBA</th><th>ERROR</th><th>TINDAKAN</th></tr></thead><tbody id="alert-routing-rows"><tr><td colspan="7" class="empty">Memuat delivery alert…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="backend-health-card">
+        <div class="card-head"><div><h2>Backend & integrasi</h2><p>Probe read/write cache, koneksi database, dan kesiapan adapter tanpa menampilkan secret.</p></div><button class="btn" id="backend-health-retry" type="button">Periksa backend</button></div>
+        <p class="status" id="backend-health-status" role="status"></p>
+        <div class="backend-health-grid">
+          <article class="backend-health-item"><small>CACHE CLOUD</small><strong id="backend-cache-state">Memeriksa…</strong><p id="backend-cache-detail">—</p></article>
+          <article class="backend-health-item"><small>DATABASE</small><strong id="backend-database-state">Memeriksa…</strong><p id="backend-database-detail">—</p></article>
+          <article class="backend-health-item backend-provider-item"><small>INTEGRASI</small><div id="backend-provider-list"><p>Memeriksa konfigurasi adapter…</p></div></article>
+        </div>
+      </section>
+      <section class="dashboard-card" id="webhook-events-card">
+        <div class="card-head"><div><h2>Log webhook pembayaran</h2><p>Riwayat delivery aman tanpa payload, token, atau credential provider.</p></div><button class="btn" id="webhook-events-retry" type="button">Perbarui log</button></div>
+        <div class="metric-grid reconciliation-metrics"><article class="metric"><small>TOTAL TERBARU</small><strong id="webhook-summary-total">0</strong></article><article class="metric"><small>BERHASIL</small><strong id="webhook-summary-succeeded">0</strong></article><article class="metric"><small>GAGAL</small><strong id="webhook-summary-failed">0</strong></article><article class="metric"><small>DUPLIKAT AMAN</small><strong id="webhook-summary-duplicate">0</strong></article></div>
+        <p class="status" id="webhook-events-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>DITERIMA</th><th>PROVIDER / EVENT</th><th>PHOTOBOX</th><th>PEMBAYARAN</th><th>STATUS</th><th>LATENCY</th><th>ERROR</th></tr></thead><tbody id="webhook-event-rows"><tr><td colspan="7" class="empty">Memuat log webhook…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="provider-connections-card">
+        <div class="card-head"><div><h2>Koneksi provider</h2><p>Credential disimpan terenkripsi dan tidak pernah ditampilkan kembali.</p></div><button class="btn" id="provider-retry" type="button">Perbarui</button></div>
+        <div class="vault-state" id="provider-vault-state"><span class="pill warn">MEMERIKSA</span><p>Memeriksa vault credential…</p></div>
+        <form id="provider-form" class="provider-form">
+          <label>Provider<select id="provider-id" required></select></label>
+          <label>Scope<select id="provider-scope"><option value="global">Global</option><option value="organization">Organisasi</option><option value="booth">Photobox</option></select></label>
+          <label id="provider-target-wrap" hidden>Target<select id="provider-target"></select></label>
+          <label>Sumber<select id="provider-source"><option value="byo">API key sendiri (BYO)</option><option value="platform-managed">Dikelola platform</option></select></label>
+          <label>Kedaluwarsa (opsional)<input id="provider-expires-at" type="datetime-local"></label>
+          <label class="provider-default"><input id="provider-default" type="checkbox">Jadikan koneksi default pada scope ini</label>
+          <div class="provider-credentials" id="provider-credentials"></div>
+          <div class="provider-form-actions"><button class="btn primary" id="provider-save" type="submit">Simpan koneksi</button></div>
+        </form>
+        <p class="form-note">Menyimpan koneksi belum otomatis mengaktifkan fitur jika adapter provider belum tersedia pada build ini.</p>
+        <p class="status" id="provider-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>PROVIDER</th><th>SCOPE</th><th>SUMBER</th><th>CREDENTIAL</th><th>STATUS</th><th>VERSI</th><th>TINDAKAN</th></tr></thead><tbody id="provider-rows"><tr><td colspan="7" class="empty">Memuat koneksi provider…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="provider-economics-card">
+        <div class="card-head"><div><h2>Plan & pemakaian provider</h2><p>Allowance gratis, add-on berbayar, dan pemakaian terbaru per scope.</p></div><button class="btn" id="provider-economics-retry" type="button">Perbarui</button></div>
+        <div class="metric-grid reconciliation-metrics"><article class="metric"><small>TOTAL PLAN</small><strong id="provider-economics-total">0</strong></article><article class="metric"><small>AMAN</small><strong id="provider-economics-ready">0</strong></article><article class="metric"><small>HAMPIR HABIS</small><strong id="provider-economics-warning">0</strong></article><article class="metric"><small>HABIS</small><strong id="provider-economics-exhausted">0</strong></article></div>
+        <form id="provider-entitlement-form" class="provider-form">
+          <label>Provider<select id="provider-entitlement-id" required></select></label>
+          <label>Scope<select id="provider-entitlement-scope"><option value="global">Global</option><option value="organization">Organisasi</option><option value="booth">Photobox</option></select></label>
+          <label id="provider-entitlement-target-wrap" hidden>Target<select id="provider-entitlement-target"></select></label>
+          <label>Plan<select id="provider-entitlement-plan"><option value="free">Free</option><option value="managed">Managed</option><option value="addon">Paid add-on</option></select></label>
+          <label>Metrik<select id="provider-entitlement-metric"><option value="requests">Request</option><option value="transactions">Transaksi</option><option value="emails">Email</option><option value="bytes">Byte storage</option></select></label>
+          <label>Allowance<input id="provider-entitlement-allowance" type="number" min="0" step="1" inputmode="numeric" required></label>
+          <label>Add-on<input id="provider-entitlement-addon" type="number" min="0" step="1" inputmode="numeric" value="0" required></label>
+          <label>Biaya / bulan (IDR)<input id="provider-entitlement-price" type="number" min="0" step="1000" inputmode="numeric" value="0" required></label>
+          <label>Pemakaian saat ini<input id="provider-entitlement-used" type="number" min="0" step="1" inputmode="numeric" value="0" required></label>
+          <label class="provider-default"><input id="provider-entitlement-hard-limit" type="checkbox" checked>Hentikan pemakaian baru saat kuota habis</label>
+          <div class="provider-form-actions"><button class="btn primary" id="provider-entitlement-save" type="submit">Simpan plan & snapshot</button></div>
+        </form>
+        <p class="form-note">Snapshot dibatasi 90 catatan per koneksi. Secret provider tidak ikut disimpan.</p>
+        <p class="status" id="provider-economics-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>PROVIDER</th><th>SCOPE</th><th>PLAN</th><th>PEMAKAIAN</th><th>SISA</th><th>STATUS</th><th>DIPERBARUI</th></tr></thead><tbody id="provider-economics-rows"><tr><td colspan="7" class="empty">Memuat plan provider…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="provider-migrations-card">
+        <div class="card-head"><div><h2>Migrasi object storage</h2><p>Salin aset ke provider baru dengan checkpoint dan verifikasi checksum.</p></div><button class="btn" id="provider-migrations-retry" type="button">Perbarui</button></div>
+        <form id="provider-migration-form" class="provider-form">
+          <label>Photobox<select id="provider-migration-booth" required></select></label>
+          <label>Provider sumber<select id="provider-migration-source" required><option value="cloudflare-r2">Cloudflare R2</option><option value="s3-compatible">S3-compatible</option></select></label>
+          <label>Provider tujuan<select id="provider-migration-destination" required><option value="s3-compatible">S3-compatible</option><option value="cloudflare-r2">Cloudflare R2</option></select></label>
+          <div class="provider-form-actions"><button class="btn primary" id="provider-migration-create" type="submit">Buat migrasi</button></div>
+        </form>
+        <p class="form-note">File lama tetap tersedia. Provider sumber tidak diputus otomatis setelah migrasi.</p>
+        <p class="status" id="provider-migrations-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>SUMBER → TUJUAN</th><th>PROGRESS</th><th>STATUS</th><th>DIPERBARUI</th><th>TINDAKAN</th></tr></thead><tbody id="provider-migration-rows"><tr><td colspan="6" class="empty">Memuat migrasi provider…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="email-delivery-card">
+        <div class="card-head"><div><h2>Pengiriman email</h2><p>Antrean Resend berjalan terpisah dari booth dan Agent.</p></div><div class="card-actions"><button class="btn" id="email-delivery-retry" type="button">Perbarui</button><button class="btn primary" id="email-delivery-process" type="button">Kirim antrean</button></div></div>
+        <div class="metric-grid reconciliation-metrics"><article class="metric"><small>MENUNGGU</small><strong id="email-summary-queued">0</strong></article><article class="metric"><small>TERKIRIM</small><strong id="email-summary-sent">0</strong></article><article class="metric"><small>DITERIMA</small><strong id="email-summary-delivered">0</strong></article><article class="metric"><small>PERLU DIPERIKSA</small><strong id="email-summary-problems">0</strong></article></div>
+        <form id="email-test-form" class="provider-form">
+          <label>Email penerima<input id="email-test-recipient" type="email" autocomplete="off" required></label>
+          <label class="provider-default"><input id="email-test-confirm" type="checkbox" required>Kirim satu email tes nyata</label>
+          <div class="provider-form-actions"><button class="btn" id="email-test-submit" type="submit">Kirim tes</button></div>
+        </form>
+        <p class="form-note">Alamat ditampilkan dalam bentuk tersamarkan. Bounce, complaint, dan suppression diproses dari webhook terverifikasi.</p>
+        <p class="status" id="email-delivery-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>WAKTU</th><th>TEMPLATE</th><th>PENERIMA</th><th>STATUS</th><th>COBA</th><th>ERROR</th><th>TINDAKAN</th></tr></thead><tbody id="email-delivery-rows"><tr><td colspan="7" class="empty">Memuat antrean email…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="finance-policy-card">
+        <div class="card-head"><div><h2>Platform fee</h2><p>Atur fee global atau override per photobox. Nilai disalin ke transaksi dan tidak dapat berubah setelah QR dibuat.</p></div><button class="btn" id="finance-policy-retry" type="button">Perbarui</button></div>
+        <form id="finance-policy-form" class="provider-form">
+          <label>Scope<select id="finance-policy-scope"><option value="global">Global</option><option value="booth">Photobox</option></select></label>
+          <label id="finance-policy-target-wrap" hidden>Photobox<select id="finance-policy-target"></select></label>
+          <label>Platform fee (%)<input id="finance-policy-percent" type="number" min="0" max="100" step="0.01" inputmode="decimal" required></label>
+          <div class="provider-form-actions"><button class="btn primary" id="finance-policy-save" type="submit">Simpan fee</button></div>
+        </form>
+        <p class="form-note">Contoh: 5% disimpan sebagai 500 basis point. Override hanya berlaku untuk payment baru.</p>
+        <p class="status" id="finance-policy-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>SCOPE</th><th>TARGET</th><th>FEE</th><th>DIPERBARUI</th><th>TINDAKAN</th></tr></thead><tbody id="finance-policy-rows"><tr><td colspan="5" class="empty">Memuat kebijakan fee…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="finance-review-card">
+        <div class="card-head"><div><h2>Review pembayaran terlambat</h2><p>Pembayaran yang diterima setelah QR kedaluwarsa harus diputuskan finance admin.</p></div><button class="btn" id="finance-review-retry" type="button">Perbarui</button></div>
+        <p class="form-note">Setujui untuk menerima transaksi. Tolak hanya menandai kasus untuk tindak lanjut; refund provider tidak dijalankan otomatis.</p>
+        <p class="status" id="finance-review-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>PEMBAYARAN</th><th>PHOTOBOX</th><th>NOMINAL</th><th>DIBAYAR</th><th>STATUS</th><th>TINDAKAN</th></tr></thead><tbody id="finance-review-rows"><tr><td colspan="6" class="empty">Memuat antrean review…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="finance-balances-card">
+        <div class="card-head"><div><h2>Saldo photobox</h2><p>Proyeksi saldo dihitung dari ledger append-only, bukan angka yang dapat diedit.</p></div><button class="btn" id="finance-balances-retry" type="button">Perbarui saldo</button></div>
+        <div class="metric-grid super-metric-grid">
+          <article class="metric"><small>MENUNGGU FINALISASI</small><strong id="finance-balance-pending">Rp0</strong></article>
+          <article class="metric"><small>TERSEDIA</small><strong id="finance-balance-available">Rp0</strong></article>
+          <article class="metric"><small>TOTAL LEDGER</small><strong id="finance-balance-total">Rp0</strong></article>
+          <article class="metric"><small>ENTRY PROVISIONAL</small><strong id="finance-balance-provisional">0</strong></article>
+        </div>
+        <p class="form-note">Pendapatan tetap berstatus menunggu sampai biaya provider difinalisasi. Adjustment finance langsung masuk saldo tersedia dan seluruh nominal tetap dapat ditelusuri.</p>
+        <p class="status" id="finance-balances-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>MENUNGGU</th><th>TERSEDIA</th><th>TOTAL</th><th>ENTRY</th><th>TERAKHIR</th></tr></thead><tbody id="finance-balances-rows"><tr><td colspan="6" class="empty">Memuat saldo ledger…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="finance-payout-card">
+        <div class="card-head"><div><h2>Payout manual</h2><p>Siapkan rekening, approval terpisah, bukti transfer, dan email ringkasan dalam satu alur yang dapat diaudit.</p></div><button class="btn" id="finance-payout-retry" type="button">Perbarui payout</button></div>
+        <div class="metric-grid reconciliation-metrics"><article class="metric"><small>PAYOUT DIBAYAR</small><strong id="payout-delivery-paid">0</strong></article><article class="metric"><small>EMAIL DITERIMA</small><strong id="payout-delivery-delivered">0</strong></article><article class="metric"><small>EMAIL MENUNGGU</small><strong id="payout-delivery-pending">0</strong></article><article class="metric"><small>EMAIL BERMASALAH</small><strong id="payout-delivery-problems">0</strong></article></div>
+        <div class="payout-toolbar">
+          <label>Photobox<select id="finance-payout-booth" required><option value="">Memuat photobox…</option></select></label>
+          <label>Mode payout<select id="finance-payout-mode"><option value="disabled">Nonaktif</option><option value="manual_superadmin">Manual superadmin</option></select></label>
+          <label>Minimum payout (IDR)<input id="finance-payout-minimum" type="number" min="10000" max="100000000" step="1000" inputmode="numeric" value="10000"></label>
+          <button class="btn" id="finance-payout-policy-save" type="button">Simpan kebijakan</button>
+        </div>
+        <form id="finance-payout-account-form" class="provider-form">
+          <label>Kode bank<input id="finance-payout-bank" type="text" maxlength="32" placeholder="BCA" autocomplete="off" required></label>
+          <label>Nama pemilik rekening<input id="finance-payout-account-name" type="text" maxlength="120" autocomplete="name" required></label>
+          <label>Nomor rekening<input id="finance-payout-account-number" type="password" inputmode="numeric" minlength="6" maxlength="24" autocomplete="off" required></label>
+          <label>Konfirmasi password Anda<input id="finance-payout-account-password" type="password" autocomplete="current-password" required></label>
+          <div class="provider-form-actions"><button class="btn" id="finance-payout-account-save" type="submit">Simpan rekening</button></div>
+        </form>
+        <div class="payout-account-summary" id="finance-payout-account-summary"><span class="pill warn">BELUM SIAP</span><p>Rekening payout belum tersimpan untuk photobox ini.</p></div>
+        <form id="finance-payout-verify-form" class="provider-form">
+          <label>Referensi verifikasi<input id="finance-payout-verification-reference" type="text" maxlength="120" placeholder="Referensi cek rekening" autocomplete="off" required></label>
+          <label>Konfirmasi password Anda<input id="finance-payout-verification-password" type="password" autocomplete="current-password" required></label>
+          <div class="provider-form-actions"><button class="btn" id="finance-payout-verify" type="submit">Verifikasi rekening</button></div>
+        </form>
+        <div class="card-actions payout-create-actions"><button class="btn primary" id="finance-payout-create" type="button">Buat batch payout hari ini</button></div>
+        <p class="form-note">Nominal batch dihitung dari saldo ledger tersedia dan tidak dapat diedit. Maker tidak dapat menyetujui batchnya sendiri.</p>
+        <p class="status" id="finance-payout-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>DIBUAT</th><th>PHOTOBOX / PERIODE</th><th>REKENING</th><th>NOMINAL</th><th>STATUS</th><th>BUKTI / REFERENSI</th><th>TINDAKAN</th></tr></thead><tbody id="finance-payout-rows"><tr><td colspan="7" class="empty">Memuat payout…</td></tr></tbody></table></div>
+        <input id="finance-payout-proof-file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" hidden>
+      </section>
+      <section class="dashboard-card" id="finance-risk-card">
+        <div class="card-head"><div><h2>Risiko finance</h2><p>Sinyal server-side untuk payout bernilai tinggi, perubahan rekening, dan referensi transfer ganda.</p></div><button class="btn" id="finance-risk-retry" type="button">Perbarui risiko</button></div>
+        <div class="metric-grid reconciliation-metrics"><article class="metric"><small>TERBUKA</small><strong id="finance-risk-open">0</strong></article><article class="metric"><small>KRITIS</small><strong id="finance-risk-critical">0</strong></article><article class="metric"><small>DIAKUI</small><strong id="finance-risk-acknowledged">0</strong></article><article class="metric"><small>SELESAI</small><strong id="finance-risk-resolved">0</strong></article></div>
+        <div class="payout-toolbar">
+          <label>Photobox<select id="finance-risk-booth"><option value="">Semua photobox</option></select></label>
+          <label>Status<select id="finance-risk-status-filter"><option value="">Semua status</option><option value="open">Terbuka</option><option value="acknowledged">Diakui</option><option value="resolved">Selesai</option></select></label>
+          <label>Severity<select id="finance-risk-severity-filter"><option value="">Semua severity</option><option value="critical">Kritis</option><option value="high">Tinggi</option><option value="medium">Sedang</option><option value="low">Rendah</option></select></label>
+        </div>
+        <p class="form-note">Referensi transfer ganda diblokir sebelum ledger payout ditulis. Penyelesaian kasus hanya dapat dilakukan Platform Owner dengan konfirmasi password.</p>
+        <p class="status" id="finance-risk-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>TERAKHIR</th><th>RULE / PHOTOBOX</th><th>KASUS</th><th>SEVERITY</th><th>STATUS</th><th>KEMUNCULAN</th><th>TINDAKAN</th></tr></thead><tbody id="finance-risk-rows"><tr><td colspan="7" class="empty">Memuat kasus risiko…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="finance-refund-card">
+        <div class="card-head"><div><h2>Refund pembayaran</h2><p>Kembalikan seluruh nominal ke metode pembayaran asal. Status final diterima dari webhook Xendit.</p></div><img src="/icons/rotate-cw.svg" alt="" width="22" height="22"></div>
+        <form id="finance-refund-form" class="provider-form">
+          <label>ID pembayaran<input id="finance-refund-payment-id" type="text" maxlength="120" placeholder="pay_…" autocomplete="off" required></label>
+          <label>Alasan<select id="finance-refund-reason" required><option value="REQUESTED_BY_CUSTOMER">Diminta pelanggan</option><option value="CANCELLATION">Pembatalan</option><option value="DUPLICATE">Pembayaran ganda</option><option value="FRAUDULENT">Terindikasi fraud</option><option value="OTHERS">Lainnya</option></select></label>
+          <label class="provider-default"><input id="finance-refund-confirm" type="checkbox" required>Saya memahami refund penuh tidak dapat dibatalkan dari Photoslive</label>
+          <div class="provider-form-actions"><button class="btn primary" id="finance-refund-submit" type="submit">Kirim refund penuh</button></div>
+        </form>
+        <p class="form-note">Photoslive v1 belum mendukung refund sebagian. Tombol aman ditekan ulang: request yang sama akan digunakan kembali.</p>
+        <p class="status" id="finance-refund-status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="dashboard-card" id="finance-chargeback-card">
+        <div class="card-head"><div><h2>Catat chargeback</h2><p>Gunakan setelah sengketa dikonfirmasi di dashboard provider. Photoslive tidak menebak status sengketa dari webhook yang tidak didukung.</p></div><img src="/icons/shield-check.svg" alt="" width="22" height="22"></div>
+        <form id="finance-chargeback-form" class="provider-form">
+          <label>ID pembayaran<input id="finance-chargeback-payment-id" type="text" maxlength="120" placeholder="pay_…" autocomplete="off" required></label>
+          <label>ID kasus provider<input id="finance-chargeback-provider-id" type="text" maxlength="120" autocomplete="off" required></label>
+          <label>Waktu sengketa<input id="finance-chargeback-at" type="datetime-local" required></label>
+          <label>Alasan<textarea id="finance-chargeback-reason" maxlength="500" rows="3" required></textarea></label>
+          <label class="provider-default"><input id="finance-chargeback-confirm" type="checkbox" required>Saya sudah memverifikasi kasus ini di provider</label>
+          <div class="provider-form-actions"><button class="btn primary" id="finance-chargeback-submit" type="submit">Catat chargeback</button></div>
+        </form>
+        <p class="form-note">Tindakan ini membalik pendapatan transaksi melalui entry ledger kompensasi dan tidak dapat dihapus.</p>
+        <p class="status" id="finance-chargeback-status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="dashboard-card" id="finance-adjustment-card">
+        <div class="card-head"><div><h2>Koreksi saldo ledger</h2><p>Tambahkan koreksi append-only tanpa mengubah transaksi atau entry lama.</p></div><img src="/icons/receipt-text.svg" alt="" width="22" height="22"></div>
+        <form id="finance-adjustment-form" class="provider-form">
+          <label>ID pembayaran<input id="finance-adjustment-payment-id" type="text" maxlength="120" placeholder="pay_…" autocomplete="off" required></label>
+          <label>Nominal koreksi (IDR)<input id="finance-adjustment-amount" type="number" min="-10000000" max="10000000" step="1" inputmode="numeric" placeholder="Contoh: -5000 atau 5000" required></label>
+          <label>Referensi unik<input id="finance-adjustment-reference" type="text" maxlength="80" placeholder="Tiket atau referensi finance" autocomplete="off" required></label>
+          <label>Alasan<textarea id="finance-adjustment-reason" maxlength="500" rows="3" required></textarea></label>
+          <label class="provider-default"><input id="finance-adjustment-confirm" type="checkbox" required>Saya memahami koreksi ini permanen dan hanya dapat dibalik dengan entry baru</label>
+          <div class="provider-form-actions"><button class="btn primary" id="finance-adjustment-submit" type="submit">Tambahkan koreksi</button></div>
+        </form>
+        <p class="form-note">Gunakan nominal positif untuk menambah saldo booth dan negatif untuk mengurangi. Referensi yang sama aman dari duplikasi.</p>
+        <p class="status" id="finance-adjustment-status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="dashboard-card" id="finance-provider-fee-card">
+        <div class="card-head"><div><h2>Finalisasi biaya provider</h2><p>Catat biaya final dari laporan provider tanpa mengubah entry transaksi yang sudah ada.</p></div><img src="/icons/receipt-text.svg" alt="" width="22" height="22"></div>
+        <form id="finance-provider-fee-form" class="provider-form">
+          <label>ID pembayaran<input id="finance-provider-fee-payment-id" type="text" maxlength="120" placeholder="pay_…" autocomplete="off" required></label>
+          <label>Biaya provider (IDR)<input id="finance-provider-fee-amount" type="number" min="0" max="10000000" step="1" inputmode="numeric" required></label>
+          <label>Referensi laporan provider<input id="finance-provider-fee-reference" type="text" maxlength="120" placeholder="ID settlement atau laporan" autocomplete="off" required></label>
+          <label class="provider-default"><input id="finance-provider-fee-confirm" type="checkbox" required>Saya sudah mencocokkan biaya dengan laporan provider</label>
+          <div class="provider-form-actions"><button class="btn primary" id="finance-provider-fee-submit" type="submit">Finalisasi biaya</button></div>
+        </form>
+        <p class="form-note">Tindakan ini append-only dan memindahkan pendapatan transaksi dari menunggu ke tersedia setelah biaya provider dikurangi.</p>
+        <p class="status" id="finance-provider-fee-status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="dashboard-card" id="finance-ledger-reconciliation-card">
+        <div class="card-head"><div><h2>Rekonsiliasi provider & ledger</h2><p>Bandingkan laporan settlement provider dengan ledger Photoslive tanpa mengubah transaksi.</p></div><button class="btn" id="finance-ledger-reconciliation-retry" type="button">Perbarui riwayat</button></div>
+        <form id="finance-ledger-reconciliation-form" class="provider-form">
+          <label>Photobox<select id="finance-ledger-reconciliation-booth" required><option value="">Memuat photobox…</option></select></label>
+          <label>Provider<select id="finance-ledger-reconciliation-provider" required><option value="xendit">Xendit</option></select></label>
+          <label>Referensi laporan<input id="finance-ledger-reconciliation-reference" type="text" maxlength="120" placeholder="Contoh: settlement-2026-07-21" autocomplete="off" required></label>
+          <label class="full">File laporan CSV<input id="finance-ledger-reconciliation-file" type="file" accept=".csv,text/csv" required></label>
+          <label class="provider-default"><input id="finance-ledger-reconciliation-confirm" type="checkbox" required>Saya sudah memeriksa periode dan photobox laporan</label>
+          <div class="provider-form-actions"><button class="btn primary" id="finance-ledger-reconciliation-submit" type="submit">Jalankan rekonsiliasi</button></div>
+        </form>
+        <p class="form-note">Header wajib: <code>provider_payment_id</code>, <code>gross</code>, <code>provider_fee</code>, dan <code>status</code>. Maksimal 500 transaksi per run.</p>
+        <p class="status" id="finance-ledger-reconciliation-status" role="status" aria-live="polite"></p>
+        <div class="metric-grid super-metric-grid reconciliation-metrics">
+          <article class="metric"><small>COCOK</small><strong id="finance-ledger-reconciliation-matched">0</strong></article>
+          <article class="metric"><small>SELISIH</small><strong id="finance-ledger-reconciliation-mismatch">0</strong></article>
+          <article class="metric"><small>SELISIH GROSS</small><strong id="finance-ledger-reconciliation-gross">Rp0</strong></article>
+          <article class="metric"><small>SELISIH BIAYA</small><strong id="finance-ledger-reconciliation-fee">Rp0</strong></article>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>WAKTU</th><th>PHOTOBOX</th><th>REFERENSI</th><th>PROVIDER</th><th>COCOK</th><th>SELISIH</th><th>GROSS / BIAYA</th><th>STATUS</th></tr></thead><tbody id="finance-ledger-reconciliation-rows"><tr><td colspan="8" class="empty">Memuat riwayat rekonsiliasi…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="remote-jobs-card">
+        <div class="card-head"><div><h2>Antrean remote</h2><p id="remote-jobs-summary">Memuat perintah hardware terbaru…</p></div><button class="btn" id="remote-jobs-retry" type="button">Perbarui antrean</button></div>
+        <form id="remote-job-form" class="remote-job-form">
+          <label>Photobox<select id="remote-job-machine" required><option value="">Memuat mesin…</option></select></label>
+          <label>Perintah<select id="remote-job-type" required><option value="devices.refresh">Periksa perangkat</option><option value="agent.update.check">Periksa update Agent</option><option value="agent.update.apply">Pasang update terverifikasi</option><option value="agent.update.rollback">Rollback Agent</option><option value="service.restart">Restart Controller</option></select></label>
+          <button class="btn primary" id="remote-job-send" type="submit">Kirim perintah</button>
+        </form>
+        <p class="form-note">Perintah ditandatangani dan memiliki expiry. Install hanya bekerja setelah pemeriksaan menemukan versi siap; rollback dan restart memerlukan konfirmasi.</p>
+        <p class="status" id="remote-jobs-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>WAKTU</th><th>PHOTOBOX</th><th>PERINTAH</th><th>STATUS</th><th>PERCOBAAN</th><th>ERROR</th><th>TINDAKAN</th></tr></thead><tbody id="remote-job-rows"><tr><td colspan="7" class="empty">Memuat antrean remote…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="machine-card">
+        <div class="card-head"><div><h2>Perangkat terpasang</h2><p>Status terakhir dari Agent.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>STATUS</th><th>CONTROLLER</th><th>TERAKHIR TERLIHAT</th><th>SISTEM</th><th>BACKUP</th><th>AGENT</th><th>AKSES</th><th>BUKA</th></tr></thead><tbody id="machine-rows"></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="platform-staff-card">
+        <div class="card-head"><div><h2>Tim platform</h2><p>Kelola akses control plane dengan role terpisah. Password dan token tidak pernah ditampilkan.</p></div><button class="btn" id="platform-staff-retry" type="button">Perbarui</button></div>
+        <form id="platform-staff-invite-form" class="provider-form">
+          <label>Nama<input id="platform-staff-name" type="text" maxlength="80" autocomplete="off" required></label>
+          <label>Email<input id="platform-staff-email" type="email" maxlength="160" autocomplete="off" required></label>
+          <label>Role<select id="platform-staff-role"><option value="integration_admin">Integration Admin</option><option value="finance_admin">Finance Admin</option><option value="fleet_admin">Fleet Admin</option><option value="support">Support</option><option value="auditor">Auditor</option><option value="platform_owner">Platform Owner</option></select></label>
+          <label>Konfirmasi password Anda<input id="platform-staff-invite-password" type="password" autocomplete="current-password" required></label>
+          <div class="provider-form-actions"><button class="btn primary" id="platform-staff-invite" type="submit">Kirim undangan</button></div>
+        </form>
+        <div class="one-time-secret" id="platform-staff-activation-result" hidden><div><strong>Tautan aktivasi satu kali</strong><p>Kirim melalui saluran aman. Tautan berlaku 24 jam dan tidak disimpan dalam bentuk asli.</p><code id="platform-staff-activation-url"></code></div><button class="btn" id="platform-staff-copy" type="button">Salin</button></div>
+        <p class="status" id="platform-staff-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>NAMA</th><th>EMAIL</th><th>ROLE</th><th>STATUS</th><th>AKSES TERAKHIR</th><th>TINDAKAN</th></tr></thead><tbody id="platform-staff-rows"><tr><td colspan="6" class="empty">Memuat tim platform…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="membership-card">
+        <div class="card-head"><div><h2>Owner & pengguna</h2><p>Transfer owner hanya kepada pengguna aktif di photobox yang sama. Credential tidak pernah ditampilkan.</p></div></div>
+        <p class="status" id="ownership-status" role="status" aria-live="polite"></p>
+        <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>NAMA</th><th>EMAIL</th><th>PERAN</th><th>STATUS</th><th>DIBUAT</th><th>TINDAKAN</th></tr></thead><tbody id="member-rows"><tr><td colspan="7" class="empty">Memuat pengguna…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="feature-flag-card">
+        <div class="card-head"><div><h2>Feature flags</h2><p>Rollout aman: booth mengambil prioritas di atas organisasi dan global.</p></div><button class="btn" id="flags-retry" hidden>Coba lagi</button></div>
+        <form id="feature-flag-form" class="flag-form">
+          <label>Fitur<select id="flag-key" required></select></label>
+          <label>Scope<select id="flag-scope"><option value="global">Global</option><option value="organization">Organisasi</option><option value="booth">Photobox</option></select></label>
+          <label id="flag-target-wrap" hidden>Target<select id="flag-target"></select></label>
+          <label>Status<select id="flag-enabled"><option value="true">Aktif</option><option value="false">Nonaktif</option></select></label>
+          <div class="flag-actions"><button class="btn primary" id="flag-save">Terapkan</button><button class="btn" type="button" id="flag-delete">Gunakan turunan</button></div>
+        </form>
+        <p class="status" id="flag-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>FITUR</th><th>SCOPE</th><th>TARGET</th><th>STATUS</th><th>DIPERBARUI</th></tr></thead><tbody id="flag-rows"><tr><td colspan="5" class="empty">Memuat feature flags…</td></tr></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="reset-card">
+        <div class="card-head"><div><h2>Permintaan lupa password</h2><p>Superadmin mengirim pemulihan secara manual.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>EMAIL</th><th>PHOTOBOX</th><th>WAKTU</th><th>STATUS</th></tr></thead><tbody id="reset-rows"></tbody></table></div>
+      </section>
+      <section class="dashboard-card" id="audit-card">
+        <div class="card-head"><div><h2>Audit log</h2><p>100 aktivitas sensitif terbaru dari control plane.</p></div><button class="btn" id="audit-retry" type="button">Perbarui log</button></div>
+        <p class="status" id="audit-status" role="status"></p>
+        <div class="table-wrap"><table><thead><tr><th>WAKTU</th><th>AKTOR</th><th>PHOTOBOX</th><th>AKTIVITAS</th><th>TARGET</th></tr></thead><tbody id="audit-rows"><tr><td colspan="5" class="empty">Memuat audit log…</td></tr></tbody></table></div>
+      </section>
+    </main>
+  </div>
+  <dialog id="finance-review-dialog">
+    <form id="finance-review-form" method="dialog" class="auth-card">
+      <header class="auth-head"><p class="eyebrow">FINANCE REVIEW</p><h2 id="finance-review-title">Review pembayaran</h2><p>Catat alasan keputusan agar audit dapat ditelusuri.</p></header>
+      <input id="finance-review-payment-id" type="hidden">
+      <input id="finance-review-decision" type="hidden">
+      <label>Catatan keputusan<textarea id="finance-review-note" maxlength="500" rows="4" required></textarea></label>
+      <p class="status" id="finance-review-dialog-status" role="status"></p>
+      <div class="form-actions"><button class="btn" id="finance-review-cancel" type="button">Batal</button><button class="btn primary" id="finance-review-submit" type="submit">Simpan keputusan</button></div>
+    </form>
+  </dialog>
+  <dialog id="platform-staff-dialog">
+    <form id="platform-staff-action-form" method="dialog" class="auth-card">
+      <header class="auth-head"><p class="eyebrow">AKSI SENSITIF</p><h2 id="platform-staff-dialog-title">Kelola anggota tim</h2><p id="platform-staff-dialog-copy">Konfirmasi password Anda untuk melanjutkan.</p></header>
+      <input id="platform-staff-action-id" type="hidden">
+      <input id="platform-staff-action-type" type="hidden">
+      <label id="platform-staff-action-role-wrap" hidden>Role baru<select id="platform-staff-action-role"><option value="integration_admin">Integration Admin</option><option value="finance_admin">Finance Admin</option><option value="fleet_admin">Fleet Admin</option><option value="support">Support</option><option value="auditor">Auditor</option><option value="platform_owner">Platform Owner</option></select></label>
+      <label>Konfirmasi password Anda<input id="platform-staff-action-password" type="password" autocomplete="current-password" required></label>
+      <p class="status" id="platform-staff-dialog-status" role="status" aria-live="polite"></p>
+      <div class="form-actions"><button class="btn" id="platform-staff-dialog-cancel" type="button">Batal</button><button class="btn primary" id="platform-staff-dialog-submit" type="submit">Lanjutkan</button></div>
+    </form>
+  </dialog>
+  <dialog id="ownership-dialog">
+    <form id="ownership-form" method="dialog" class="auth-card">
+      <header class="auth-head"><p class="eyebrow">TRANSFER KEPEMILIKAN</p><h2>Pindahkan owner photobox</h2><p id="ownership-dialog-copy">Owner lama menjadi Admin. Seluruh sesi keduanya akan dihentikan.</p></header>
+      <input id="ownership-booth-code" type="hidden">
+      <input id="ownership-target-user-id" type="hidden">
+      <label>Konfirmasi kode photobox<input id="ownership-confirmation" type="text" maxlength="100" autocomplete="off" required></label>
+      <label>Konfirmasi password Anda<input id="ownership-password" type="password" autocomplete="current-password" required></label>
+      <p class="status" id="ownership-dialog-status" role="status" aria-live="polite"></p>
+      <div class="form-actions"><button class="btn" id="ownership-cancel" type="button">Batal</button><button class="btn primary" id="ownership-submit" type="submit">Transfer owner</button></div>
+    </form>
+  </dialog>
+  <dialog id="finance-payout-dialog">
+    <form id="finance-payout-action-form" method="dialog" class="auth-card">
+      <header class="auth-head"><p class="eyebrow">PAYOUT MANUAL</p><h2 id="finance-payout-dialog-title">Tindakan payout</h2><p id="finance-payout-dialog-copy">Konfirmasi tindakan dan simpan referensi untuk audit.</p></header>
+      <input id="finance-payout-action-id" type="hidden">
+      <input id="finance-payout-action-type" type="hidden">
+      <label id="finance-payout-action-value-wrap">Referensi atau alasan<input id="finance-payout-action-value" type="text" maxlength="500" autocomplete="off" required></label>
+      <label>Konfirmasi password Anda<input id="finance-payout-action-password" type="password" autocomplete="current-password" required></label>
+      <p class="status" id="finance-payout-dialog-status" role="status" aria-live="polite"></p>
+      <div class="form-actions"><button class="btn" id="finance-payout-dialog-cancel" type="button">Batal</button><button class="btn primary" id="finance-payout-dialog-submit" type="submit">Lanjutkan</button></div>
+    </form>
+  </dialog>
+  <dialog id="finance-risk-dialog">
+    <form id="finance-risk-action-form" method="dialog" class="auth-card">
+      <header class="auth-head"><p class="eyebrow">REVIEW RISIKO</p><h2 id="finance-risk-dialog-title">Tinjau kasus finance</h2><p id="finance-risk-dialog-copy">Catatan tersimpan di histori kasus dan audit log.</p></header>
+      <input id="finance-risk-action-id" type="hidden">
+      <input id="finance-risk-action-type" type="hidden">
+      <label>Catatan review<textarea id="finance-risk-action-note" maxlength="500" rows="4" required></textarea></label>
+      <label id="finance-risk-action-password-wrap" hidden>Konfirmasi password Anda<input id="finance-risk-action-password" type="password" autocomplete="current-password"></label>
+      <p class="status" id="finance-risk-dialog-status" role="status" aria-live="polite"></p>
+      <div class="form-actions"><button class="btn" id="finance-risk-dialog-cancel" type="button">Batal</button><button class="btn primary" id="finance-risk-dialog-submit" type="submit">Simpan review</button></div>
+    </form>
+  </dialog>
+  <script src="/superadmin.js?v=22" defer></script>
+</body>
+</html>

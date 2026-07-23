@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Status layanan cloud Photoslive">
+  <title>Status layanan — Photoslive</title>
+  <link rel="stylesheet" href="/platform.css">
+</head>
+<body>
+  <div class="platform-shell status-page">
+    <nav class="platform-nav">
+      <a class="platform-brand" href="/"><span class="platform-mark"><img src="/icons/camera.svg" alt=""></span>Photoslive</a>
+      <div class="nav-links"><a class="btn" href="/setup?mode=login">Masuk admin</a><a class="btn primary" href="/setup">Setup photobox</a></div>
+    </nav>
+    <main class="status-shell">
+      <header class="status-header">
+        <div><p class="eyebrow">STATUS LAYANAN</p><h1>Kondisi Photoslive</h1><p>Status aman untuk cloud API, konfigurasi, voucher, dan pengiriman hasil pelanggan.</p></div>
+        <button class="btn" id="refresh-public-status" type="button"><img src="/icons/refresh-cw.svg" alt="">Periksa lagi</button>
+      </header>
+      <section class="public-status-banner is-loading" id="public-status-banner" aria-live="polite">
+        <span class="public-status-mark" aria-hidden="true"></span>
+        <div><strong id="public-status-title">Memeriksa layanan…</strong><p id="public-status-notice">Mengambil status cloud terbaru.</p></div>
+      </section>
+      <section class="status-component-list" id="status-component-list" aria-label="Komponen layanan">
+        <article class="status-component is-loading"><span></span><div><strong>Cloud API</strong><small>Memeriksa</small></div></article>
+        <article class="status-component is-loading"><span></span><div><strong>Konfigurasi & voucher</strong><small>Memeriksa</small></div></article>
+        <article class="status-component is-loading"><span></span><div><strong>Upload & hasil pelanggan</strong><small>Memeriksa</small></div></article>
+      </section>
+      <p class="status-updated" id="public-status-updated">Belum diperbarui.</p>
+      <aside class="status-offline-note"><img src="/icons/wifi-off.svg" alt=""><div><strong>Booth lokal dirancang tetap berjalan saat internet putus.</strong><p>QRIS tidak tersedia saat offline. Voucher yang telah dialokasikan dan mode gratis tetap mengikuti kebijakan offline mesin.</p></div></aside>
+    </main>
+  </div>
+  <script src="/status.js?v=1" defer></script>
+</body>
+</html>

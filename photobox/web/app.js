@@ -1,4 +1,4 @@
-const state = { settings: null, status: null, assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, dirtySections: new Set(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, pendingFrameUpload: null };
+const state = { settings: null, status: null, authBooth: null, assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, platformFrames: [], platformFramePage: 1, platformFrameLoading: false, dirtySections: new Set(), pendingSettingsSave: null, pendingVoucherGenerations: new Map(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, cleanupPreview: null, pendingFrameUpload: null };
 const adminBoothCode = new URLSearchParams(location.search).get("booth") || location.pathname.split("/").filter(Boolean)[0] || localStorage.getItem("photoslive.boothCode") || "";
 const titles = {
   overview: ["Kondisi photobox", "Mesin / Ringkasan", "Lihat apakah mesin siap dipakai dan periksa jika ada masalah."],
@@ -7,6 +7,8 @@ const titles = {
   devices: ["Kamera & printer", "Mesin / Kamera dan printer", "Sambungkan, pilih, dan periksa perangkat yang akan digunakan."],
   agent: ["Photoslive Agent", "Mesin / Photoslive Agent", "Download, pasangkan, dan monitor controller hardware lokal."],
   storage: ["Penyimpanan foto", "Mesin / Penyimpanan", "Atur penghapusan foto lokal dan tujuan upload cloud."],
+  integrations: ["Integrasi", "Cloud / Integrasi", "Lihat layanan yang terhubung ke photobox dan periksa koneksinya."],
+  finance: ["Finance", "Pembayaran / Finance", "Lihat saldo dan ledger photobox tanpa mengubah payout atau fee."],
   system: ["Pengaturan mesin", "Mesin / Pengaturan", "Ubah identitas mesin atau unduh laporan untuk teknisi."],
   users: ["Pengguna admin", "Akun / Pengguna", "Kelola email, password, PIN, serta pengguna yang boleh mengakses mesin ini."],
 };
@@ -53,6 +55,71 @@ const formatBytes = (value = 0) => { const units = ["B", "KB", "MB", "GB", "TB"]
 const formatIDR = (value = 0) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value);
 const formatUptime = (seconds = 0) => { const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.floor((seconds % 3600) / 60); return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`; };
 const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+const isLocalAdmin = () => ["127.0.0.1", "localhost"].includes(location.hostname);
+
+function describePlatformError(error, featureLabel = "Fitur ini") {
+  const status = Number(error?.status || 0);
+  const raw = String(error?.message || "").trim();
+  if (status === 404 || /request gagal \(404\)|not found/i.test(raw)) {
+    return isLocalAdmin()
+      ? `${featureLabel} belum tersedia pada backend lokal yang sedang dipakai. Fitur lain dan data photobox tetap aman.`
+      : `${featureLabel} belum diaktifkan untuk photobox ini. Hubungi superadmin jika fitur ini diperlukan.`;
+  }
+  if (status === 403 || /forbidden|tidak diizinkan|akses ditolak/i.test(raw)) return `Akun Anda tidak memiliki izin untuk ${featureLabel.toLowerCase()}.`;
+  if (/agent|controller|heartbeat|mesin belum terhubung/i.test(raw)) return `${featureLabel} memerlukan Photoslive Agent yang aktif pada komputer photobox.`;
+  return raw || `${featureLabel} tidak dapat dimuat.`;
+}
+
+function setViewCapabilityState(viewName, available, options = {}) {
+  const view = $(`#${viewName}-view`);
+  if (!view) return;
+  let stateBox = view.querySelector(":scope > .feature-state");
+  if (!stateBox) {
+    stateBox = document.createElement("div");
+    stateBox.className = "feature-state";
+    view.prepend(stateBox);
+  }
+  view.classList.toggle("is-feature-unavailable", !available);
+  stateBox.hidden = available;
+  if (!available) {
+    const actionLabel = options.actionLabel || options.retryLabel || "";
+    const actionAttribute = options.actionView
+      ? `data-go="${escapeHtml(options.actionView)}"`
+      : `data-feature-retry="${escapeHtml(viewName)}"`;
+    const actionIcon = options.actionIcon || (options.actionView ? "arrow-right" : "refresh-cw");
+    const action = actionLabel ? `<button type="button" class="button secondary" ${actionAttribute}><img src="/icons/${actionIcon}.svg" alt="" />${escapeHtml(actionLabel)}</button>` : "";
+    const secondaryAction = options.secondaryActionLabel && options.secondaryActionView
+      ? `<button type="button" class="button quiet-button" data-go="${escapeHtml(options.secondaryActionView)}">${escapeHtml(options.secondaryActionLabel)}</button>`
+      : "";
+    const steps = Array.isArray(options.steps) && options.steps.length
+      ? `<ol class="feature-state-steps">${options.steps.map(step => `<li>${escapeHtml(step)}</li>`).join("")}</ol>`
+      : "";
+    stateBox.innerHTML = `<span class="feature-state-icon"><img src="/icons/${options.icon || "triangle-alert"}.svg" alt="" /></span><div class="feature-state-content"><strong>${escapeHtml(options.title || "Belum tersedia")}</strong><p>${escapeHtml(options.detail || "Fitur ini belum dapat digunakan.")}</p>${steps}</div><div class="feature-state-actions">${action}${secondaryAction}</div>`;
+  }
+  view.querySelectorAll("button, input, select, textarea").forEach(control => {
+    if (control.closest(".feature-state")) return;
+    if (!available) {
+      if (!control.disabled) control.dataset.capabilityDisabled = "true";
+      control.disabled = true;
+    } else if (control.dataset.capabilityDisabled === "true") {
+      control.disabled = false;
+      delete control.dataset.capabilityDisabled;
+    }
+  });
+}
+
+function setInlineStatus(id, parent, level, title, detail, action = null) {
+  if (!parent) return;
+  let box = document.getElementById(id);
+  if (!box) {
+    box = document.createElement("div");
+    box.id = id;
+    parent.prepend(box);
+  }
+  box.className = `inline-status ${level}`;
+  const actionMarkup = action ? `<button type="button" class="button secondary compact" data-go="${escapeHtml(action.view)}">${escapeHtml(action.label)}</button>` : "";
+  box.innerHTML = `<span><img src="/icons/${level === "ready" ? "circle-check" : "triangle-alert"}.svg" alt="" /></span><div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(detail)}</p></div>${actionMarkup}`;
+}
 
 async function api(path, options = {}) {
   if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost" && !path.startsWith("/api/bridge")) {
@@ -71,8 +138,9 @@ function isCloudDataPath(path) {
 }
 
 const isProductionHost = () => location.hostname !== "127.0.0.1" && location.hostname !== "localhost";
-const assetUploadLimit = () => isProductionHost() ? 2 * 1024 * 1024 : 10 * 1024 * 1024;
-const assetUploadLimitLabel = () => isProductionHost() ? "2 MB" : "10 MB";
+const directObjectUploadEnabled = () => state.settings?.featureFlags?.direct_object_upload?.enabled !== false;
+const assetUploadLimit = () => isProductionHost() ? Number(state.settings?.capabilities?.cloudStorage?.available && directObjectUploadEnabled() ? 25_000_000 : 2_000_000) : 10 * 1024 * 1024;
+const assetUploadLimitLabel = () => `${Math.round(assetUploadLimit() / 1_000_000)} MB`;
 const isUploadedAssetUrl = url => String(url || "").startsWith("/uploads/") || String(url || "").includes("action=cloud_asset");
 
 async function cloudDataApi(path, options = {}) {
@@ -87,17 +155,20 @@ async function cloudDataApi(path, options = {}) {
     };
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number(options.timeoutMs || 10_000));
+  const timeoutMs = Math.max(1_000, Math.min(60_000, Number(options.timeoutMs || 10_000)));
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response;
+  const method = String(options.method || "GET").toUpperCase();
+  const idempotencyKey = method === "GET" ? "" : String(options.idempotencyKey || crypto.randomUUID());
   try {
     response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(adminBoothCode)}&path=${encodeURIComponent(path)}`, {
-      method: String(options.method || "GET").toUpperCase(),
-      headers: { "Content-Type": "application/json" },
-      body: String(options.method || "GET").toUpperCase() === "GET" ? undefined : JSON.stringify({ data }),
+      method,
+      headers: { "Content-Type": "application/json", ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
+      body: method === "GET" ? undefined : JSON.stringify({ data }),
       signal: controller.signal,
     });
   } catch (error) {
-    if (error?.name === "AbortError") throw new Error("Cloud tidak merespons dalam 10 detik. Perubahan belum tersimpan.");
+    if (error?.name === "AbortError") throw new Error(`Cloud tidak merespons dalam ${Math.round(timeoutMs / 1_000)} detik. Perubahan belum tersimpan; tekan Simpan untuk mencoba lagi.`);
     throw error;
   } finally { clearTimeout(timeout); }
   const payload = await response.json().catch(() => ({}));
@@ -163,28 +234,80 @@ function blobToBase64(blob) {
   });
 }
 
+async function sha256Blob(blob) {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function uploadAssetFile(file, kind) {
+  const headers = { "Content-Type": file.type, "X-Filename": file.name };
+  if (!isProductionHost() || !state.settings?.capabilities?.cloudStorage?.available || !directObjectUploadEnabled()) {
+    return api(`/api/assets/${kind}`, { method: "PUT", headers, body: file });
+  }
+  try {
+    const prepared = await cloudDataApi(`/api/assets/${kind}/prepare`, {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size, checksumSha256: await sha256Blob(file) }),
+    });
+    const uploaded = await fetch(prepared.upload.url, { method: "PUT", headers: prepared.upload.headers, body: file });
+    if (!uploaded.ok) throw new Error(`Object storage menolak upload (${uploaded.status})`);
+    return cloudDataApi(`/api/assets/${kind}/finalize`, { method: "POST", body: JSON.stringify({ uploadId: prepared.uploadId }) });
+  } catch (error) {
+    throw new Error(`${error.message}. Periksa CORS bucket object storage; jangan ulangi sebelum status object dipastikan.`);
+  }
+}
+
 function cloudBinaryUrl(result) {
   if (!result?.bodyBase64) throw new Error("Agent tidak mengirim data file");
   const bytes = Uint8Array.from(atob(result.bodyBase64), character => character.charCodeAt(0));
   return URL.createObjectURL(new Blob([bytes], { type: result.contentType || "application/octet-stream" }));
 }
 
-function toast(message, kind = "default") {
+function errorActionFor(message) {
+  const text = String(message || "").toLowerCase();
+  if (/kamera|printer|perangkat/.test(text)) return { label: "Periksa perangkat", view: "devices" };
+  if (/agent|heartbeat|mesin tidak|controller/.test(text)) return { label: "Periksa Agent", view: "agent" };
+  if (/storage|penyimpanan|folder|disk|upload|object/.test(text)) return { label: "Periksa penyimpanan", view: "storage" };
+  if (/qris|voucher|pembayaran|provider/.test(text)) return { label: "Periksa pembayaran", view: "access" };
+  if (/akun|pengguna|password|pin|login|sesi admin/.test(text)) return { label: "Periksa pengguna", view: "users" };
+  return null;
+}
+
+function toast(message, kind = "default", action = null) {
   const notice = $("#notice");
-  notice.textContent = message;
+  const resolvedAction = action || (kind === "error" ? errorActionFor(message) : null);
+  setText("#notice-message", message);
+  const actionButton = $("#notice-action");
+  actionButton.hidden = !resolvedAction;
+  actionButton.textContent = resolvedAction?.label || "";
+  actionButton.onclick = resolvedAction ? () => { showView(resolvedAction.view); notice.classList.remove("show"); } : null;
   notice.dataset.kind = kind;
+  notice.classList.toggle("has-action", Boolean(resolvedAction));
   notice.classList.add("show");
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => notice.classList.remove("show"), 3200);
+  toast.timer = setTimeout(() => notice.classList.remove("show"), resolvedAction ? 7000 : 3200);
+}
+
+function renderSaveState() {
+  const button = $("#save-button");
+  if (!button || button.getAttribute("aria-busy") === "true") return;
+  const count = state.dirtySections.size;
+  button.classList.toggle("has-pending", count > 0);
+  button.innerHTML = `<img src="/icons/save.svg" alt="" />${count ? `Simpan ${count} bagian` : "Tersimpan"}`;
+  button.disabled = count === 0;
 }
 
 function showView(name) {
+  if (!titles[name]) name = "overview";
   $$(".nav-item").forEach(button => button.classList.toggle("active", button.dataset.view === name));
   $$(".view").forEach(view => view.classList.toggle("active", view.id === `${name}-view`));
   $("#view-title").textContent = titles[name][0];
   $("#breadcrumbs").textContent = titles[name][1];
   $("#page-help").textContent = titles[name][2];
-  $("#save-button").hidden = name === "overview";
+  // Only configuration screens use the shared settings save operation.
+  // Read-only and action-oriented screens must not show a misleading button.
+  $("#save-button").hidden = !["content", "access", "devices", "storage", "system"].includes(name);
+  renderSaveState();
   const currentUrl = new URL(window.location.href);
   currentUrl.searchParams.set("view", name);
   window.history.replaceState(null, "", currentUrl);
@@ -192,6 +315,9 @@ function showView(name) {
   if (name === "agent") loadAgentStatus();
   if (name === "users") loadUsers();
   if (name === "system") loadAuditLog();
+  if (name === "integrations") loadBoothIntegrations();
+  if (name === "finance") loadBoothFinance();
+  if (name === "content" && !state.platformFrames.length) loadPlatformFrameLibrary();
 }
 
 async function platformApi(action, options = {}) {
@@ -199,17 +325,81 @@ async function platformApi(action, options = {}) {
   const { query: _query, ...fetchOptions } = options;
   const response = await fetch(`/api/platform?action=${encodeURIComponent(action)}${query}`, { ...fetchOptions, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || `Request gagal (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(payload.error || payload.message || `Request gagal (${response.status})`);
+    error.status = response.status;
+    error.code = payload.code || "";
+    throw error;
+  }
   return payload;
+}
+
+const PLATFORM_FRAME_PAGE_SIZE = 10;
+
+function renderPlatformFramePagination(total) {
+  const pagination = $("#platform-frame-library-pagination");
+  if (!pagination) return;
+  const pages = Math.max(1, Math.ceil(total / PLATFORM_FRAME_PAGE_SIZE));
+  state.platformFramePage = Math.min(Math.max(1, state.platformFramePage), pages);
+  pagination.hidden = pages <= 1;
+  pagination.innerHTML = pages <= 1 ? "" : `<span>${total} frame</span><div><button type="button" data-platform-frame-page="${state.platformFramePage - 1}" aria-label="Halaman sebelumnya" ${state.platformFramePage === 1 ? "disabled" : ""}><img src="/icons/chevron-left.svg" alt="" /></button><b>Halaman ${state.platformFramePage} dari ${pages}</b><button type="button" data-platform-frame-page="${state.platformFramePage + 1}" aria-label="Halaman berikutnya" ${state.platformFramePage === pages ? "disabled" : ""}><img src="/icons/chevron-right.svg" alt="" /></button></div>`;
+}
+
+function renderPlatformFrameLibrary() {
+  const grid = $("#platform-frame-library-grid");
+  if (!grid) return;
+  const start = (state.platformFramePage - 1) * PLATFORM_FRAME_PAGE_SIZE;
+  const frames = state.platformFrames.slice(start, start + PLATFORM_FRAME_PAGE_SIZE);
+  grid.setAttribute("aria-busy", "false");
+  grid.innerHTML = frames.length ? frames.map(frame => `<article class="platform-frame-download-card">
+    <a class="platform-frame-download-preview" href="${escapeHtml(frame.previewUrl)}" target="_blank" rel="noopener" aria-label="Lihat preview ${escapeHtml(frame.name)}"><img src="${escapeHtml(frame.previewUrl)}" alt="Preview ${escapeHtml(frame.name)}" loading="lazy" /></a>
+    <div><b title="${escapeHtml(frame.name)}">${escapeHtml(frame.name)}</b><small>${formatBytes(frame.size)} · ${frame.createdAt ? new Date(frame.createdAt).toLocaleDateString("id-ID") : "Tanggal tidak tersedia"}</small></div>
+    <a class="button secondary compact" href="${escapeHtml(frame.downloadUrl)}" download><img src="/icons/download.svg" alt="" />Unduh frame</a>
+  </article>`).join("") : '<div class="empty-action"><p>Superadmin belum membagikan frame global.</p><button type="button" class="button secondary" data-retry-platform-frames>Coba lagi</button></div>';
+  setText("#platform-frame-library-status", `${state.platformFrames.length} frame global tersedia`);
+  renderPlatformFramePagination(state.platformFrames.length);
+}
+
+function renderPlatformFrameLibraryError(error) {
+  const grid = $("#platform-frame-library-grid");
+  if (!grid) return;
+  grid.setAttribute("aria-busy", "false");
+  grid.innerHTML = `<div class="empty-action error"><p>${escapeHtml(error.message || "Perpustakaan frame tidak dapat dimuat")}</p><button type="button" class="button secondary" data-retry-platform-frames>Coba lagi</button></div>`;
+  setText("#platform-frame-library-status", "Gagal memuat frame global");
+  $("#platform-frame-library-pagination").hidden = true;
+}
+
+async function loadPlatformFrameLibrary(force = false) {
+  const grid = $("#platform-frame-library-grid");
+  if (!grid || state.platformFrameLoading || (!force && state.platformFrames.length)) return;
+  state.platformFrameLoading = true;
+  grid.setAttribute("aria-busy", "true");
+  grid.innerHTML = '<p class="empty">Memuat frame global…</p>';
+  setText("#platform-frame-library-status", "Memuat perpustakaan frame…");
+  const refresh = $("#refresh-platform-frames");
+  if (refresh) refresh.disabled = true;
+  try {
+    const result = await platformApi("platform_frame_library");
+    state.platformFrames = Array.isArray(result.frames) ? result.frames : [];
+    state.platformFramePage = 1;
+    renderPlatformFrameLibrary();
+  } catch (error) { renderPlatformFrameLibraryError(error); }
+  finally { state.platformFrameLoading = false; if (refresh) refresh.disabled = false; }
 }
 
 async function loadUsers() {
   try {
     const [{ users }, me] = await Promise.all([platformApi("users"), platformApi("me")]);
+    setViewCapabilityState("users", true);
     setText("#user-count", users.length);
-    $("#user-rows").innerHTML = users.map(user => `<tr><td>${escapeHtml(user.name)}</td><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.role)}</td><td><span class="device-state ${user.active ? "connected" : "attention"}">${user.active ? "AKTIF" : "NONAKTIF"}</span></td></tr>`).join("") || '<tr><td colspan="4">Belum ada pengguna.</td></tr>';
+    $("#user-rows").innerHTML = users.map(user => `<tr><td>${escapeHtml(user.name)}${user.current ? " <small>(Anda)</small>" : ""}</td><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.role)}</td><td><span class="device-state ${user.active ? "connected" : "attention"}">${user.active ? "AKTIF" : "NONAKTIF"}</span></td><td>${Number(user.activeSessions || 0)} aktif</td><td><button type="button" class="button secondary compact revoke-user-sessions" data-user-id="${escapeHtml(user.id)}" data-current="${user.current ? "true" : "false"}" ${user.activeSessions ? "" : "disabled"}>${user.current ? "Keluar semua" : "Cabut sesi"}</button></td></tr>`).join("") || '<tr><td colspan="6">Belum ada pengguna.</td></tr>';
     $("#profile-name").value = me.user?.name || ""; $("#profile-email").value = me.user?.email || "";
-  } catch (error) { toast(error.message, "error"); }
+    $("#remote-password-warning").hidden = Boolean(me.user?.hasRemotePassword);
+  } catch (error) {
+    setText("#user-count", "—");
+    $("#user-rows").innerHTML = '<tr><td colspan="6">Data pengguna belum tersedia.</td></tr>';
+    setViewCapabilityState("users", false, { title: "Pengelolaan pengguna belum tersedia", detail: describePlatformError(error, "Pengelolaan pengguna"), retryLabel: "Coba lagi" });
+  }
 }
 
 async function loadAuditLog() {
@@ -221,7 +411,163 @@ async function loadAuditLog() {
   } catch (error) { rows.innerHTML = `<tr><td colspan="4">${escapeHtml(error.message)}</td></tr>`; }
 }
 
+const providerStateLabel = value => ({ active: "AKTIF", paused: "DIJEDA", revoked: "DICABUT" }[value] || "BELUM AKTIF");
+const providerCheckHealthy = connection => ["healthy", "ready", "available", "ok"].includes(String(connection?.lastCheck?.state || "").toLowerCase());
+
+async function loadBoothIntegrations() {
+  const container = $("#integration-list");
+  const refresh = $("#refresh-integrations");
+  if (!container || refresh?.dataset.loading === "true") return;
+  refresh.dataset.loading = "true"; refresh.disabled = true;
+  container.innerHTML = '<p class="empty">Memuat integrasi…</p>';
+  try {
+    const result = await platformApi("booth_integrations", { query: { boothCode: adminBoothCode } });
+    setViewCapabilityState("integrations", true);
+    const labels = Object.fromEntries((result.definitions || []).map(item => [item.id, item.label]));
+    const connections = result.connections || [];
+    const active = connections.filter(item => item.status === "active");
+    setText("#integration-active-count", active.length);
+    setText("#integration-healthy-count", active.filter(providerCheckHealthy).length);
+    container.innerHTML = connections.length ? connections.map(connection => {
+      const own = connection.scope === "booth";
+      const healthy = providerCheckHealthy(connection);
+      const checked = connection.lastCheck?.checkedAt ? new Date(connection.lastCheck.checkedAt).toLocaleString("id-ID") : "Belum pernah dites";
+      return `<article class="integration-row"><span class="panel-icon"><img src="/icons/cloud.svg" alt="" /></span><div><div><b>${escapeHtml(labels[connection.providerId] || connection.label || connection.providerId)}</b><span class="device-state ${connection.status === "active" ? "connected" : "attention"}">${providerStateLabel(connection.status)}</span></div><p>${own ? "Khusus booth ini" : "Dikelola platform"} · ${healthy ? "koneksi sehat" : checked}</p></div>${own && connection.status === "active" ? `<button type="button" class="button secondary compact" data-test-integration="${escapeHtml(connection.providerId)}"><img src="/icons/refresh-cw.svg" alt="" />Tes koneksi</button>` : '<span class="api-badge">READ ONLY</span>'}</article>`;
+    }).join("") : '<div class="empty-action"><p>Belum ada integrasi yang ditugaskan ke photobox ini.</p><small>Hubungi superadmin untuk menyambungkan storage, QRIS, email, atau monitoring.</small><button type="button" class="button secondary" id="retry-integrations">Coba lagi</button></div>';
+  } catch (error) {
+    setText("#integration-active-count", "—"); setText("#integration-healthy-count", "—");
+    container.innerHTML = '<p class="empty">Integrasi belum dapat ditampilkan.</p>';
+    setViewCapabilityState("integrations", false, { title: "Integrasi belum tersedia", detail: describePlatformError(error, "Integrasi photobox"), retryLabel: "Coba lagi" });
+  } finally {
+    refresh.dataset.loading = "false";
+    refresh.disabled = Boolean($("#integrations-view")?.classList.contains("is-feature-unavailable"));
+  }
+}
+
+async function testBoothIntegration(button) {
+  button.disabled = true; const original = button.innerHTML; button.textContent = "Mengetes…";
+  try {
+    const { check } = await platformApi("booth_integrations", { method: "POST", body: JSON.stringify({ boothCode: adminBoothCode, operation: "test", providerId: button.dataset.testIntegration }) });
+    toast(check?.state ? `Hasil koneksi: ${check.state}` : "Tes koneksi selesai");
+    await loadBoothIntegrations();
+  } catch (error) { toast(error.message, "error"); button.disabled = false; button.innerHTML = original; }
+}
+
+let boothFinanceReport = null;
+
+function financeCsvCell(value) { return `"${String(value ?? "").replaceAll('"', '""')}"`; }
+
+function exportBoothFinanceCsv() {
+  if (!boothFinanceReport) return;
+  const rows = [["waktu", "payment_id", "tujuan", "nominal", "currency", "status"]];
+  for (const payment of boothFinanceReport.payments || []) rows.push([payment.createdAt, payment.id, payment.purpose, payment.amount, payment.currency, payment.status]);
+  rows.push([], ["ringkasan", "bruto", "biaya_provider", "biaya_platform", "pendapatan_bersih"], ["periode", boothFinanceReport.totals?.gross || 0, boothFinanceReport.totals?.providerFee || 0, boothFinanceReport.totals?.platformFee || 0, boothFinanceReport.totals?.totalBalance || 0]);
+  const blob = new Blob([`\uFEFF${rows.map(row => row.map(financeCsvCell).join(",")).join("\n")}`], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `photoslive-finance-${adminBoothCode}-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); URL.revokeObjectURL(link.href);
+}
+
+async function loadBoothFinance() {
+  const rows = $("#finance-ledger-rows"), refresh = $("#refresh-finance");
+  if (!rows || refresh?.dataset.loading === "true") return;
+  refresh.dataset.loading = "true"; refresh.disabled = true;
+  rows.innerHTML = '<tr><td colspan="6">Memuat ledger…</td></tr>';
+  try {
+    const result = await platformApi("booth_finance", { query: { boothCode: adminBoothCode, limit: 100, from: $("#finance-date-from")?.value || "", to: $("#finance-date-to")?.value || "" } });
+    setViewCapabilityState("finance", true);
+    setText("#finance-total-balance", formatIDR(result.balance?.totalBalance));
+    setText("#finance-pending-balance", formatIDR(result.balance?.pendingBalance));
+    setText("#finance-available-balance", formatIDR(result.balance?.availableBalance));
+    setText("#finance-entry-count", Number(result.balance?.entryCount || 0));
+    boothFinanceReport = result.report || null;
+    setText("#finance-report-gross", formatIDR(result.report?.totals?.gross));
+    setText("#finance-report-provider-fee", formatIDR(result.report?.totals?.providerFee));
+    setText("#finance-report-platform-fee", formatIDR(result.report?.totals?.platformFee));
+    setText("#finance-report-net", formatIDR(result.report?.totals?.totalBalance));
+    const paymentRows = $("#finance-payment-rows");
+    if (paymentRows) paymentRows.innerHTML = result.report?.payments?.length ? result.report.payments.map(payment => `<tr><td>${payment.createdAt ? new Date(payment.createdAt).toLocaleString("id-ID") : "—"}</td><td><code>${escapeHtml(payment.id)}</code></td><td>${escapeHtml(payment.purpose)}</td><td>${formatIDR(payment.amount)}</td><td><span class="device-state ${["paid", "settled"].includes(payment.status) ? "connected" : "attention"}">${escapeHtml(payment.status.toUpperCase())}</span></td></tr>`).join("") : '<tr><td colspan="5">Belum ada transaksi pada periode ini.</td></tr>';
+    $("#export-finance-csv").disabled = false;
+    setText("#finance-report-status", `${result.report?.payments?.length || 0} transaksi · ${result.report?.payouts?.length || 0} payout pada periode terpilih.`);
+    rows.innerHTML = result.entries?.length ? result.entries.map(entry => `<tr><td>${entry.createdAt ? new Date(entry.createdAt).toLocaleString("id-ID") : "—"}</td><td><b>${escapeHtml(entry.type)}</b></td><td>${formatIDR(entry.gross)}</td><td>${formatIDR(Number(entry.platformFee || 0) + Number(entry.providerFee || 0))}</td><td>${formatIDR(entry.boothEarning)}</td><td><span class="device-state ${entry.available ? "connected" : "attention"}">${entry.available ? "TERSEDIA" : "MENUNGGU"}</span></td></tr>`).join("") : '<tr><td colspan="6"><div class="empty-action"><p>Belum ada transaksi finance.</p><button type="button" class="button secondary" id="retry-finance">Coba lagi</button></div></td></tr>';
+  } catch (error) {
+    boothFinanceReport = null;
+    if ($("#export-finance-csv")) $("#export-finance-csv").disabled = true;
+    ["#finance-total-balance", "#finance-pending-balance", "#finance-available-balance", "#finance-entry-count"].forEach(selector => setText(selector, "—"));
+    rows.innerHTML = '<tr><td colspan="6">Finance belum tersedia untuk photobox ini.</td></tr>';
+    if ($("#finance-payment-rows")) $("#finance-payment-rows").innerHTML = '<tr><td colspan="5">Belum ada data yang dapat ditampilkan.</td></tr>';
+    const unavailable = Number(error?.status || 0) === 404;
+    setViewCapabilityState("finance", false, unavailable
+      ? {
+        title: "Finance belum diaktifkan",
+        detail: "Aktifkan koneksi pembayaran agar saldo dan transaksi photobox dapat ditampilkan.",
+        icon: "receipt-text",
+        steps: ["Hubungkan database cloud", "Pilih provider pembayaran", "Aktifkan payout photobox"],
+        actionLabel: "Atur integrasi",
+        actionView: "integrations",
+        actionIcon: "settings",
+        secondaryActionLabel: "Kembali ke ringkasan",
+        secondaryActionView: "overview",
+      }
+      : { title: "Finance sedang gagal dimuat", detail: describePlatformError(error, "Finance"), retryLabel: "Coba lagi" });
+  } finally {
+    refresh.dataset.loading = "false";
+    refresh.disabled = Boolean($("#finance-view")?.classList.contains("is-feature-unavailable"));
+  }
+}
+
 const agentState = { machineId: localStorage.getItem("photoslive.machineId") || "", timer: null };
+
+const AGENT_JOB_LABELS = {
+  pending: "Menunggu", running: "Diproses", completed: "Selesai",
+  failed: "Gagal", dead: "Dihentikan",
+};
+
+function renderAdminAgentQueues(machine) {
+  const renderRows = (selector, jobs, kind) => {
+    const container = $(selector);
+    if (!container) return;
+    if (!machine) {
+      container.innerHTML = '<p class="empty">Hubungkan Agent untuk melihat antrean.</p>';
+      return;
+    }
+    if (!jobs.length) {
+      container.innerHTML = `<p class="empty">Belum ada pekerjaan ${kind === "sync" ? "upload" : "cetak"}.</p>`;
+      return;
+    }
+    container.innerHTML = jobs.map(job => {
+      const status = String(job.status || "unknown");
+      const failed = kind === "sync" ? ["failed", "dead"].includes(status) : status === "failed";
+      const label = job.shareCode || job.sessionId || job.fileName || job.id || "Pekerjaan lokal";
+      const detail = kind === "sync"
+        ? `${Number(job.completedFileCount || 0)}/${Number(job.fileCount || 0)} file · ${Number(job.attempts || 0)} percobaan`
+        : `${job.message || "Pekerjaan cetak"} · ${Number(job.attempts || 0)} percobaan`;
+      const retryAttribute = kind === "sync" ? "data-retry-sync-job" : "data-retry-print-job";
+      return `<article class="admin-job-row">
+        <div class="admin-job-copy"><div><b>${escapeHtml(label)}</b><span class="device-state ${status === "completed" ? "connected" : failed ? "attention" : ""}">${escapeHtml(AGENT_JOB_LABELS[status] || status)}</span></div><p>${escapeHtml(detail)}</p>${job.lastError ? `<p class="admin-job-error">${escapeHtml(job.lastError)}</p>` : ""}</div>
+        ${failed ? `<button type="button" class="button secondary compact" ${retryAttribute}="${escapeHtml(job.id)}"><img src="/icons/refresh-cw.svg" alt="" />Coba lagi</button>` : ""}
+      </article>`;
+    }).join("");
+  };
+  renderRows("#admin-sync-job-list", Array.isArray(machine?.syncJobs) ? machine.syncJobs.slice(0, 10) : [], "sync");
+  renderRows("#admin-print-job-list", Array.isArray(machine?.printJobs) ? machine.printJobs.slice(0, 10) : [], "print");
+}
+
+function renderSessionRecovery(machine) {
+  const container = $("#admin-session-recovery-list");
+  if (!container) return;
+  const sessions = Array.isArray(machine?.sessionRecovery?.sessions) ? machine.sessionRecovery.sessions.slice(0, 10) : [];
+  if (!machine) { container.innerHTML = '<p class="empty">Hubungkan Agent untuk melihat sesi lokal.</p>'; return; }
+  if (!sessions.length) { container.innerHTML = '<p class="empty">Tidak ada sesi aktif atau kedaluwarsa dalam 24 jam terakhir.</p>'; return; }
+  const online = Boolean(machine.online);
+  container.innerHTML = sessions.map(session => {
+    const active = session.status === "active" && new Date(session.deadlineAt || 0).getTime() > Date.now();
+    const progress = `${Number(session.selectedPhotoCount || 0)}/${Number(session.photoSlots || 1)} foto dipilih · ${Number(session.captureCount || 0)} pengambilan`;
+    const deadline = session.deadlineAt ? new Date(session.deadlineAt).toLocaleString("id-ID") : "Tidak ada batas waktu";
+    return `<article class="admin-job-row">
+      <div class="admin-job-copy"><div><b>${escapeHtml(session.id || "Sesi lokal")}</b><span class="device-state ${active ? "connected" : "attention"}">${active ? "AKTIF" : "BERHENTI"}</span></div><p>${escapeHtml(progress)} · batas ${escapeHtml(deadline)}</p></div>
+      <button type="button" class="button secondary compact" data-recover-session="${escapeHtml(session.id)}" ${online ? "" : "disabled"}><img src="/icons/rotate-cw.svg" alt="" />${active ? "Tambah 3 menit" : "Pulihkan 3 menit"}</button>
+    </article>`;
+  }).join("");
+}
 
 async function bridgeApi(action, options = {}) {
   const separator = options.query ? `&${new URLSearchParams(options.query)}` : "";
@@ -234,6 +580,8 @@ function renderAgentMachine(machine) {
     empty.hidden = false; content.hidden = true;
     $("#agent-overall-state").textContent = agentState.machineId ? "TIDAK DITEMUKAN" : "BELUM TERHUBUNG";
     $("#agent-overall-state").className = "device-state attention";
+    renderAdminAgentQueues(null);
+    renderSessionRecovery(null);
     return;
   }
   empty.hidden = true; content.hidden = false;
@@ -252,7 +600,34 @@ function renderAgentMachine(machine) {
   setText("#agent-printer-value", printer ? "Tersambung" : "Terputus");
   setText("#agent-printer-detail", printer?.name || "Tidak ada printer aktif");
   setText("#agent-disk-value", formatBytes(machine.telemetry?.disk?.freeBytes || 0));
+  const sync = machine.sync || {};
+  const pendingSync = Number(sync.pending || 0) + Number(sync.running || 0);
+  setText("#agent-sync-value", sync.failed ? "Perlu diperiksa" : pendingSync ? `${pendingSync} menunggu` : "Siap");
+  setText("#agent-sync-detail", sync.lastError || `${Number(sync.completed || 0)} selesai · ${Number(sync.failed || 0)} gagal`);
+  const pendingPrints = Number(machine.queue?.pendingPrints || 0);
+  setText("#agent-print-queue-value", pendingPrints ? `${pendingPrints} menunggu` : "Siap");
+  setText("#agent-print-queue-detail", pendingPrints ? "Diproses berurutan oleh Controller" : "Tidak ada cetakan tertunda");
+  const update = machine.update || {};
+  const updateState = String(update.state || update.status || "unknown");
+  const updateLabels = { current: "Terbaru", ready: "Tersedia", checking: "Memeriksa", downloading: "Mengunduh", installing: "Memasang", failed: "Perlu diperiksa", "rolled-back": "Dipulihkan" };
+  setText("#agent-update-value", updateLabels[updateState] || update.currentVersion || machine.agentVersion || "Belum tersedia");
+  setText("#agent-update-detail", update.message || `Versi ${update.currentVersion || machine.agentVersion || "—"}`);
+  const connection = $("#agent-connection-control");
+  connection.dataset.paused = machine.agentState === "paused" ? "true" : "false";
+  connection.querySelector("span").textContent = machine.agentState === "paused" ? "Lanjutkan koneksi" : "Jeda koneksi";
+  $$('[data-agent-job]:not(#agent-connection-control)').forEach(button => {
+    button.disabled = !online;
+    button.dataset.availability = online ? "ready" : "unavailable";
+    button.title = online ? "" : "Agent offline. Nyalakan mesin atau periksa koneksi Agent.";
+  });
+  $("#agent-install-update").disabled = !online || updateState !== "ready";
+  $("#agent-rollback-update").disabled = !online || update.rollbackAvailable !== true;
+  if (!online) {
+    $("#agent-operation-status").textContent = "Agent offline. Simpan pengaturan cloud tetap tersedia, tetapi aksi perangkat menunggu Agent kembali online.";
+  }
   $("#agent-device-list").innerHTML = devices.length ? devices.map(device => `<article class="device-card"><span class="device-glyph"><img src="/icons/${device.kind === "printer" ? "printer" : "camera"}.svg" alt="" /></span><div><b>${escapeHtml(device.name)}</b><p>${escapeHtml(device.detail || device.id || "Perangkat lokal")}</p></div><span class="device-state ${device.status === "connected" ? "connected" : "attention"}">${escapeHtml(device.status || "unknown")}</span></article>`).join("") : '<p class="empty">Agent belum melaporkan kamera atau printer.</p>';
+  renderAdminAgentQueues(machine);
+  renderSessionRecovery(machine);
 }
 
 async function loadAgentStatus(showNotice = false) {
@@ -288,13 +663,44 @@ async function claimAgent(event) {
   } finally { button.disabled = false; }
 }
 
-async function queueAgentJob(type) {
+async function queueAgentJob(type, payload = {}, sourceButton = null) {
   if (!agentState.machineId) return toast("Hubungkan mesin terlebih dahulu", "error");
+  const button = sourceButton || $$('[data-agent-job]').find(candidate => candidate.dataset.agentJob === type && !candidate.disabled);
+  if (!button || button.dataset.availability === "unavailable") return toast("Agent offline. Aksi perangkat belum tersedia.", "error");
+  if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
+  const status = $("#agent-operation-status");
   try {
-    await bridgeApi("enqueue_job", { method: "POST", body: JSON.stringify({ machineId: agentState.machineId, type, payload: {} }) });
-    toast("Perintah dikirim ke Agent");
+    const { job } = await bridgeApi("enqueue_job", { method: "POST", body: JSON.stringify({ machineId: agentState.machineId, type, payload }) });
+    button.dataset.jobState = "pending";
+    status.textContent = "Perintah dikirim. Menunggu Agent…";
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 750));
+      const result = await directBridge("job_status", { machineId: agentState.machineId, jobId: job.id }, "GET");
+      button.dataset.jobState = String(result.job.status || "pending");
+      if (result.job.status === "completed") { status.textContent = "Perintah selesai dijalankan."; toast("Perintah selesai"); await loadAgentStatus(); return; }
+      if (["failed", "expired"].includes(result.job.status)) throw new Error(result.job.error || "Perintah tidak berhasil dijalankan");
+    }
+    status.textContent = "Perintah masih diproses di latar belakang. Status akan diperbarui otomatis.";
+    toast("Perintah masih diproses");
+  } catch (error) { status.textContent = error.message; toast(error.message, "error"); }
+  finally { if (button) { button.disabled = false; button.removeAttribute("aria-busy"); delete button.dataset.jobState; } }
+}
+
+async function setAgentConnection() {
+  const button = $("#agent-connection-control");
+  const pause = button.dataset.paused !== "true";
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  const status = $("#agent-operation-status");
+  try {
+    const result = await platformApi("agent_connection", { method: "POST", body: JSON.stringify({ booth: adminBoothCode, paused: pause }) });
+    status.textContent = pause ? "Jeda koneksi akan diterapkan pada heartbeat berikutnya." : "Koneksi akan dilanjutkan pada heartbeat berikutnya.";
+    button.dataset.paused = pause ? "true" : "false";
+    button.querySelector("span").textContent = pause ? "Lanjutkan koneksi" : "Jeda koneksi";
+    toast(result.applied ? "Status koneksi diperbarui" : "Perubahan dijadwalkan");
     setTimeout(() => loadAgentStatus(), 2500);
-  } catch (error) { toast(error.message, "error"); }
+  } catch (error) { status.textContent = error.message; toast(error.message, "error"); }
+  finally { button.disabled = false; button.removeAttribute("aria-busy"); }
 }
 
 function hydrateSettings() {
@@ -307,17 +713,87 @@ function hydrateSettings() {
   appearance.buttonFontSize ||= 16;
   $$('[data-setting]').forEach(input => {
     const value = getPath(state.settings, input.dataset.setting);
+    if (input.tagName === "SELECT" && value != null && ![...input.options].some(option => option.value === String(value))) {
+      const option = document.createElement("option");
+      option.value = String(value);
+      option.textContent = input.matches("#camera-select, #printer-select") ? "Pilihan tersimpan · menunggu perangkat" : String(value);
+      option.dataset.savedSelection = "true";
+      input.append(option);
+    }
     if (input.type === "checkbox") input.checked = Boolean(value); else input.value = value ?? "";
   });
   $$('[data-color-output]').forEach(output => { output.textContent = String(getPath(state.settings, output.dataset.colorOutput) || "#000000").toUpperCase(); });
   $$('[data-font-select]').forEach(select => { select.style.fontFamily = FONT_FAMILIES[select.value] || FONT_FAMILIES.system; });
   setText("#logo-size-value", `${appearance.logoSizePercent}%`);
-  $("#machine-name").textContent = state.settings.booth.name;
-  $("#node-location").textContent = state.settings.booth.location;
+  $("#machine-name").textContent = state.authBooth?.name || state.settings.booth.name;
+  $("#node-location").textContent = state.authBooth?.location || state.settings.booth.location;
   syncActiveFrameCapacity();
   renderAssets();
   updatePreview();
   updateAdminSettingSummaries();
+  updateDependentControls();
+  simplifyAdminLayout();
+}
+
+function simplifyAdminLayout() {
+  const contentSections = [
+    [".screen-settings", "content-screen-section"],
+    ["#logo-grid", "content-brand-section"],
+    [".background-library", "content-background-section"],
+    [".frame-library", "content-frame-section"],
+  ];
+  contentSections.forEach(([selector, id]) => {
+    const node = $(selector)?.closest("article") || $(selector);
+    if (node) node.id = id;
+  });
+  const addCapabilityAction = (selector, label) => {
+    const note = $(selector);
+    if (!note || note.querySelector("[data-go='integrations']")) return;
+    note.insertAdjacentHTML("beforeend", `<button type="button" class="button secondary compact" data-go="integrations">${escapeHtml(label)}</button>`);
+  };
+  addCapabilityAction("#qris-capability-note", "Buka Integrasi");
+  addCapabilityAction("#cloud-storage-capability-note", "Buka Integrasi");
+  const apiGrid = $("#system-view .api-grid");
+  const technicalPanel = apiGrid?.closest("article");
+  if (apiGrid && technicalPanel && !technicalPanel.querySelector(".technical-toggle")) {
+    technicalPanel.classList.add("advanced-panel");
+    apiGrid.hidden = true;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "button secondary compact technical-toggle";
+    toggle.innerHTML = '<img src="/icons/database.svg" alt="" /><span>Tampilkan detail teknis</span>';
+    toggle.addEventListener("click", () => {
+      apiGrid.hidden = !apiGrid.hidden;
+      toggle.querySelector("span").textContent = apiGrid.hidden ? "Tampilkan detail teknis" : "Sembunyikan detail teknis";
+    });
+    technicalPanel.querySelector(".panel-head")?.append(toggle);
+  }
+}
+
+function updateDependentControls() {
+  if (!state.settings) return;
+  const unlimited = Boolean(state.settings.booth.unlimitedRetakes);
+  const retake = $('[data-setting="booth.retakeLimit"]');
+  if (retake) {
+    retake.disabled = unlimited;
+    retake.closest("label")?.classList.toggle("is-unavailable", unlimited);
+    retake.closest("label")?.querySelector(".field-state")?.remove();
+    if (unlimited) retake.closest("label")?.insertAdjacentHTML("beforeend", '<span class="field-state">Tidak dipakai saat retake tanpa batas aktif.</span>');
+  }
+  const qrisEnabled = Boolean(state.settings.payment.qrisEnabled);
+  const paidPrintEnabled = Boolean(state.settings.payment.paidPrintEnabled);
+  $('[data-setting="payment.price"]')?.closest("label")?.classList.toggle("is-unavailable", !qrisEnabled);
+  if ($('[data-setting="payment.price"]')) $('[data-setting="payment.price"]').disabled = !qrisEnabled;
+  $('[data-setting="payment.printPrice"]')?.closest("label")?.classList.toggle("is-unavailable", !paidPrintEnabled);
+  if ($('[data-setting="payment.printPrice"]')) $('[data-setting="payment.printPrice"]').disabled = !paidPrintEnabled;
+  const timeout = $('[data-setting="booth.sessionTimeoutSeconds"]');
+  if (timeout) {
+    timeout.closest("label")?.querySelector(".session-time-readable")?.remove();
+    const totalSeconds = Math.max(0, Number(timeout.value || 0));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    timeout.closest("label")?.insertAdjacentHTML("beforeend", `<span class="field-state session-time-readable">Sama dengan ${minutes ? `${minutes} menit` : ""}${minutes && seconds ? " " : ""}${seconds ? `${seconds} detik` : ""}.</span>`);
+  }
 }
 
 function markSetting(input) {
@@ -335,6 +811,8 @@ function markSetting(input) {
     state.dirtySections.add("appearance");
     if ($("#frame-photo-slots")) $("#frame-photo-slots").value = value;
   }
+  updateDependentControls();
+  renderSaveState();
   updatePreview();
 }
 
@@ -425,6 +903,13 @@ function applyCapabilityGates() {
     control.closest("label")?.classList.toggle("is-unavailable", disabled);
   };
 
+  const qrisProvider = $('[data-setting="payment.provider"]');
+  const providerLabels = { xendit: "Xendit" };
+  const qrisProviders = Array.isArray(qris.providers) ? qris.providers : [];
+  if (qrisProvider) {
+    qrisProvider.innerHTML = '<option value="Not configured">Belum tersambung</option>' + qrisProviders.map(provider => `<option value="${escapeHtml(provider)}">${escapeHtml(providerLabels[provider] || provider)}</option>`).join("");
+    qrisProvider.value = qrisProviders.includes(String(state.settings.payment.provider).toLowerCase()) ? String(state.settings.payment.provider).toLowerCase() : "Not configured";
+  }
   if (!qris.available) {
     state.settings.payment.qrisEnabled = false;
     state.settings.payment.paidPrintEnabled = false;
@@ -434,8 +919,20 @@ function applyCapabilityGates() {
     const note = $("#qris-capability-note");
     if (note) note.hidden = false;
     setText("#qris-capability-detail", qris.reason);
+  } else if ($("#qris-capability-note")) {
+    $("#qris-capability-note").hidden = true;
   }
 
+  const storageProvider = $('[data-setting="storage.provider"]');
+  const cloudProviders = Array.isArray(cloudStorage.providers) ? cloudStorage.providers : [];
+  const cloudProviderLabels = { "cloudflare-r2": "Cloudflare R2", "s3-compatible": "S3 compatible" };
+  if (storageProvider) {
+    storageProvider.innerHTML = cloudProviders.length
+      ? cloudProviders.map(provider => `<option value="${escapeHtml(provider)}">${escapeHtml(cloudProviderLabels[provider] || provider)}</option>`).join("")
+      : '<option value="">Belum tersambung</option>';
+    const current = String(state.settings.storage.provider || "").toLowerCase().replaceAll(" ", "-");
+    storageProvider.value = cloudProviders.includes(current) ? current : (cloudProviders[0] || "");
+  }
   if (!cloudStorage.available) {
     state.settings.storage.cloudEnabled = false;
     gate('[data-setting="storage.cloudEnabled"]', true);
@@ -443,6 +940,8 @@ function applyCapabilityGates() {
     const note = $("#cloud-storage-capability-note");
     if (note) note.hidden = false;
     setText("#cloud-storage-capability-detail", cloudStorage.reason);
+  } else if ($("#cloud-storage-capability-note")) {
+    $("#cloud-storage-capability-note").hidden = true;
   }
 
   const folderButton = $("#pick-storage-folder");
@@ -451,28 +950,43 @@ function applyCapabilityGates() {
     folderButton.title = "Buka Local Manager pada komputer photobox untuk memilih folder.";
     setText("#storage-folder-help", "Pemilihan folder hanya tersedia di Local Manager pada komputer photobox. Path yang sudah diketahui tetap dapat diketik manual.");
   }
+  updateDependentControls();
 }
 
 async function saveSettings() {
   if (!state.dirtySections.size) return toast("Tidak ada perubahan yang perlu disimpan");
   const sections = [...state.dirtySections];
+  const data = Object.fromEntries(sections.map(section => [section, structuredClone(state.settings[section])]));
+  const fingerprint = JSON.stringify(data);
+  if (!state.pendingSettingsSave || state.pendingSettingsSave.fingerprint !== fingerprint) {
+    state.pendingSettingsSave = { fingerprint, idempotencyKey: `settings.${adminBoothCode}.${crypto.randomUUID()}` };
+  }
   const button = $("#save-button");
   const original = button.innerHTML;
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
   button.innerHTML = '<img src="/icons/refresh-cw.svg" alt="" />Menyimpan…';
   try {
+    const saved = await api("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+      idempotencyKey: state.pendingSettingsSave.idempotencyKey,
+      timeoutMs: 10_000,
+    });
     for (const section of sections) {
-      await api(`/api/settings/${section}`, { method: "PATCH", body: JSON.stringify(state.settings[section]) });
+      if (JSON.stringify(state.settings[section]) !== JSON.stringify(data[section])) continue;
+      state.settings[section] = saved[section];
+      state.dirtySections.delete(section);
     }
-    state.dirtySections.clear();
-    toast("Pengaturan berhasil disimpan");
+    state.pendingSettingsSave = null;
+    toast(state.dirtySections.size ? "Perubahan awal tersimpan. Simpan lagi untuk perubahan terbaru." : "Pengaturan berhasil disimpan");
     updatePreview();
   } catch (error) { toast(`Gagal menyimpan: ${error.message}`, "error"); }
   finally {
     button.disabled = false;
     button.removeAttribute("aria-busy");
     button.innerHTML = original;
+    renderSaveState();
   }
 }
 
@@ -818,7 +1332,7 @@ async function uploadAsset(file, kind, frameOptions = {}) {
   if (file.size > assetUploadLimit()) return toast(`Ukuran gambar maksimal ${assetUploadLimitLabel()}`, "error");
   try {
     const imageDimensions = kind === "frame" ? await readImageDimensions(file) : null;
-    const result = await api(`/api/assets/${kind}`, { method: "PUT", headers: { "Content-Type": file.type, "X-Filename": file.name }, body: file });
+    const result = await uploadAssetFile(file, kind);
     state.assets[kind].unshift(result.asset);
     if (kind === "background") state.assetPages.background = 1;
     const setting = kind === "frame" ? "activeFrame" : kind === "logo" ? "activeLogo" : "activeBackground";
@@ -858,7 +1372,7 @@ async function uploadFrameSticker(file) {
   if (file.size > assetUploadLimit()) return toast(`Ukuran logo atau stiker maksimal ${assetUploadLimitLabel()}`, "error");
   try {
     await readImageDimensions(file);
-    const asset = (await api("/api/assets/sticker", { method: "PUT", headers: { "Content-Type": file.type, "X-Filename": file.name }, body: file })).asset;
+    const asset = (await uploadAssetFile(file, "sticker")).asset;
     state.assets.sticker ||= [];
     state.assets.sticker.unshift(asset);
     const topLayer = Math.max(0, ...frameLayers(state.pendingFrameUpload).map(layer => layer.z));
@@ -911,8 +1425,12 @@ function renderDevices(devices) {
   $("#device-detail-grid").innerHTML = devices.map(deviceCard).join("");
   const populate = (select, kind, selected) => {
     const connected = devices.filter(device => device.kind === kind && device.status === "connected");
-    select.innerHTML = `<option value="auto">Pilih otomatis</option>` + connected.map(device => `<option value="${device.id}">${device.name}${kind === "camera" ? ` · ${device.id.startsWith("/dev/video") ? "Webcam USB" : "Kamera foto"}` : ""}</option>`).join("");
-    select.value = connected.some(device => device.id === selected) ? selected : "auto";
+    const configuredDevice = devices.find(device => device.kind === kind && device.id === selected);
+    const unavailableSelection = selected && selected !== "auto" && !connected.some(device => device.id === selected)
+      ? `<option value="${escapeHtml(selected)}">${escapeHtml(configuredDevice?.name || "Pilihan tersimpan")} · tidak tersambung</option>`
+      : "";
+    select.innerHTML = `<option value="auto">Pilih otomatis</option>${unavailableSelection}` + connected.map(device => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.name)}${kind === "camera" ? ` · ${device.id.startsWith("/dev/video") ? "Webcam USB" : "Kamera foto"}` : ""}</option>`).join("");
+    select.value = selected && [...select.options].some(option => option.value === selected) ? selected : "auto";
   };
   populate($("#camera-select"), "camera", state.settings.devices.preferredCamera);
   populate($("#printer-select"), "printer", state.settings.devices.preferredPrinter);
@@ -925,6 +1443,25 @@ function renderDevices(devices) {
   setText("#device-printer-status", printer ? "Tersambung" : "Terputus");
   setText("#device-printer-name", printer?.name || "Tidak ada printer aktif");
   setText("#device-connected-count", `${Number(Boolean(camera)) + Number(Boolean(printer))} / 2`);
+  const setHardwareAction = (selector, available, reason) => {
+    const button = $(selector);
+    if (!button) return;
+    button.disabled = !available;
+    button.setAttribute("aria-disabled", String(!available));
+    button.title = available ? "" : reason;
+  };
+  ["#test-camera", "#toggle-camera-preview"].forEach(selector => setHardwareAction(selector, Boolean(camera), "Sambungkan kamera terlebih dahulu"));
+  ["#test-printer", "#print-test-page"].forEach(selector => setHardwareAction(selector, Boolean(printer), "Sambungkan printer terlebih dahulu"));
+  const deviceParent = $("#devices-view .device-columns") || $("#devices-view .two-column") || $("#devices-view");
+  const missing = [!camera ? "kamera" : "", !printer ? "printer" : ""].filter(Boolean);
+  setInlineStatus(
+    "device-readiness-status",
+    deviceParent,
+    missing.length ? "warning" : "ready",
+    missing.length ? `${missing.join(" dan ")} belum tersambung` : "Kamera dan printer siap",
+    missing.length ? "Tombol tes hanya aktif setelah perangkat benar-benar terdeteksi." : "Perangkat dapat diuji sebelum photobox digunakan.",
+    missing.length ? { view: "agent", label: "Periksa Agent" } : null,
+  );
   if (state.cameraPreviewEnabled && !devices.some(device => device.kind === "camera" && device.status === "connected")) stopCameraPreview("Kamera terputus. Sambungkan kamera lalu nyalakan preview kembali.");
 }
 
@@ -956,6 +1493,9 @@ function renderStatus(status) {
   $("#sessions-value").textContent = status.usage.sessions; $("#session-limit").textContent = `${status.usage.sessions} dari ${status.dailyLimit}`; $("#sessions-caption").textContent = `${sessionPercent}% terpakai`; $("#sessions-progress").style.width = `${sessionPercent}%`;
   $("#photos-value").textContent = status.usage.photos; $("#prints-value").textContent = status.usage.prints; $("#revenue-value").textContent = formatIDR(status.usage.revenue);
   $("#storage-value").textContent = `${status.disk.usedPercent}%`; $("#storage-progress").style.width = `${status.disk.usedPercent}%`; $("#storage-caption").textContent = `${formatBytes(status.disk.freeBytes)} tersisa`;
+  const storageRisk = status.disk.freeBytes < 2 * 1024 ** 3 || status.disk.usedPercent >= 90 ? "critical" : status.disk.usedPercent >= 80 ? "warning" : "ready";
+  $("#storage-progress")?.closest(".metric-card")?.classList.toggle("is-critical", storageRisk === "critical");
+  $("#storage-progress")?.closest(".metric-card")?.classList.toggle("is-warning", storageRisk === "warning");
   const ram = status.memory.available ? status.memory.usedPercent : 0; $("#ram-value").textContent = status.memory.available ? `${ram}%` : "Tidak tersedia"; $("#ram-progress").style.width = `${ram}%`;
   const signal = status.network.connected ? status.network.signalPercent : 0; $("#signal-value").textContent = status.network.connected ? `${signal}%` : "Tidak tersambung"; $("#signal-progress").style.width = `${signal}%`;
   $("#uptime-value").textContent = formatUptime(status.uptimeSeconds); $("#sidebar-uptime").textContent = formatUptime(status.uptimeSeconds);
@@ -965,7 +1505,7 @@ function renderStatus(status) {
   setText("#system-memory-summary", status.memory.available ? formatBytes(status.memory.totalBytes) : "Tidak tersedia");
   setText("#system-memory-detail", status.memory.available ? `${status.memory.usedPercent}% sedang digunakan` : "Metrik tidak didukung sistem");
   setText("#system-network-summary", status.network.connected ? `${status.network.signalPercent}%` : "Offline");
-  setText("#system-network-detail", status.network.connected ? status.network.ssid : "Tidak ada koneksi aktif");
+  setText("#system-network-detail", status.network.connected ? `${status.network.ssid || "Jaringan aktif"} · internet tersedia` : "Internet tidak tersedia; booth lokal tetap dapat bekerja");
   $("#last-refresh").textContent = `Terakhir: ${new Date(status.timestamp).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
   $("#pending-uploads").textContent = status.queue.pendingUploads; $("#failed-uploads").textContent = status.queue.failedUploads; $("#pending-prints").textContent = status.queue.pendingPrints;
   renderDevices(status.devices); renderBoothClients(status.boothClients); renderActivity(status.events);
@@ -990,6 +1530,26 @@ function renderStorageData(overview, sessions) {
   $("#storage-memory-used").textContent = memory.available ? `${formatBytes(memory.usedBytes)} sedang digunakan (${memory.usedPercent}%)` : "Metrik RAM tidak didukung sistem";
   $("#storage-disk-percent").textContent = `${disk.usedPercent}% · ${formatBytes(disk.freeBytes)} bebas`;
   $("#storage-disk-bar").style.width = `${Math.min(100, disk.usedPercent)}%`;
+  const reserveBytes = 2 * 1024 ** 3;
+  const risk = disk.freeBytes < reserveBytes || disk.usedPercent >= 90 ? "critical" : disk.usedPercent >= 80 ? "warning" : "ready";
+  const storageParent = $("#storage-view .storage-health-grid") || $("#storage-view");
+  setInlineStatus(
+    "storage-safety-status",
+    storageParent,
+    risk,
+    risk === "critical" ? "Penyimpanan hampir penuh" : risk === "warning" ? "Ruang penyimpanan mulai menipis" : "Penyimpanan aman",
+    risk === "critical"
+      ? `Tersisa ${formatBytes(disk.freeBytes)}. Sesi baru harus dihentikan sebelum ruang cadangan 2 GB habis.`
+      : risk === "warning"
+        ? `Tersisa ${formatBytes(disk.freeBytes)}. Bersihkan file yang sudah berhasil di-upload.`
+        : `${formatBytes(disk.freeBytes)} masih tersedia. Foto yang belum tersinkron tidak akan dihapus.`,
+  );
+  ["#storage-total-capacity", "#storage-used-capacity", "#storage-photo-size", "#storage-memory-total"].forEach(selector => {
+    const card = $(selector)?.closest("article");
+    if (!card) return;
+    card.classList.toggle("is-critical", risk === "critical" && selector !== "#storage-memory-total");
+    card.classList.toggle("is-warning", risk === "warning" && selector !== "#storage-memory-total");
+  });
   const libraryPercent = disk.totalBytes ? Math.min(100, (library.totalBytes / disk.totalBytes) * 100) : 0;
   $("#storage-library-percent").textContent = `${formatBytes(library.totalBytes)} · ${library.fileCount} file`;
   $("#storage-library-bar").style.width = `${Math.max(library.fileCount ? 1 : 0, libraryPercent)}%`;
@@ -1019,6 +1579,70 @@ async function loadStorageData(force = false) {
   finally { state.storageLoading = false; }
 }
 
+function renderCleanupPreview(preview) {
+  state.cleanupPreview = preview;
+  const candidateFiles = Number(preview.candidateFiles || 0);
+  setText("#cleanup-file-count", `${candidateFiles} file`);
+  setText("#cleanup-space-count", `${formatBytes(preview.candidateBytes || 0)} dapat dibebaskan`);
+  setText("#cleanup-photo-count", preview.photos?.candidateFiles || 0);
+  setText("#cleanup-cache-count", preview.cache?.candidateFiles || 0);
+  setText("#cleanup-protected-count", preview.protectedUnsyncedFiles || 0);
+  setText("#cleanup-message", candidateFiles
+    ? `File foto melewati masa simpan ${preview.photos?.retentionHours || 24} jam. Daftar akan diperiksa ulang saat penghapusan dijalankan.`
+    : "Tidak ada file aman yang perlu dihapus sekarang.");
+  $("#confirm-cleanup").disabled = candidateFiles === 0;
+  $("#cleanup-loading").hidden = true;
+  $("#cleanup-error").hidden = true;
+  $("#cleanup-result").hidden = false;
+}
+
+async function openCleanupPreview() {
+  const dialog = $("#cleanup-dialog");
+  if (!dialog.open) dialog.showModal();
+  state.cleanupPreview = null;
+  $("#cleanup-preview").setAttribute("aria-busy", "true");
+  $("#cleanup-loading").hidden = false;
+  $("#cleanup-result").hidden = true;
+  $("#cleanup-error").hidden = true;
+  $("#confirm-cleanup").disabled = true;
+  try {
+    renderCleanupPreview(await api("/api/storage/cleanup/preview", { timeoutMs: 45000 }));
+  } catch (error) {
+    $("#cleanup-loading").hidden = true;
+    $("#cleanup-result").hidden = true;
+    $("#cleanup-error").hidden = false;
+    setText("#cleanup-error-message", error.message);
+  } finally {
+    $("#cleanup-preview").setAttribute("aria-busy", "false");
+  }
+}
+
+async function confirmStorageCleanup() {
+  if (!state.cleanupPreview?.candidateFiles) return;
+  const button = $("#confirm-cleanup");
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.innerHTML = '<img src="/icons/refresh-cw.svg" alt="" />Membersihkan…';
+  try {
+    const result = await api("/api/storage/cleanup", { method: "POST", body: JSON.stringify({ dryRun: false }), timeoutMs: 60000 });
+    $("#cleanup-dialog").close();
+    state.cleanupPreview = null;
+    toast(`${result.deletedFiles} file dihapus · ruang bertambah ${formatBytes(result.reclaimedBytes)}`);
+    state.storageLoadedAt = 0;
+    await loadStorageData(true);
+    await refreshStatus();
+  } catch (error) {
+    $("#cleanup-result").hidden = true;
+    $("#cleanup-error").hidden = false;
+    setText("#cleanup-error-message", error.message);
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.innerHTML = original;
+  }
+}
+
 async function pickStorageFolder() {
   const button = $("#pick-storage-folder");
   if (isProductionHost()) {
@@ -1037,8 +1661,7 @@ async function pickStorageFolder() {
   finally { button.disabled = false; }
 }
 
-async function loadVouchers() {
-  const { vouchers, summary, events } = await api("/api/vouchers");
+function renderVouchers({ vouchers = [], summary = {}, events = [] }) {
   const activeVouchers = Number(summary.generalActive || 0) + Number(summary.eventActive || 0);
   const methods = Number(state.settings.payment.qrisEnabled) + Number(state.settings.payment.voucherEnabled);
   setText("#access-method-count", `${methods} aktif`);
@@ -1049,6 +1672,10 @@ async function loadVouchers() {
   $("#print-general-vouchers").disabled = !Number(summary.generalActive || 0);
   $("#voucher-list").innerHTML = vouchers.length ? vouchers.map(voucher => `<div class="voucher-row"><code>${escapeHtml(voucher.code)}</code><span>${voucher.eventId ? escapeHtml(voucher.eventName || "Event") : "Voucher umum"}</span><span class="voucher-benefit ${voucher.includesPrint ? "" : "digital"}">${voucher.includesPrint ? "Sesi + cetak" : "Sesi digital"}</span><time>${new Date(voucher.createdAt).toLocaleDateString("id-ID")}</time><button class="icon-button" aria-label="Hapus voucher ${escapeHtml(voucher.code)}" data-delete-voucher="${escapeHtml(voucher.code)}"><img src="/icons/trash-2.svg" alt="" /></button></div>`).join("") : '<p class="empty" style="padding:18px">Belum ada voucher aktif.</p>';
   $("#voucher-event-list").innerHTML = events.length ? events.map(event => `<article class="voucher-event-card ${event.status}"><div class="voucher-event-main"><span><img src="/icons/calendar-days.svg" alt="" /></span><div><div class="voucher-event-title"><b>${escapeHtml(event.name)}</b><em>${event.status === "expired" ? "Berakhir" : "Aktif"}</em></div><small>Berlaku sampai ${new Date(event.expiresAt).toLocaleString("id-ID")} · ${event.includesPrint ? "Termasuk cetak" : "Tanpa cetak"}</small></div></div><div class="voucher-event-stats"><span><b>${event.active}</b><small>Aktif</small></span><span><b>${event.used}</b><small>Dipakai</small></span><span><b>${event.total}</b><small>Total</small></span></div><div class="voucher-event-actions"><button class="button secondary" data-print-vouchers="${event.id}" ${event.active ? "" : "disabled"}><img src="/icons/printer.svg" alt="" />Cetak kode</button><button class="button primary" data-generate-event="${event.id}" ${event.status === "expired" ? "disabled" : ""}><img src="/icons/plus.svg" alt="" />Generate 100</button></div></article>`).join("") : '<p class="empty">Belum ada event. Buat event lalu generate 100 kode pertama.</p>';
+}
+
+async function loadVouchers() {
+  renderVouchers(await api("/api/vouchers"));
 }
 
 async function createVoucher() {
@@ -1063,10 +1690,15 @@ async function createVoucher() {
 async function generateVouchers(eventId = null) {
   const button = eventId ? $(`[data-generate-event="${CSS.escape(eventId)}"]`) : $("#generate-vouchers");
   const original = button?.innerHTML;
+  const generationKey = eventId || "general";
+  if (!state.pendingVoucherGenerations.has(generationKey)) {
+    state.pendingVoucherGenerations.set(generationKey, `vouchers.${adminBoothCode}.${generationKey}.${crypto.randomUUID()}`);
+  }
   if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); button.innerHTML = '<img src="/icons/refresh-cw.svg" alt="" />Membuat…'; }
   try {
-    const result = await api("/api/vouchers/generate", { method: "POST", body: JSON.stringify({ count: 100, eventId }) });
-    await loadVouchers();
+    const result = await api("/api/vouchers/generate", { method: "POST", body: JSON.stringify({ count: 100, eventId }), idempotencyKey: state.pendingVoucherGenerations.get(generationKey), timeoutMs: 10_000 });
+    renderVouchers(result);
+    state.pendingVoucherGenerations.delete(generationKey);
     toast(`${result.created} voucher baru ditambahkan${eventId ? " ke event" : ""}`);
   } catch (error) { toast(`Gagal membuat voucher: ${error.message}`, "error"); }
   finally { if (button) { button.disabled = false; button.removeAttribute("aria-busy"); button.innerHTML = original; } }
@@ -1180,13 +1812,40 @@ async function downloadDiagnostics() {
 
 function bindEvents() {
   $$(".nav-item").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
-  $$('[data-go]').forEach(button => button.addEventListener("click", () => showView(button.dataset.go)));
+  document.addEventListener("click", event => {
+    const go = event.target.closest("[data-go]");
+    if (go) { showView(go.dataset.go); return; }
+    const retry = event.target.closest("[data-feature-retry]");
+    if (!retry) return;
+    const feature = retry.dataset.featureRetry;
+    if (feature === "users") loadUsers();
+    if (feature === "integrations") loadBoothIntegrations();
+    if (feature === "finance") loadBoothFinance();
+  });
   document.addEventListener("input", event => { if (event.target.matches("[data-setting]")) markSetting(event.target); });
   document.addEventListener("change", event => { if (event.target.matches("[data-setting]")) markSetting(event.target); });
   $("#save-button").addEventListener("click", saveSettings);
   $("#pick-storage-folder").addEventListener("click", pickStorageFolder);
   $("#refresh-button").addEventListener("click", () => refreshStatus(true));
   $("#refresh-audit").addEventListener("click", loadAuditLog);
+  $("#refresh-integrations").addEventListener("click", loadBoothIntegrations);
+  $("#refresh-finance").addEventListener("click", loadBoothFinance);
+  $("#refresh-platform-frames").addEventListener("click", () => loadPlatformFrameLibrary(true));
+  $("#platform-frame-library-card").addEventListener("click", event => {
+    if (event.target.closest("[data-retry-platform-frames]")) { loadPlatformFrameLibrary(true); return; }
+    const pageButton = event.target.closest("[data-platform-frame-page]");
+    if (!pageButton || pageButton.disabled) return;
+    state.platformFramePage = Number(pageButton.dataset.platformFramePage);
+    renderPlatformFrameLibrary();
+  });
+  $("#apply-finance-period").addEventListener("click", loadBoothFinance);
+  $("#export-finance-csv").addEventListener("click", exportBoothFinanceCsv);
+  $("#integration-list").addEventListener("click", event => {
+    const testButton = event.target.closest("[data-test-integration]");
+    if (testButton) { testBoothIntegration(testButton); return; }
+    if (event.target.closest("#retry-integrations")) loadBoothIntegrations();
+  });
+  $("#finance-ledger-rows").addEventListener("click", event => { if (event.target.closest("#retry-finance")) loadBoothFinance(); });
   $("#add-background").addEventListener("click", () => chooseAsset("background"));
   $("#add-frame").addEventListener("click", () => chooseAsset("frame"));
   $("#add-logo").addEventListener("click", () => chooseAsset("logo"));
@@ -1313,19 +1972,58 @@ function bindEvents() {
   $("#submit-voucher-event").addEventListener("click", event => { event.preventDefault(); createVoucherEvent(); });
   $("#agent-pair-form").addEventListener("submit", claimAgent);
   $("#refresh-agent").addEventListener("click", () => loadAgentStatus(true));
-  $$('[data-agent-job]').forEach(button => button.addEventListener("click", () => queueAgentJob(button.dataset.agentJob)));
+  $("#refresh-agent-queues").addEventListener("click", () => loadAgentStatus(true));
+  $("#refresh-session-recovery").addEventListener("click", () => loadAgentStatus(true));
+  $$('[data-agent-job]:not(#agent-connection-control)').forEach(button => button.addEventListener("click", () => queueAgentJob(button.dataset.agentJob)));
+  $("#agent-connection-control").addEventListener("click", setAgentConnection);
+  $(".agent-queue-panel").addEventListener("click", event => {
+    const syncButton = event.target.closest("[data-retry-sync-job]");
+    if (syncButton) { queueAgentJob("sync.retry_job", { jobId: syncButton.dataset.retrySyncJob }, syncButton); return; }
+    const printButton = event.target.closest("[data-retry-print-job]");
+    if (printButton) queueAgentJob("print.retry_job", { jobId: printButton.dataset.retryPrintJob }, printButton);
+  });
+  $(".agent-recovery-panel").addEventListener("click", event => {
+    const button = event.target.closest("[data-recover-session]");
+    if (button) queueAgentJob("session.recover", { sessionId: button.dataset.recoverSession, extensionSeconds: 180 }, button);
+  });
   $("#scan-devices").addEventListener("click", async () => { try { const result = await api("/api/devices/refresh", { method: "POST" }); renderDevices(result.devices); toast("Pencarian perangkat selesai"); } catch (error) { toast(error.message, "error"); } });
   $("#test-camera").addEventListener("click", () => testDevice("camera"));
   $("#test-printer").addEventListener("click", () => testDevice("printer"));
   $("#toggle-camera-preview").addEventListener("click", toggleCameraPreview);
   $("#print-test-page").addEventListener("click", printTestPage);
   $("#clear-failed").addEventListener("click", async () => { try { const result = await api("/api/jobs/clear-failed", { method: "POST" }); toast(`${result.deleted} pekerjaan gagal dibersihkan`); await refreshStatus(); } catch (error) { toast(error.message, "error"); } });
-  $("#run-cleanup").addEventListener("click", async () => { try { const result = await api("/api/storage/cleanup", { method: "POST" }); toast(`${result.deletedFiles} foto dihapus · ruang bertambah ${formatBytes(result.reclaimedBytes)}`); state.storageLoadedAt = 0; await loadStorageData(true); await refreshStatus(); } catch (error) { toast(error.message, "error"); } });
+  $("#run-cleanup").addEventListener("click", openCleanupPreview);
+  $("#retry-cleanup-preview").addEventListener("click", openCleanupPreview);
+  $("#cancel-cleanup").addEventListener("click", () => $("#cleanup-dialog").close());
+  $("#confirm-cleanup").addEventListener("click", confirmStorageCleanup);
   $("#refresh-storage").addEventListener("click", () => loadStorageData(true));
   $("#download-diagnostics").addEventListener("click", downloadDiagnostics);
   $("#restart-service").addEventListener("click", async () => { try { const result = await api("/api/system/restart", { method: "POST" }); toast(result.message); } catch (error) { toast(error.message, "error"); } });
   $("#profile-form").addEventListener("submit", async event => { event.preventDefault(); try { await platformApi("profile", { method: "POST", body: JSON.stringify({ name: $("#profile-name").value, email: $("#profile-email").value, password: $("#profile-password").value, pin: $("#profile-pin").value }) }); $("#profile-password").value = ""; $("#profile-pin").value = ""; toast("Profil berhasil diperbarui"); await loadUsers(); } catch (error) { toast(error.message, "error"); } });
   $("#add-user-form").addEventListener("submit", async event => { event.preventDefault(); try { await platformApi("users", { method: "POST", body: JSON.stringify({ name: $("#new-user-name").value, email: $("#new-user-email").value, password: $("#new-user-password").value, pin: $("#new-user-pin").value, role: $("#new-user-role").value }) }); event.target.reset(); toast("Pengguna berhasil ditambahkan"); await loadUsers(); } catch (error) { toast(error.message, "error"); } });
+  $("#user-rows").addEventListener("click", async event => {
+    const button = event.target.closest(".revoke-user-sessions");
+    if (!button || button.disabled) return;
+    const current = button.dataset.current === "true";
+    const confirmed = window.confirm(current ? "Keluar dari seluruh perangkat, termasuk perangkat ini?" : "Cabut seluruh sesi login pengguna ini?");
+    if (!confirmed) return;
+    button.disabled = true;
+    const previousText = button.textContent;
+    button.textContent = "Memproses…";
+    try {
+      const result = await platformApi("revoke_sessions", { method: "POST", body: JSON.stringify({ userId: button.dataset.userId }) });
+      toast(`${result.revoked} sesi login dicabut`);
+      if (result.currentRevoked) {
+        location.replace(`/setup?mode=login&booth=${encodeURIComponent(adminBoothCode)}`);
+        return;
+      }
+      await loadUsers();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+      button.textContent = previousText;
+    }
+  });
 }
 
 async function boot() {
@@ -1333,6 +2031,18 @@ async function boot() {
   const authResponse = await fetch("/api/platform?action=me");
   const auth = await authResponse.json().catch(() => ({}));
   if (!authResponse.ok || (auth.user?.role !== "superadmin" && auth.user?.boothCode !== adminBoothCode)) { location.replace(`/setup?mode=login&booth=${encodeURIComponent(adminBoothCode)}`); return; }
+  if (auth.testMode) {
+    document.body.dataset.testMode = "true";
+    const banner = document.createElement("div");
+    banner.className = "test-mode-banner";
+    banner.setAttribute("role", "status");
+    banner.textContent = "TEST MODE · Data terisolasi dari production";
+    document.body.appendChild(banner);
+  }
+  if (auth.user?.role === "operator") {
+    $$('[data-view="integrations"], [data-view="finance"]').forEach(item => { item.hidden = true; });
+  }
+  state.authBooth = auth.booth || null;
   localStorage.setItem("photoslive.boothCode", adminBoothCode);
   if (auth.booth?.machineId) {
     agentState.machineId = auth.booth.machineId;
@@ -1347,6 +2057,7 @@ async function boot() {
     hydrateSettings();
     applyCapabilityGates();
     updatePreview();
+    document.body.dataset.settingsReady = "true";
     await loadVouchers();
     // Hardware status and local assets are optional background data. They may
     // be offline without blocking cloud settings, vouchers, or navigation.

@@ -34,6 +34,13 @@ export async function sha256(value) {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export async function signHardwareJob(secret, job) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(String(secret || "")), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const value = JSON.stringify({ id: job.id, machineId: job.machineId, type: job.type, payload: job.payload, expiresAt: job.expiresAt });
+  const bytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 const authEncoder = new TextEncoder();
 const authBytesToHex = bytes => [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
 
@@ -53,7 +60,7 @@ export async function authenticateWebSession(redis, request) {
     const index = value.indexOf("=");
     return [value.slice(0, index), decodeURIComponent(value.slice(index + 1))];
   }));
-  const [id, supplied] = String(cookies.photoslive_session || "").split(".");
+  const [id, supplied] = String(cookies["__Host-photoslive_session"] || "").split(".");
   if (!id || !supplied || supplied !== await hmacHex(id)) return null;
   const record = await redis.get(sessionKey(id));
   if (!record || (record.expiresAt && Date.parse(record.expiresAt) <= Date.now())) return null;

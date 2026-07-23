@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photoslive.app/contracts/v2/session-sync.schema.json",
+  "title": "Photoslive session sync outbox payload",
+  "type": "object",
+  "required": ["session", "files"],
+  "additionalProperties": false,
+  "properties": {
+    "session": {
+      "type": "object",
+      "required": ["id", "shareCode", "status", "photoSlots", "createdAt", "expiresAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "shareCode": { "type": "string", "pattern": "^[A-Za-z0-9_-]{32,100}$" },
+        "status": { "const": "completed" },
+        "frameId": { "type": ["string", "null"], "maxLength": 240 },
+        "photoSlots": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "fileKind", "slotIndex", "contentType", "checksumSha256"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "fileKind": { "enum": ["capture", "composite", "gif"] },
+          "slotIndex": { "type": "integer", "minimum": 0, "maximum": 8 },
+          "contentType": { "enum": ["image/jpeg", "image/png", "image/webp", "image/gif"] },
+          "checksumSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 1, "maximum": 25000000 }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

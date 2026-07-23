@@ -11,7 +11,10 @@ const onboarding = {
   framePreviewUrl: null,
   frameDesign: null,
   frameEditor: null,
+  tabletCameraStream: null,
 };
+
+let deferredTabletInstallPrompt = null;
 
 const SETUP_DRAFT_KEY = "photoslive.setupDraft.v2";
 
@@ -69,6 +72,47 @@ const setupSteps = [
   ["Siap", "Setup selesai."],
 ];
 
+const LOCAL_CONTROLLER_ORIGIN = localStorage.getItem("photoslive.controllerOrigin") || "http://127.0.0.1:8080";
+let localPinCapability = null;
+let selectedLoginMethod = "password";
+
+async function localAuthRequest(path, options = {}) {
+  const controllerOrigin = ["127.0.0.1", "localhost", "::1"].includes(location.hostname) ? location.origin : LOCAL_CONTROLLER_ORIGIN;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1_500);
+  try {
+    const response = await fetch(`${controllerOrigin}${path}`, {
+      cache: "no-store",
+      mode: "cors",
+      ...options,
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Local Controller tidak merespons");
+    return result;
+  } finally { clearTimeout(timer); }
+}
+
+async function detectLocalPinLogin() {
+  const button = $("#local-pin-method");
+  const methods = $(".login-methods");
+  button.classList.add("hidden");
+  methods.classList.add("single-method");
+  localPinCapability = null;
+  try {
+    const capability = await localAuthRequest("/api/local/auth/capability");
+    if (!capability.available || !capability.boothCode) return;
+    localPinCapability = capability;
+    methods.classList.remove("single-method");
+    button.classList.remove("hidden");
+    $("#local-pin-status").textContent = `PIN lokal tersedia untuk /${capability.boothCode}.`;
+    if (!$("#login-booth").value.trim()) $("#login-booth").value = capability.boothCode;
+  } catch {
+    $("#local-pin-status").textContent = "PIN lokal hanya muncul saat halaman dibuka dari komputer photobox. Untuk akses dari komputer lain, gunakan email dan password.";
+  }
+}
+
 const api = async (action, options = {}) => {
   const response = await fetch(`/api/platform?action=${action}`, {
     ...options,
@@ -101,7 +145,7 @@ async function setupCloudData(path, method = "GET", data = {}) {
   if (!boothCode) throw new Error("Photobox belum selesai dibuat");
   const response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(boothCode)}&path=${encodeURIComponent(path)}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(method === "GET" ? {} : { "Idempotency-Key": crypto.randomUUID() }) },
     body: method === "GET" ? undefined : JSON.stringify({ data }),
   });
   const result = await response.json().catch(() => ({}));
@@ -130,6 +174,20 @@ const status = (message, success = false) => {
   $("#setup-status").textContent = message;
   $("#setup-status").classList.toggle("success", success);
 };
+
+function setButtonBusy(button, busy, label = "Memproses…") {
+  if (!button) return;
+  if (busy) {
+    button.dataset.originalHtml ||= button.innerHTML;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = label;
+    return;
+  }
+  button.disabled = false;
+  button.removeAttribute("aria-busy");
+  if (button.dataset.originalHtml) button.innerHTML = button.dataset.originalHtml;
+}
 
 function syncUrl(name) {
   const booth = $("#login-booth").value.trim();
@@ -185,6 +243,8 @@ function mode(name) {
 }
 
 function loginMethod(name) {
+  if (name === "pin" && !localPinCapability) return;
+  selectedLoginMethod = name;
   document.querySelectorAll("[data-login-method]").forEach(button => {
     const selected = button.dataset.loginMethod === name;
     button.classList.toggle("active", selected);
@@ -380,6 +440,31 @@ function fileToBase64(file) {
   });
 }
 
+async function setupFileSha256(file) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function setupUploadAsset(file, kind, knownSettings = null) {
+  const settings = knownSettings || await setupCloudData("/api/settings", "GET");
+  if (settings.capabilities?.cloudStorage?.available && settings.featureFlags?.direct_object_upload?.enabled !== false) {
+    try {
+      const prepared = await setupCloudData(`/api/assets/${kind}/prepare`, "POST", {
+        filename: file.name,
+        contentType: file.type,
+        size: file.size,
+        checksumSha256: await setupFileSha256(file),
+      });
+      const uploaded = await fetch(prepared.upload.url, { method: "PUT", headers: prepared.upload.headers, body: file });
+      if (!uploaded.ok) throw new Error(`Object storage menolak upload (${uploaded.status})`);
+      return setupCloudData(`/api/assets/${kind}/finalize`, "POST", { uploadId: prepared.uploadId });
+    } catch (error) { throw new Error(`${error.message}. Periksa CORS bucket object storage; jangan ulangi sebelum status object dipastikan.`); }
+  } else if (file.size > 2_000_000) {
+    throw new Error("Object storage belum siap; upload onboarding sementara dibatasi 2 MB");
+  }
+  return setupCloudData(`/api/assets/${kind}`, "PUT", { bodyBase64: await fileToBase64(file), contentType: file.type, filename: file.name });
+}
+
 function setupDefaultSlotTransforms(slots) {
   const count = Math.max(1, Math.min(8, Number(slots || 1)));
   const gap = 1.5;
@@ -447,7 +532,7 @@ function renderSetupFrameEditor() {
 
 function openSetupFrameEditor(file) {
   if (!file) return;
-  if (file.size > 2 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran frame maksimal 2 MB untuk sinkronisasi cloud."; return; }
+  if (file.size > 25_000_000) { $("#frame-onboarding-status").textContent = "Ukuran frame maksimal 25 MB."; return; }
   const previewUrl = URL.createObjectURL(file);
   onboarding.frameEditor = { file, previewUrl, backgroundCss: `center / cover no-repeat url('${previewUrl}')`, slots: 3, zoom: 100, x: 50, y: 50, slotTransforms: setupDefaultSlotTransforms(3), stickers: [], selected: { type: "slot", index: 0 } };
   $("#setup-frame-slots").value = "3";
@@ -486,12 +571,9 @@ async function saveStarterFrame() {
   let activeFrame = onboarding.selectedFrame;
   try {
     if (onboarding.frameFile) {
-      if (onboarding.frameFile.size > 2 * 1024 * 1024) throw new Error("Ukuran frame maksimal 2 MB untuk sinkronisasi cloud");
-      const uploaded = await setupCloudData("/api/assets/frame", "PUT", {
-        bodyBase64: await fileToBase64(onboarding.frameFile),
-        contentType: onboarding.frameFile.type,
-        filename: onboarding.frameFile.name,
-      });
+      if (onboarding.frameFile.size > 25_000_000) throw new Error("Ukuran frame maksimal 25 MB");
+      const current = await setupCloudData("/api/settings", "GET");
+      const uploaded = await setupUploadAsset(onboarding.frameFile, "frame", current);
       activeFrame = uploaded.asset?.url;
       if (!activeFrame) throw new Error("Cloud tidak mengembalikan file frame");
       onboarding.selectedFrame = activeFrame;
@@ -537,6 +619,7 @@ $("#open-forgot").addEventListener("click", () => mode("forgot"));
 $("#forgot-back").addEventListener("click", () => mode("login"));
 document.querySelectorAll("[data-login-method]").forEach(button => button.addEventListener("click", () => loginMethod(button.dataset.loginMethod)));
 function agentPlatform(name) {
+  if (name !== "tablet") stopTabletCameraTest();
   document.querySelectorAll("[data-agent-platform]").forEach(button => {
     const selected = button.dataset.agentPlatform === name;
     button.classList.toggle("active", selected);
@@ -544,24 +627,162 @@ function agentPlatform(name) {
   });
   document.querySelectorAll("[data-agent-panel]").forEach(panel => panel.classList.toggle("hidden", panel.dataset.agentPanel !== name));
   $("#copy-feedback").textContent = "";
+  if (name === "tablet") refreshTabletCapabilities();
 }
+
+function tabletStandaloneMode() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function stopTabletCameraTest() {
+  onboarding.tabletCameraStream?.getTracks().forEach(track => track.stop());
+  onboarding.tabletCameraStream = null;
+  const preview = $("#tablet-camera-preview");
+  preview.srcObject = null;
+  preview.hidden = true;
+}
+
+async function refreshTabletCapabilities(message = "") {
+  const install = $("#install-tablet-pwa");
+  const persistence = $("#persist-tablet-storage");
+  const statusElement = $("#tablet-runtime-status");
+  const printElement = $("#tablet-print-status");
+  const persisted = navigator.storage?.persisted ? await navigator.storage.persisted().catch(() => false) : false;
+  const standalone = tabletStandaloneMode();
+  install.disabled = standalone;
+  install.innerHTML = standalone
+    ? '<img src="/icons/circle-check.svg" alt="">Aplikasi terpasang'
+    : '<img src="/icons/download.svg" alt="">Install aplikasi';
+  persistence.disabled = persisted || !navigator.storage?.persist;
+  persistence.innerHTML = persisted
+    ? '<img src="/icons/circle-check.svg" alt="">Offline tersimpan'
+    : '<img src="/icons/hard-drive.svg" alt="">Simpan offline';
+  const cameraAvailable = Boolean(navigator.mediaDevices?.getUserMedia);
+  $("#test-tablet-camera").disabled = !cameraAvailable;
+  statusElement.textContent = message || `${cameraAvailable ? "Kamera browser tersedia" : "Kamera browser tidak didukung"} · ${persisted ? "storage persisten aktif" : "storage persisten belum aktif"}.`;
+  printElement.textContent = typeof window.print === "function"
+    ? "Cetak manual melalui dialog browser tersedia. AirPrint/IPP tetap mengikuti dukungan browser dan printer; silent print, printer USB, dan antrean CUPS memerlukan komputer pendamping."
+    : "Browser ini tidak menyediakan dialog cetak atau AirPrint/IPP. Gunakan komputer pendamping untuk printer.";
+}
+
+async function testTabletCamera() {
+  const button = $("#test-tablet-camera");
+  setButtonBusy(button, true, "Membuka kamera…");
+  stopTabletCameraTest();
+  try {
+    const facingMode = $("#tablet-camera-facing").value === "environment" ? "environment" : "user";
+    localStorage.setItem("photoslive.tabletCameraFacingMode", facingMode);
+    onboarding.tabletCameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    const preview = $("#tablet-camera-preview");
+    preview.srcObject = onboarding.tabletCameraStream;
+    preview.hidden = false;
+    await preview.play();
+    if (!preview.videoWidth || !preview.videoHeight) await new Promise(resolve => preview.addEventListener("loadedmetadata", resolve, { once: true }));
+    const canvas = document.createElement("canvas");
+    canvas.width = preview.videoWidth;
+    canvas.height = preview.videoHeight;
+    canvas.getContext("2d").drawImage(preview, 0, 0);
+    const sample = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .8));
+    if (!sample) throw new Error("Browser gagal membuat capture uji");
+    await refreshTabletCapabilities(`Kamera ${facingMode === "environment" ? "belakang" : "depan"} siap · capture uji ${Math.max(1, Math.round(sample.size / 1024))} KB berhasil.`);
+  } catch (error) {
+    stopTabletCameraTest();
+    await refreshTabletCapabilities(`Tes kamera gagal: ${error.message}`);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function persistTabletStorage() {
+  const button = $("#persist-tablet-storage");
+  setButtonBusy(button, true, "Meminta izin…");
+  let resultMessage = "";
+  try {
+    if (!navigator.storage?.persist) throw new Error("Browser tidak mendukung persistent storage");
+    const granted = await navigator.storage.persist();
+    resultMessage = granted
+      ? "Storage offline dipertahankan oleh browser."
+      : "Browser belum memberi persistent storage; pastikan ruang kosong dan install PWA.";
+  } catch (error) {
+    resultMessage = error.message;
+  } finally {
+    setButtonBusy(button, false);
+    await refreshTabletCapabilities(resultMessage);
+  }
+}
+
+async function installTabletPwa() {
+  if (tabletStandaloneMode()) return refreshTabletCapabilities("Photoslive sudah berjalan sebagai aplikasi.");
+  if (deferredTabletInstallPrompt) {
+    deferredTabletInstallPrompt.prompt();
+    const choice = await deferredTabletInstallPrompt.userChoice.catch(() => ({ outcome: "dismissed" }));
+    deferredTabletInstallPrompt = null;
+    return refreshTabletCapabilities(choice.outcome === "accepted" ? "Instalasi Photoslive diterima." : "Instalasi dibatalkan; Anda dapat mencoba lagi dari menu browser.");
+  }
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  return refreshTabletCapabilities(isIos
+    ? "Di Safari, tekan Bagikan lalu pilih Tambahkan ke Layar Utama."
+    : "Gunakan menu browser lalu pilih Install app/Tambahkan ke layar utama.");
+}
+
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  deferredTabletInstallPrompt = event;
+  if (!$("[data-agent-panel='tablet']").classList.contains("hidden")) refreshTabletCapabilities("Photoslive siap di-install pada perangkat ini.");
+});
+window.addEventListener("appinstalled", () => refreshTabletCapabilities("Photoslive berhasil di-install."));
 const setupCommands = {
-  windows: ['Windows PowerShell', 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code'],
-  macos: ['macOS Terminal', 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code'],
-  linux: ['Linux Terminal', 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code'],
+  windows: { label: 'Windows PowerShell', installCommand: 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', setupCommand: 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-windows.ps1', downloadName: 'install-photoslive-windows.ps1', downloadLabel: 'Download untuk Windows', icon: 'windows' },
+  macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Download untuk macOS', icon: 'apple' },
+  linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Download untuk Linux', icon: 'linux' },
 };
+function detectedOperatingSystem() {
+  const platform = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
+  if (/win/i.test(platform)) return "windows";
+  if (/mac|iphone|ipad/i.test(platform)) return "macos";
+  return "linux";
+}
 function agentOperatingSystem(name) {
-  const [label, installCommand, setupCommand] = setupCommands[name] || setupCommands.linux;
+  const { label, installCommand, setupCommand, downloadUrl, downloadName, downloadLabel, icon } = setupCommands[name] || setupCommands.linux;
   $("#install-command-label").textContent = `Perintah instalasi ${label}`;
   $("#install-command").textContent = installCommand;
   $("#setup-command-label").textContent = `Perintah ${label}`;
   $("#setup-code-command").textContent = setupCommand;
+  $("#primary-agent-download").href = downloadUrl;
+  $("#primary-agent-download").download = downloadName;
+  $("#primary-agent-label").textContent = downloadLabel;
+  $("#primary-agent-icon").className = `setup-icon ${icon}`;
   document.querySelectorAll("[data-agent-os]").forEach(button => button.classList.toggle("active", button.dataset.agentOs === name));
 }
 document.querySelectorAll("[data-agent-platform]").forEach(button => button.addEventListener("click", () => agentPlatform(button.dataset.agentPlatform)));
 document.querySelectorAll("[data-agent-os]").forEach(button => button.addEventListener("click", () => agentOperatingSystem(button.dataset.agentOs)));
-$("#use-companion-agent").addEventListener("click", () => agentPlatform("computer"));
-agentOperatingSystem(/Win/i.test(navigator.platform) ? "windows" : /Mac/i.test(navigator.platform) ? "macos" : "linux");
+$("#primary-agent-download").addEventListener("click", () => { $("#copy-feedback").textContent = "Download dimulai. Setelah selesai, jalankan file installer."; });
+$("#use-companion-agent").addEventListener("click", event => {
+  const help = $("#companion-setup-help");
+  const expanded = event.currentTarget.getAttribute("aria-expanded") !== "true";
+  event.currentTarget.setAttribute("aria-expanded", String(expanded));
+  help.classList.toggle("hidden", !expanded);
+  if (expanded) help.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
+});
+$("#test-tablet-camera").addEventListener("click", testTabletCamera);
+$("#persist-tablet-storage").addEventListener("click", persistTabletStorage);
+$("#install-tablet-pwa").addEventListener("click", installTabletPwa);
+$("#tablet-camera-facing").addEventListener("change", event => {
+  localStorage.setItem("photoslive.tabletCameraFacingMode", event.target.value);
+  stopTabletCameraTest();
+  refreshTabletCapabilities("Pilihan kamera disimpan. Tekan Tes kamera untuk memeriksa.");
+});
+$("#tablet-camera-facing").value = localStorage.getItem("photoslive.tabletCameraFacingMode") === "environment" ? "environment" : "user";
+agentOperatingSystem(detectedOperatingSystem());
+
+if ("serviceWorker" in navigator && (window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+  navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(error => {
+    $("#tablet-runtime-status").textContent = `Offline app shell belum aktif: ${error.message}`;
+  });
+}
 document.querySelectorAll("[data-setup-back]").forEach(button => button.addEventListener("click", () => setSetupStep(onboarding.step - 1)));
 document.querySelectorAll("[data-setup-next], [data-setup-skip]").forEach(button => button.addEventListener("click", () => {
   setSetupStep(onboarding.step + 1);
@@ -598,6 +819,8 @@ $("#setup-form").addEventListener("submit", async event => {
   if (onboarding.step === 1) {
     const input = $("#pairing-code");
     if (!input.reportValidity()) return;
+    const submit = event.submitter;
+    setButtonBusy(submit, true, "Memeriksa…");
     status("Memeriksa kode setup…");
     try {
       const result = await api("validate_setup", { method: "POST", body: JSON.stringify({ pairingCode: input.value }) });
@@ -606,6 +829,7 @@ $("#setup-form").addEventListener("submit", async event => {
       $("#booth-location").value = result.machine.location || "";
       setSetupStep(2);
     } catch (error) { status(error.message); }
+    finally { setButtonBusy(submit, false); }
     return;
   }
   if (onboarding.step === 2) {
@@ -617,6 +841,8 @@ $("#setup-form").addEventListener("submit", async event => {
     const fields = [$("#owner-email"), $("#owner-pin"), $("#owner-pin-confirm")];
     if (!fields.every(field => field.reportValidity())) return;
     if ($("#owner-pin").value !== $("#owner-pin-confirm").value) return status("Konfirmasi PIN belum sama");
+    const submit = event.submitter;
+    setButtonBusy(submit, true, "Membuat…");
     status("Membuat photobox dan akun pemilik…");
     try {
       const body = {
@@ -636,6 +862,7 @@ $("#setup-form").addEventListener("submit", async event => {
       setSetupStep(4);
       refreshOnboardingDevices();
     } catch (error) { status(error.message); }
+    finally { setButtonBusy(submit, false); }
   }
 });
 
@@ -722,9 +949,9 @@ $("#setup-add-frame-sticker").addEventListener("click", () => { $("#setup-frame-
 $("#setup-frame-sticker-file").addEventListener("change", async event => {
   const file = event.target.files[0];
   if (!file || !onboarding.frameEditor) return;
-  if (file.size > 2 * 1024 * 1024) { $("#frame-onboarding-status").textContent = "Ukuran logo atau stiker maksimal 2 MB untuk sinkronisasi cloud."; return; }
+  if (file.size > 25_000_000) { $("#frame-onboarding-status").textContent = "Ukuran logo atau stiker maksimal 25 MB."; return; }
   try {
-    const uploaded = await setupCloudData("/api/assets/sticker", "PUT", { bodyBase64: await fileToBase64(file), contentType: file.type, filename: file.name });
+    const uploaded = await setupUploadAsset(file, "sticker");
     const url = uploaded.asset?.url;
     if (!url) throw new Error("Cloud tidak mengembalikan file stiker");
     const top = Math.max(0, ...setupFrameLayers().map(layer => layer.z));
@@ -813,7 +1040,7 @@ $("#save-onboarding-frame").addEventListener("click", saveStarterFrame);
 $("#finish-onboarding").addEventListener("click", () => {
   const code = onboarding.booth?.boothCode || localStorage.getItem("photoslive.boothCode");
   clearSetupDraft();
-  location.href = `/${code}/admin`;
+  location.href = `/${code}`;
 });
 
 $("#login-form").addEventListener("submit", async event => {
@@ -821,6 +1048,15 @@ $("#login-form").addEventListener("submit", async event => {
   status("Memeriksa akun…");
   try {
     const body = { boothCode: $("#login-booth").value, email: $("#login-email").value || $("#login-pin-email").value, password: $("#login-password").value, pin: $("#login-pin").value };
+    if (selectedLoginMethod === "pin") {
+      status("Memverifikasi komputer lokal…");
+      const proof = await localAuthRequest("/api/local/auth/assertion", { method: "POST", body: "{}" });
+      body.localAssertion = proof.assertion;
+      body.boothCode = proof.boothCode;
+      $("#login-booth").value = proof.boothCode;
+    } else {
+      body.pin = "";
+    }
     let result;
     try {
       result = await api("login", { method: "POST", body: JSON.stringify(body) });
@@ -853,14 +1089,15 @@ $("#forgot-form").addEventListener("submit", async event => {
   } catch (error) { status(error.message); }
 });
 
-function restoreSetupDraft() {
+function restoreSetupDraft(preferredCode = "") {
   const draft = readSetupDraft();
   if (!draft || draft.version !== 2 || Date.now() - Number(draft.updatedAt || 0) > 7 * 86_400_000) {
     clearSetupDraft();
+    $("#pairing-code").value = preferredCode;
     setSetupStep(1);
     return false;
   }
-  $("#pairing-code").value = draft.pairingCode || "";
+  $("#pairing-code").value = preferredCode || draft.pairingCode || "";
   $("#booth-name").value = draft.boothName || "";
   $("#booth-location").value = draft.boothLocation || "";
   $("#owner-email").value = draft.ownerEmail || "";
@@ -883,14 +1120,16 @@ document.querySelectorAll("#setup-form input").forEach(input => {
 });
 
 const params = new URLSearchParams(location.search);
+const setupCodeFromUrl = String(params.get("code") || "").trim().toUpperCase();
 const rememberedBooth = localStorage.getItem("photoslive.boothCode") || "";
 if (params.get("booth") || rememberedBooth) $("#login-booth").value = params.get("booth") || rememberedBooth;
-loginMethod("pin");
+loginMethod("password");
+detectLocalPinLogin();
 const requestedMode = params.get("mode") || "setup";
 if (requestedMode === "setup") {
   const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;
   if (previewStep >= 1 && previewStep <= 6) setSetupStep(previewStep);
-  else restoreSetupDraft();
+  else restoreSetupDraft(setupCodeFromUrl);
   mode("setup");
 } else {
   onboarding.step = 1;

@@ -1,0 +1,20 @@
+{
+  "name": "Photoslive Booth",
+  "short_name": "Photoslive",
+  "description": "Photobox local-first untuk komputer, iPad, dan tablet Android.",
+  "id": "/booth",
+  "start_url": "/booth",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#11131a",
+  "theme_color": "#11131a",
+  "icons": [
+    {
+      "src": "/icons/camera.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

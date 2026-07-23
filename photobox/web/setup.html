@@ -3,10 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#11131a">
   <title>Setup Photoslive</title>
   <link rel="icon" href="/icons/camera.svg">
+  <link rel="manifest" href="/app.webmanifest">
   <link rel="stylesheet" href="/platform.css?v=2">
-  <link rel="stylesheet" href="/setup.css?v=13">
+    <link rel="stylesheet" href="/setup.css?v=17">
 </head>
 <body>
   <div class="platform-shell">
@@ -18,7 +20,7 @@
       <section class="auth-card">
         <header class="auth-head">
           <h1 id="setup-title">Hubungkan photobox</h1>
-          <p id="setup-copy">Instal Agent, masukkan kode setup, lalu buat akun pemilik.</p>
+          <p id="setup-copy">Masukkan kode Agent.</p>
         </header>
 
         <div class="mode-tabs" id="setup-modes">
@@ -98,7 +100,7 @@
             <div class="ready-mark"><img src="/icons/circle-check.svg" alt=""></div>
             <div class="ready-copy"><h2>Photobox siap</h2><p>Pengaturan lain tersedia di admin.</p></div>
             <div class="ready-checklist" id="ready-checklist"></div>
-            <div class="form-actions"><button type="button" class="btn primary wide-action" id="finish-onboarding">Buka admin <img src="/icons/arrow-right.svg" alt=""></button></div>
+            <div class="form-actions"><button type="button" class="btn primary wide-action" id="finish-onboarding">Mulai gunakan photobox <img src="/icons/arrow-right.svg" alt=""></button></div>
           </section>
         </form>
 
@@ -106,18 +108,20 @@
           <div class="form-grid">
             <label class="full">Kode/nama photobox<input id="login-booth" placeholder="abcd-1234" required></label>
           </div>
-          <fieldset class="login-methods">
+          <fieldset class="login-methods single-method">
             <legend>Pilih cara masuk</legend>
+            <p class="login-method-note" id="login-method-note"><span class="setup-icon user" aria-hidden="true"></span>Email &amp; password</p>
             <div class="method-switch" role="group" aria-label="Cara masuk">
-              <button type="button" class="active" data-login-method="pin" aria-pressed="true"><img src="/icons/shield-check.svg" alt="">PIN</button>
-              <button type="button" data-login-method="password" aria-pressed="false"><img src="/icons/user-round.svg" alt="">Email &amp; password</button>
+              <button type="button" id="local-pin-method" class="hidden" data-login-method="pin" aria-pressed="false"><span class="setup-icon shield" aria-hidden="true"></span>PIN lokal</button>
+              <button type="button" class="active" data-login-method="password" aria-pressed="true"><span class="setup-icon user" aria-hidden="true"></span>Email &amp; password</button>
             </div>
+            <small id="local-pin-status">PIN hanya muncul saat Local Controller photobox ini terdeteksi.</small>
           </fieldset>
-          <div class="login-method-panel" data-method-panel="pin">
+          <div class="login-method-panel hidden" data-method-panel="pin">
             <label>PIN admin<input id="login-pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Masukkan 6 angka"></label>
             <label class="hidden" id="login-recovery-email-field">Email pemilik<input id="login-pin-email" type="email" autocomplete="email" placeholder="Email saat pertama daftar"><small>Hanya diperlukan sekali untuk menautkan kode setup lama.</small></label>
           </div>
-          <div class="login-method-panel hidden" data-method-panel="password">
+          <div class="login-method-panel" data-method-panel="password">
             <div class="form-grid">
               <label class="full">Email<input id="login-email" type="email" autocomplete="email" placeholder="nama@email.com"></label>
               <label class="full">Password<input id="login-password" type="password" autocomplete="current-password" placeholder="Masukkan password"></label>
@@ -138,7 +142,7 @@
           <div class="form-actions"><button class="btn primary">Kirim permintaan</button></div>
         </form>
 
-        <p class="status" id="setup-status"></p>
+        <p class="status" id="setup-status" role="status" aria-live="polite" aria-atomic="true"></p>
 
       </section>
 
@@ -149,26 +153,29 @@
           </div>
 
           <div class="agent-platform-switch" role="group" aria-label="Jenis perangkat">
-            <button type="button" class="active" data-agent-platform="computer" aria-pressed="true"><img src="/icons/monitor.svg" alt="">Komputer</button>
-            <button type="button" data-agent-platform="tablet" aria-pressed="false"><img src="/icons/tablet.svg" alt="">Android / iPad</button>
+            <button type="button" class="active" data-agent-platform="computer" aria-pressed="true"><span class="setup-icon monitor" aria-hidden="true"></span>Komputer</button>
+            <button type="button" data-agent-platform="tablet" aria-pressed="false"><span class="setup-icon tablet" aria-hidden="true"></span>Android / iPad</button>
           </div>
 
           <div class="agent-platform-panel" data-agent-panel="computer">
             <ol class="install-steps">
-              <li><span>1</span><div><b>Pilih sistem operasi</b><p>Perintah instalasi akan disesuaikan otomatis.</p>
-                <div class="installer-links" aria-label="Download Photoslive Agent">
-                  <button type="button" data-agent-os="windows"><img src="/icons/windows.svg" alt="">Windows</button>
-                  <button type="button" data-agent-os="macos"><img src="/icons/apple.svg" alt="">macOS</button>
-                  <button type="button" data-agent-os="linux"><img src="/icons/linux.svg" alt="">Linux</button>
-                </div>
+              <li><span>1</span><div><b>Download Photoslive Agent</b><p>Sistem operasi dipilih otomatis.</p>
+                <a class="primary-installer-download" id="primary-agent-download" href="/downloads/install-linux.sh" download="install-photoslive-linux.sh"><span id="primary-agent-icon" class="setup-icon linux" aria-hidden="true"></span><span id="primary-agent-label">Download untuk Linux</span><span class="setup-icon download" aria-hidden="true"></span></a>
+                <details class="installer-alternatives"><summary>Pakai sistem operasi lain</summary><div class="installer-links" aria-label="Pilihan installer Photoslive Agent">
+                  <button type="button" data-agent-os="windows"><span class="setup-icon windows" aria-hidden="true"></span>Windows</button>
+                  <button type="button" data-agent-os="macos"><span class="setup-icon apple" aria-hidden="true"></span>macOS</button>
+                  <button type="button" data-agent-os="linux"><span class="setup-icon linux" aria-hidden="true"></span>Linux</button>
+                </div></details>
               </div></li>
-              <li><span>2</span><div><b>Salin dan jalankan</b><p>Tempel perintah ini di Terminal atau PowerShell. Agent terpasang dan kode setup langsung muncul.</p></div></li>
+              <li><span>2</span><div><b>Jalankan file yang diunduh</b><p>Agent akan membuka setup dan mengisi kode secara otomatis.</p></div></li>
             </ol>
-            <b class="command-label" id="install-command-label">Perintah instalasi Linux Terminal</b>
-            <div class="command-box">
-              <code id="install-command">curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash</code>
-              <button type="button" id="copy-install-command" aria-label="Salin perintah instalasi"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
-            </div>
+            <details class="existing-agent technician-install"><summary>Metode teknisi melalui Terminal</summary>
+              <b class="command-label" id="install-command-label">Perintah instalasi Linux Terminal</b>
+              <div class="command-box">
+                <code id="install-command">curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash</code>
+                <button type="button" id="copy-install-command" aria-label="Salin perintah instalasi"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
+              </div>
+            </details>
             <details class="existing-agent">
               <summary>Agent sudah terpasang? Buat kode baru</summary>
               <b class="command-label" id="setup-command-label">Perintah Linux Terminal</b>
@@ -188,7 +195,25 @@
               <img src="/icons/info.svg" alt="">
               <p>Untuk printer USB, DSLR/mirrorless, monitoring storage, dan kode setup ini, hubungkan satu komputer Windows, macOS, atau Linux yang menjalankan Agent.</p>
             </div>
-            <button type="button" class="btn use-companion-agent" id="use-companion-agent"><img src="/icons/monitor.svg" alt="">Siapkan komputer pendamping</button>
+            <div class="tablet-standalone-controls">
+              <label>Kamera tablet
+                <select id="tablet-camera-facing"><option value="user">Kamera depan</option><option value="environment">Kamera belakang</option></select>
+              </label>
+              <video id="tablet-camera-preview" autoplay muted playsinline hidden aria-label="Preview kamera tablet"></video>
+              <div class="tablet-action-grid">
+                <button type="button" class="btn" id="test-tablet-camera"><img src="/icons/camera.svg" alt="">Tes kamera</button>
+                <button type="button" class="btn" id="persist-tablet-storage"><img src="/icons/hard-drive.svg" alt="">Simpan offline</button>
+                <button type="button" class="btn" id="install-tablet-pwa"><img src="/icons/download.svg" alt="">Install aplikasi</button>
+              </div>
+              <p class="tablet-runtime-status" id="tablet-runtime-status" role="status">Periksa kemampuan perangkat untuk mode standalone.</p>
+              <p class="tablet-print-status" id="tablet-print-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              <p class="tablet-limit">Android dan iPad dapat menghentikan sinkronisasi ketika aplikasi berada di background. Biarkan Photoslive tetap terbuka sampai upload selesai.</p>
+            </div>
+            <button type="button" class="btn use-companion-agent" id="use-companion-agent" aria-expanded="false" aria-controls="companion-setup-help"><span class="setup-icon monitor" aria-hidden="true"></span>Siapkan komputer pendamping</button>
+            <div class="tablet-limit hidden" id="companion-setup-help" role="status">
+              <img src="/icons/scan-line.svg" alt="">
+              <p>Buka <strong>Local Manager</strong> di komputer pendamping, pilih <strong>Buat QR pairing</strong>, lalu pindai QR dari tablet ini. Kamera tablet tetap dapat dipakai secara standalone jika langkah ini dilewati.</p>
+            </div>
           </div>
           <p class="copy-feedback" id="copy-feedback" role="status"></p>
       </aside>
@@ -216,6 +241,6 @@
       <div class="setup-dialog-actions"><button class="btn" value="cancel">Batal</button><button class="btn primary" id="save-setup-frame-design" value="default"><img src="/icons/save.svg" alt="">Gunakan desain</button></div>
     </form>
   </dialog>
-  <script src="/setup.js?v=15" defer></script>
+    <script src="/setup.js?v=21" defer></script>
 </body>
 </html>

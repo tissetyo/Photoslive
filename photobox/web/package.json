@@ -4,13 +4,23 @@
   "description": "Photoslive production UI and hardware bridge API",
   "main": "app.js",
   "scripts": {
-    "test": "node --check app.js && node --check booth.js && node --check setup.js && node --check superadmin.js && node --check session.js && node --check local-agent.js && node --check api/bridge.mjs && node --check api/platform.mjs && node --check api/_store.mjs && node --test tests/*.test.mjs"
+    "audit": "node scripts/audit-product.mjs --summary",
+    "audit:full": "node scripts/audit-product.mjs",
+    "migrate:directory": "node scripts/backfill-postgres-directory.mjs --dry-run",
+    "test:e2e": "playwright test",
+    "test": "node --check app.js && node --check booth.js && node --check setup.js && node --check superadmin.js && node --check session.js && node --check session-zip-worker.js && node --check status.js && node --check local-agent.js && node --check companion.js && node --check sw.js && node --check api/bridge.mjs && node --check api/platform.mjs && node --check api/retention.mjs && node --check api/_session_retention.mjs && node --check api/_store.mjs && node --check api/_backend_health.mjs && node --check api/_public_status.mjs && node --check api/_feature_flags.mjs && node --check api/_platform_roles.mjs && node --check api/_providers.mjs && node --check api/_provider_connections.mjs && node --check api/_provider_economics.mjs && node --check api/_provider_migrations.mjs && node --check api/_provider_migration_worker.mjs && node --check api/_alert_routing.mjs && node --check api/_email.mjs && node --check api/_telemetry_history.mjs && node --check api/_remote_jobs.mjs && node --check api/_object_storage.mjs && node --check api/_observability.mjs && node --check api/_payments.mjs && node --check api/_payouts.mjs && node --check api/_finance_policy.mjs && node --check api/_finance_risk.mjs && node --check api/_postgres.mjs && node --check api/_postgres_vouchers.mjs && node --check api/_postgres_settings.mjs && node --check api/_postgres_directory.mjs && node --check api/_postgres_sessions.mjs && node --check api/_rate_limit.mjs && node --check api/_csrf.mjs && node --check api/_webhook_events.mjs && node --check scripts/audit-product.mjs && node --check scripts/backfill-postgres-directory.mjs && node --test tests/*.test.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@upstash/redis": "^1.38.0"
+    "@upstash/redis": "1.38.0",
+    "nodemailer": "9.0.3",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1"
   }
 }

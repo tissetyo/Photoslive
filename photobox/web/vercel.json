@@ -3,8 +3,12 @@
   "regions": ["sin1"],
   "cleanUrls": true,
   "trailingSlash": false,
+  "crons": [
+    { "path": "/api/retention", "schedule": "17 3 * * *" }
+  ],
   "rewrites": [
     { "source": "/setup", "destination": "/setup" },
+    { "source": "/status", "destination": "/status" },
     { "source": "/superadmin", "destination": "/superadmin" },
     { "source": "/booth", "destination": "/booth" },
     { "source": "/:booth/admin", "destination": "/admin?booth=:booth" },

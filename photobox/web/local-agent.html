@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Photoslive Local Manager</title>
   <link rel="icon" href="/icons/camera.svg">
-  <link rel="stylesheet" href="/local-agent.css?v=2">
+  <link rel="stylesheet" href="/local-agent.css?v=6">
 </head>
 <body>
   <header class="local-topbar">
@@ -28,16 +28,31 @@
     <section class="status-grid" aria-label="Status utama">
       <article class="status-card"><span><img src="/icons/activity.svg" alt=""></span><div><small>CONTROLLER</small><strong id="controller-value">Memeriksa</strong><p id="controller-detail">127.0.0.1:8080</p></div></article>
       <article class="status-card"><span><img src="/icons/cloud.svg" alt=""></span><div><small>AGENT</small><strong id="agent-value">Memeriksa</strong><p id="agent-detail">Belum ada data</p></div></article>
+      <article class="status-card"><span><img src="/icons/wifi.svg" alt=""></span><div><small>CLOUD</small><strong id="cloud-value">Memeriksa</strong><p id="cloud-detail">Heartbeat belum dibaca</p></div></article>
       <article class="status-card"><span><img src="/icons/wifi.svg" alt=""></span><div><small>SINKRONISASI</small><strong id="sync-value">Memeriksa</strong><p id="sync-detail">Antrean belum dibaca</p></div></article>
+      <article class="status-card"><span><img src="/icons/shield-check.svg" alt=""></span><div><small>MODE OFFLINE</small><strong id="offline-value">Memeriksa</strong><p id="offline-detail">Lease belum dibaca</p></div></article>
       <article class="status-card"><span><img src="/icons/clock.svg" alt=""></span><div><small>UPTIME</small><strong id="uptime-value">—</strong><p id="version-detail">Versi belum tersedia</p></div></article>
+      <article class="status-card"><span><img src="/icons/activity.svg" alt=""></span><div><small>SISTEM</small><strong id="system-value">Memeriksa</strong><p id="system-detail">RAM, CPU, dan disk</p></div></article>
+      <article class="status-card"><span><img src="/icons/download.svg" alt=""></span><div><small>UPDATE</small><strong id="update-value">Memeriksa</strong><p id="update-detail">Status belum dibaca</p></div></article>
+    </section>
+
+    <section class="panel metrics-panel">
+      <header><div><h2>Kesehatan lokal</h2><p>Ringkasan ringan sejak Controller hidup. Maksimal 512 request terakhir disimpan di RAM.</p></div><button class="icon-button" id="refresh-metrics" aria-label="Muat ulang kesehatan lokal"><img src="/icons/refresh-cw.svg" alt=""></button></header>
+      <div class="metrics-grid" aria-live="polite">
+        <article class="metric-card"><small>LATENCY API P95</small><strong id="metrics-latency">Memeriksa</strong><p id="metrics-latency-detail">Belum ada sampel</p></article>
+        <article class="metric-card"><small>ERROR API</small><strong id="metrics-error-rate">Memeriksa</strong><p id="metrics-error-detail">Belum ada sampel</p></article>
+        <article class="metric-card"><small>ANTREAN AKTIF</small><strong id="metrics-queue">Memeriksa</strong><p id="metrics-queue-detail">Upload dan cetak</p></article>
+        <article class="metric-card"><small>GAGAL OPERASI</small><strong id="metrics-failures">Memeriksa</strong><p id="metrics-failures-detail">Kamera, capture, printer, render</p></article>
+      </div>
+      <p class="metrics-detail" id="metrics-detail">Memuat metrik lokal…</p>
     </section>
 
     <div class="content-grid">
       <section class="panel">
         <header><div><h2>Perangkat & penyimpanan</h2><p>Data diperbarui saat Anda menekan Periksa.</p></div><button class="icon-button" id="refresh-devices" aria-label="Periksa perangkat"><img src="/icons/refresh-cw.svg" alt=""></button></header>
         <div class="device-grid">
-          <article><span><img src="/icons/camera.svg" alt=""></span><div><small>KAMERA</small><strong id="camera-value">Belum diperiksa</strong><p id="camera-detail">—</p></div></article>
-          <article><span><img src="/icons/printer.svg" alt=""></span><div><small>PRINTER</small><strong id="printer-value">Belum diperiksa</strong><p id="printer-detail">—</p></div></article>
+          <article><span><img src="/icons/camera.svg" alt=""></span><div><small>KAMERA</small><strong id="camera-value">Belum diperiksa</strong><p id="camera-detail">—</p><button class="device-test" id="test-camera">Tes kamera</button></div></article>
+          <article><span><img src="/icons/printer.svg" alt=""></span><div><small>PRINTER</small><strong id="printer-value">Belum diperiksa</strong><p id="printer-detail">—</p><button class="device-test" id="test-printer">Tes printer</button></div></article>
         </div>
         <div class="storage-block">
           <div><span><img src="/icons/folder-open.svg" alt=""></span><div><small>FOLDER FOTO</small><strong id="storage-path">Memuat…</strong></div></div>
@@ -51,19 +66,85 @@
         <div class="control-list">
           <button id="toggle-pause"><span><img src="/icons/power.svg" alt=""></span><div><b id="pause-label">Pause koneksi</b><small id="pause-help">Command cloud sementara tidak dijalankan</small></div><img src="/icons/chevron-right.svg" alt=""></button>
           <button id="restart-agent"><span><img src="/icons/rotate-cw.svg" alt=""></span><div><b>Restart Agent</b><small>Dijalankan oleh supervisor sistem operasi</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+          <button id="check-update"><span><img src="/icons/download.svg" alt=""></span><div><b>Periksa update</b><small>Verifikasi manifest dan signature release</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+          <button id="install-update" disabled><span><img src="/icons/download.svg" alt=""></span><div><b>Pasang update</b><small id="install-update-help">Periksa versi baru terlebih dahulu</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+          <button id="rollback-update" disabled><span><img src="/icons/rotate-cw.svg" alt=""></span><div><b>Rollback versi</b><small id="rollback-update-help">Backup versi sebelumnya belum tersedia</small></div><img src="/icons/chevron-right.svg" alt=""></button>
           <button id="run-diagnosis"><span><img src="/icons/wrench.svg" alt=""></span><div><b>Diagnosis</b><small>Periksa service, perangkat, storage, dan antrean</small></div><img src="/icons/chevron-right.svg" alt=""></button>
           <button id="create-setup-code"><span><img src="/icons/ticket-check.svg" alt=""></span><div><b>Buat kode setup</b><small>Kode pairing baru berlaku selama 15 menit</small></div><img src="/icons/chevron-right.svg" alt=""></button>
         </div>
+        <details class="advanced-agent-controls">
+          <summary>Advanced</summary>
+          <div>
+            <p>Hard stop memutus koneksi cloud sampai Agent dijalankan lagi. Booth lokal tetap berjalan.</p>
+            <button class="button danger" id="stop-agent" type="button"><img src="/icons/power.svg" alt="">Hard stop Agent</button>
+          </div>
+        </details>
       </section>
     </div>
 
+    <section class="panel companion-panel">
+      <header><div><h2>Tablet companion</h2><p>Gunakan kamera tablet; komputer tetap menangani folder foto dan printer.</p></div><span class="companion-state" id="companion-state"><i></i><b>Belum tersambung</b></span></header>
+      <div class="companion-layout">
+        <div class="companion-copy">
+          <span class="companion-icon"><img src="/icons/tablet.svg" alt=""></span>
+          <div><strong id="companion-device">Belum ada tablet</strong><p id="companion-detail" role="status" aria-live="polite">Buat QR, lalu scan memakai kamera tablet pada Wi-Fi yang sama.</p></div>
+          <div class="panel-actions"><button class="button primary" id="create-companion-pairing"><img src="/icons/scan-line.svg" alt="">Buat QR pairing</button><button class="button secondary" id="revoke-companion" disabled>Putuskan</button></div>
+        </div>
+        <div class="companion-qr" id="companion-qr" hidden>
+          <img id="companion-qr-image" alt="QR pairing tablet companion">
+          <div><small>BERLAKU 5 MENIT</small><strong>Scan dari tablet</strong><p>Token hanya berlaku sekali dan tidak dikirim ke cloud.</p><button class="button secondary" id="copy-companion-link">Salin link</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel sync-panel">
+      <header><div><h2>Antrean upload</h2><p>File yang selesai memiliki checkpoint dan tidak diulang saat retry.</p></div><div class="panel-actions"><button class="button secondary" id="retry-failed-sync"><img src="/icons/rotate-cw.svg" alt="">Retry gagal</button><button class="icon-button" id="refresh-sync-jobs" aria-label="Muat ulang antrean upload"><img src="/icons/refresh-cw.svg" alt=""></button></div></header>
+      <div class="sync-job-list" id="sync-job-list" aria-live="polite"><p class="empty-state">Memuat antrean upload…</p></div>
+    </section>
+
+    <section class="panel print-panel">
+      <header><div><h2>Antrean cetak</h2><p>Job gagal dapat dicoba ulang tanpa membuat cetakan ganda.</p></div><button class="icon-button" id="refresh-print-jobs" aria-label="Muat ulang antrean cetak"><img src="/icons/refresh-cw.svg" alt=""></button></header>
+      <div class="sync-job-list" id="print-job-list" aria-live="polite"><p class="empty-state">Memuat antrean cetak…</p></div>
+    </section>
+
+    <section class="panel backup-panel">
+      <header><div><h2>Backup database lokal</h2><p>Backup harian dibuat otomatis. Restore hanya tersedia saat tidak ada sesi aktif.</p></div><button class="button secondary" id="create-backup"><img src="/icons/database.svg" alt="">Buat backup</button></header>
+      <div class="backup-summary"><span><img src="/icons/shield-check.svg" alt=""></span><div><small>STATUS DATABASE</small><strong id="database-value">Memeriksa</strong><p id="database-detail">Belum diperiksa</p></div></div>
+      <div class="backup-list" id="backup-list" aria-live="polite"><p class="empty-state">Memuat daftar backup…</p></div>
+    </section>
+
     <section class="panel logs-panel">
-      <header><div><h2>Log terbaru</h2><p>Token Agent tidak pernah ditampilkan.</p></div><button class="button secondary" id="refresh-logs"><img src="/icons/refresh-cw.svg" alt="">Muat ulang</button></header>
+      <header><div><h2>Log terbaru</h2><p>Token Agent tidak pernah ditampilkan.</p></div><div class="log-actions"><button class="button secondary" id="export-logs"><img src="/icons/download.svg" alt="">Export</button><button class="button secondary" id="refresh-logs"><img src="/icons/refresh-cw.svg" alt="">Muat ulang</button></div></header>
       <pre id="agent-logs" aria-live="polite">Belum ada log.</pre>
     </section>
   </main>
 
+  <dialog id="restore-dialog" class="restore-dialog">
+    <form method="dialog">
+      <header><div><p class="eyebrow">PEMULIHAN LOKAL</p><h2>Restore database?</h2></div><button class="icon-button" value="cancel" aria-label="Tutup"><img src="/icons/x.svg" alt=""></button></header>
+      <p>Data lokal saat ini akan diganti. Photoslive membuat safety backup terlebih dahulu jika database masih sehat.</p>
+      <div class="restore-target"><small>BACKUP DIPILIH</small><strong id="restore-backup-name">—</strong></div>
+      <label>Ketik <b>RESTORE</b> untuk melanjutkan<input id="restore-confirmation" autocomplete="off" placeholder="RESTORE"></label>
+      <footer><button class="button secondary" value="cancel">Batal</button><button class="button danger" type="button" id="confirm-restore" disabled><img src="/icons/rotate-cw.svg" alt="">Restore</button></footer>
+    </form>
+  </dialog>
+  <dialog id="rollback-dialog" class="restore-dialog">
+    <form method="dialog">
+      <header><div><p class="eyebrow">VERSI LOKAL</p><h2>Rollback Photoslive?</h2></div><button class="icon-button" value="cancel" aria-label="Tutup"><img src="/icons/x.svg" alt=""></button></header>
+      <p>File aplikasi akan dipulihkan dari backup update terakhir. Foto dan database sesi tidak diubah.</p>
+      <label>Ketik <b>ROLLBACK</b> untuk melanjutkan<input id="rollback-confirmation" autocomplete="off" placeholder="ROLLBACK"></label>
+      <footer><button class="button secondary" value="cancel">Batal</button><button class="button danger" type="button" id="confirm-rollback" disabled><img src="/icons/rotate-cw.svg" alt="">Rollback</button></footer>
+    </form>
+  </dialog>
+  <dialog id="stop-agent-dialog" class="restore-dialog">
+    <form method="dialog">
+      <header><div><p class="eyebrow">ADVANCED</p><h2>Hentikan Agent?</h2></div><button class="icon-button" value="cancel" aria-label="Tutup"><img src="/icons/x.svg" alt=""></button></header>
+      <p>Cloud monitoring, command remote, dan sinkronisasi akan berhenti. Controller, booth, capture, dan print lokal tetap berjalan.</p>
+      <label>Ketik <b>STOP AGENT</b> untuk melanjutkan<input id="stop-agent-confirmation" autocomplete="off" placeholder="STOP AGENT"></label>
+      <footer><button class="button secondary" value="cancel">Batal</button><button class="button danger" type="button" id="confirm-stop-agent" disabled><img src="/icons/power.svg" alt="">Hentikan Agent</button></footer>
+    </form>
+  </dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script src="/local-agent.js?v=2" defer></script>
+  <script src="/local-agent.js?v=11" defer></script>
 </body>
 </html>

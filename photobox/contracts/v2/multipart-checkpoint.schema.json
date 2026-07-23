@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photoslive.local/contracts/v2/multipart-checkpoint.schema.json",
+  "title": "Photoslive multipart upload checkpoint v2",
+  "type": "object",
+  "required": ["jobId", "fileId", "uploadId", "partNumber", "etag", "partSize", "totalSize"],
+  "additionalProperties": false,
+  "properties": {
+    "jobId": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "fileId": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "uploadId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,160}$" },
+    "partNumber": { "type": "integer", "minimum": 1, "maximum": 10000 },
+    "etag": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "partSize": { "type": "integer", "minimum": 5242880, "maximum": 20971520 },
+    "totalSize": { "type": "integer", "minimum": 1, "maximum": 25000000 }
+  }
+}

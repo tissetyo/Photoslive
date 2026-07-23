@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photoslive.local/contracts/v2/hardware-job.schema.json",
+  "title": "Photoslive signed hardware job v2",
+  "type": "object",
+  "required": ["id", "machineId", "type", "payload", "status", "createdAt", "expiresAt", "signature"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "machineId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "type": { "enum": ["devices.refresh", "camera.test", "camera.capture", "printer.test", "printer.print", "storage.cleanup", "service.restart", "controller.request", "privacy.delete_session", "agent.update.check", "agent.update.apply", "agent.update.rollback", "sync.retry", "sync.retry_job", "print.retry_job", "session.recover"] },
+    "payload": { "type": "object" },
+    "status": { "enum": ["queued", "claimed", "running", "completed", "failed", "expired"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "signature": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "idempotencyKey": { "type": ["string", "null"], "maxLength": 120 }
+  },
+  "additionalProperties": true
+}
