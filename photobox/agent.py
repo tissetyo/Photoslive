@@ -82,6 +82,16 @@ def request_json(url: str, method: str = "GET", payload: dict[str, Any] | None =
             message = None
             code = None
         raise CloudRequestError(message or f"HTTP {error.code}", status_code=error.code, retry_after=retry_after, code=code) from error
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", error)
+        message = str(reason or error)
+        if "timed out" in message.lower() or "timeout" in message.lower():
+            message = "Koneksi ke Photoslive Cloud timeout. Periksa internet, DNS, tanggal/jam mesin, lalu coba lagi."
+        elif "connection reset" in message.lower():
+            message = "Koneksi ke Photoslive Cloud terputus oleh jaringan. Coba ulang beberapa saat lagi."
+        elif "could not connect" in message.lower() or "connection refused" in message.lower():
+            message = "Photoslive Cloud belum bisa dijangkau dari mesin ini. Periksa koneksi internet atau firewall."
+        raise CloudRequestError(message, retry_after=15, code="NETWORK_UNREACHABLE") from error
 
 
 def upload_presigned_file(url: str, raw: bytes, headers: dict[str, Any] | None = None, timeout: int = 120) -> str:
@@ -166,6 +176,29 @@ def log_event(level: str, message: str, **details: Any) -> None:
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
     except OSError:
         pass
+
+
+def request_setup_code(config: dict[str, Any], attempts: int = 4) -> dict[str, Any]:
+    last_error: CloudRequestError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return request_json(
+                cloud_url(config, "create_setup_code"),
+                "POST",
+                {"machineId": config["machineId"]},
+                config["agentToken"],
+                timeout=20,
+            )
+        except CloudRequestError as error:
+            last_error = error
+            retryable = error.status_code is None or error.status_code in {408, 425, 429, 500, 502, 503, 504}
+            if not retryable or attempt >= attempts:
+                raise
+            wait_seconds = max(3, min(30, int(error.retry_after or attempt * 5)))
+            print(f"Cloud belum stabil ({error}). Coba lagi {attempt + 1}/{attempts} dalam {wait_seconds} detik…", flush=True)
+            log_event("warning", "Setup code ditunda karena cloud belum stabil", attempt=attempt, attempts=attempts, error=str(error), code=error.code)
+            time.sleep(wait_seconds)
+    raise last_error or CloudRequestError("Kode setup belum dapat dibuat")
 
 
 def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
@@ -737,7 +770,7 @@ def main() -> int:
         return 0
     if arguments.setup_code:
         config = ensure_pairing(config)
-        response = request_json(cloud_url(config, "create_setup_code"), "POST", {"machineId": config["machineId"]}, config["agentToken"])
+        response = request_setup_code(config)
         config.update({"pairingCode": response["pairingCode"], "boothCode": response.get("boothCode")})
         save_config(config)
         url = setup_url(config, response["pairingCode"])

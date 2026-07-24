@@ -11,7 +11,7 @@ command -v curl >/dev/null || { echo "curl wajib tersedia."; exit 1; }
 command -v unzip >/dev/null || { echo "unzip wajib tersedia."; exit 1; }
 
 mkdir -p "${INSTALL_DIR}" "${SERVICE_DIR}"
-curl -fL "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -o "${ARCHIVE}"
+curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -o "${ARCHIVE}"
 rm -rf "${INSTALL_DIR}/source"
 unzip -q "${ARCHIVE}" -d "${INSTALL_DIR}/source"
 SOURCE_DIR="${INSTALL_DIR}/source/photobox"
