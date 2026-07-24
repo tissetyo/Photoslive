@@ -38,7 +38,15 @@ async function machineRpc(name, body, identity, options = {}) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    if (!response.ok) throw Object.assign(new Error(`PostgreSQL machine registry gagal (${response.status})`), { status: response.status });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      let message = detail;
+      try {
+        const parsed = JSON.parse(detail);
+        message = parsed?.message || parsed?.error || detail;
+      } catch {}
+      throw Object.assign(new Error(`PostgreSQL machine registry gagal (${response.status}): ${clean(message, 300)}`), { status: response.status });
+    }
     return { ok: true, skipped: false, payload: await response.json() };
   } catch (error) {
     const reason = error?.name === "AbortError" ? `PostgreSQL machine registry timeout setelah ${status.timeoutMs} ms` : error instanceof Error ? error.message : String(error);
@@ -96,13 +104,21 @@ export async function readPostgresMachine(machineId, tokenHash, options = {}) {
 }
 
 export async function createPostgresSetupCode(machine, tokenHash, pairingCode, options = {}) {
+  const prepared = publicMachineInput({
+    ...machine,
+    agentTokenHash: tokenHash || machine.agentTokenHash,
+    commandKey: machine.commandKey || `command_${clean(machine.id, 40)}`,
+    pairingCode,
+  });
+  const persisted = await persistPostgresMachine(prepared, options);
+  if (!persisted.ok && !persisted.skipped) return persisted;
   const result = await machineRpc("photoslive_create_agent_setup_code", {
-    p_machine_id: clean(machine.id, 160),
-    p_agent_token_hash: clean(tokenHash || machine.agentTokenHash, 64).toLowerCase(),
+    p_machine_id: clean(prepared.id, 160),
+    p_agent_token_hash: clean(prepared.agentTokenHash, 64).toLowerCase(),
     p_pairing_code: clean(pairingCode, 16).toUpperCase(),
-    p_booth_code: clean(machine.boothCode, 64).toLowerCase(),
-    p_snapshot: publicMachineInput({ ...machine, pairingCode }),
-  }, machine.id, options);
+    p_booth_code: clean(prepared.boothCode, 64).toLowerCase(),
+    p_snapshot: prepared,
+  }, prepared.id, options);
   if (!result.ok || result.skipped) return result;
   const stored = safeMachine(result.payload);
   return stored ? { ...result, machine: stored } : { ok: false, skipped: false, status: 503, reason: "Setup code PostgreSQL tidak valid" };

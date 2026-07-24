@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { currentUser, login, setupBooth } from "../api/platform.mjs";
+import { createPostgresSetupCode } from "../api/_postgres_machines.mjs";
 
 process.env.SESSION_SECRET ||= "photoslive-test-session-secret-32-characters";
 
@@ -133,4 +134,49 @@ test("admin identity migration is private and service-role-only", () => {
   assert.match(sql, /revoke all on function public\.photoslive_persist_admin_user[\s\S]+authenticated/);
   assert.match(sql, /grant execute on function public\.photoslive_persist_admin_user[\s\S]+service_role/);
   assert.doesNotMatch(sql, /grant execute[\s\S]+photoslive_persist_admin_user[\s\S]+to authenticated/);
+});
+
+test("setup code creation upserts machine before issuing code", async () => {
+  const previous = { ...process.env };
+  const previousFetch = globalThis.fetch;
+  Object.assign(process.env, environment);
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    const payload = JSON.parse(options.body);
+    calls.push({ url: String(url), payload });
+    if (String(url).endsWith("/photoslive_persist_agent_machine")) {
+      return new Response(JSON.stringify({
+        id: payload.p_machine.id,
+        boothCode: payload.p_machine.boothCode,
+        paired: false,
+        agentTokenHash: payload.p_machine.agentTokenHash,
+        commandKey: payload.p_machine.commandKey,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (String(url).endsWith("/photoslive_create_agent_setup_code")) {
+      return new Response(JSON.stringify({
+        id: payload.p_machine_id,
+        boothCode: payload.p_booth_code,
+        pairingCode: payload.p_pairing_code,
+        paired: false,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`Unhandled RPC ${url}`);
+  };
+  try {
+    const result = await createPostgresSetupCode({
+      id: "machine_existing_legacy",
+      boothCode: "pl-legacy",
+      commandKey: "command_legacy",
+    }, "a".repeat(64), "ABCD-2345");
+    assert.equal(result.ok, true);
+    assert.equal(result.machine.pairingCode, "ABCD-2345");
+    assert.match(calls[0].url, /photoslive_persist_agent_machine$/);
+    assert.match(calls[1].url, /photoslive_create_agent_setup_code$/);
+    assert.equal(calls[0].payload.p_machine.agentTokenHash, "a".repeat(64));
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+    Object.assign(process.env, previous);
+  }
 });
