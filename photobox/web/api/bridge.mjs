@@ -612,11 +612,12 @@ async function settingsSnapshot(redis, request, payload) {
   if (postgresSettingsStatus().primary) {
     const snapshot = await readPostgresSettings(boothCode);
     if (snapshot) return json({ boothCode, version: snapshot.version, settings: snapshot.config, source: "postgres" });
+    return json({ boothCode, version: 0, settings: null, source: "postgres", empty: true });
   }
   return json({
     boothCode,
-    version: Number(await redis.get(`photoslive:booth:${boothCode}:settings-version`) || 0),
-    settings: await redis.get(`photoslive:booth:${boothCode}:settings`) || null,
+    version: Number(await bestEffortRedis(() => redis.get(`photoslive:booth:${boothCode}:settings-version`), 0) || 0),
+    settings: await bestEffortRedis(() => redis.get(`photoslive:booth:${boothCode}:settings`), null) || null,
     source: "redis",
   });
 }
@@ -628,12 +629,13 @@ async function voucherSnapshot(redis, request, payload) {
   if (postgresVoucherStatus().primary) {
     const snapshot = await readPostgresVoucherSnapshot(boothCode);
     if (snapshot) return json({ boothCode, version: snapshot.version, vouchers: snapshot.vouchers, events: snapshot.events, source: "postgres" });
+    return json({ boothCode, version: 0, vouchers: [], events: [], source: "postgres", empty: true });
   }
-  const codes = await redis.smembers(`photoslive:booth:${boothCode}:vouchers`);
-  const eventIds = await redis.smembers(`photoslive:booth:${boothCode}:voucher-events`);
-  const vouchers = (await Promise.all(codes.slice(0, 5000).map(code => redis.get(`photoslive:booth:${boothCode}:voucher:${code}`)))).filter(Boolean);
-  const events = (await Promise.all(eventIds.slice(0, 500).map(id => redis.get(`photoslive:booth:${boothCode}:voucher-event:${id}`)))).filter(Boolean);
-  return json({ boothCode, version: Number(await redis.get(`photoslive:booth:${boothCode}:voucher-version`) || 0), vouchers, events, source: "redis" });
+  const codes = await bestEffortRedis(() => redis.smembers(`photoslive:booth:${boothCode}:vouchers`), []);
+  const eventIds = await bestEffortRedis(() => redis.smembers(`photoslive:booth:${boothCode}:voucher-events`), []);
+  const vouchers = (await Promise.all(codes.slice(0, 5000).map(code => bestEffortRedis(() => redis.get(`photoslive:booth:${boothCode}:voucher:${code}`), null)))).filter(Boolean);
+  const events = (await Promise.all(eventIds.slice(0, 500).map(id => bestEffortRedis(() => redis.get(`photoslive:booth:${boothCode}:voucher-event:${id}`), null)))).filter(Boolean);
+  return json({ boothCode, version: Number(await bestEffortRedis(() => redis.get(`photoslive:booth:${boothCode}:voucher-version`), 0) || 0), vouchers, events, source: "redis" });
 }
 
 async function syncVoucherRedemptions(redis, request, payload) {

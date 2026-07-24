@@ -3,9 +3,23 @@ $InstallDir = Join-Path $env:LOCALAPPDATA "Photoslive"
 $Archive = Join-Path $env:TEMP "photoslive-agent.zip"
 $Extract = Join-Path $InstallDir "source"
 
+function Invoke-DownloadWithRetry {
+  param([string]$Uri, [string]$OutFile, [int]$Attempts = 6)
+  for ($Attempt = 1; $Attempt -le $Attempts; $Attempt++) {
+    try {
+      Invoke-WebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec 180
+      return
+    } catch {
+      if ($Attempt -eq $Attempts) { throw }
+      Write-Warning "Download belum stabil. Coba lagi $($Attempt + 1)/$Attempts dalam 3 detik..."
+      Start-Sleep -Seconds 3
+    }
+  }
+}
+
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "Install Python 3 terlebih dahulu dan aktifkan Add Python to PATH." }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Invoke-WebRequest -Uri "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -OutFile $Archive
+Invoke-DownloadWithRetry -Uri "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -OutFile $Archive
 Remove-Item -Recurse -Force $Extract -ErrorAction SilentlyContinue
 Expand-Archive -Path $Archive -DestinationPath $Extract -Force
 $SourceDir = Join-Path $Extract "photobox"
@@ -41,6 +55,7 @@ Start-ScheduledTask -TaskName "Photoslive Controller"
 Start-Sleep -Seconds 3
 Start-ScheduledTask -TaskName "Photoslive Agent"
 Start-Sleep -Seconds 3
-& $RuntimePython "$SourceDir\agent.py" --status
 Write-Host "Photoslive Agent diperbarui. Windows akan menjalankannya saat login dan mengulang otomatis setelah gagal."
 & $RuntimePython "$SourceDir\agent.py" --setup-code --open-setup
+Write-Host "Status lokal terakhir:"
+try { & $RuntimePython "$SourceDir\agent.py" --status } catch { Write-Warning $_.Exception.Message }

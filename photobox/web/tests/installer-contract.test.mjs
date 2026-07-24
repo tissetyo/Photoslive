@@ -40,5 +40,23 @@ test("all operator installers create a setup code and open prefilled setup", asy
   ]);
   for (const script of scripts) {
     assert.match(script, /--setup-code --open-setup/);
+    assert.ok(
+      script.indexOf("--setup-code --open-setup") < script.indexOf("--status"),
+      "status must be printed after setup-code so stale heartbeat errors do not hide a successful pairing code",
+    );
   }
+});
+
+test("operator installers retry unstable cloud downloads", async () => {
+  const [linux, macos, windows] = await Promise.all([
+    download("install-linux.sh"),
+    download("install-macos.sh"),
+    download("install-windows.ps1"),
+  ]);
+
+  assert.match(linux, /--retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 --max-time 180/);
+  assert.match(macos, /--retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 --max-time 180/);
+  assert.match(windows, /function Invoke-DownloadWithRetry/);
+  assert.match(windows, /-TimeoutSec 180/);
+  assert.match(windows, /Download belum stabil/);
 });

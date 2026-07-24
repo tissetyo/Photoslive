@@ -773,6 +773,23 @@ def main() -> int:
         response = request_setup_code(config)
         config.update({"pairingCode": response["pairingCode"], "boothCode": response.get("boothCode")})
         save_config(config)
+        previous_status = {}
+        if STATUS_PATH.exists():
+            try:
+                previous_status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                previous_status = {}
+        save_status({
+            **previous_status,
+            "online": bool(previous_status.get("online", False)),
+            "version": VERSION,
+            "machineId": config.get("machineId"),
+            "pairingCode": response["pairingCode"],
+            "boothCode": response.get("boothCode") or config.get("boothCode"),
+            "setupCodeCreatedAt": time.time(),
+            "updatedAt": time.time(),
+            "error": None,
+        })
         url = setup_url(config, response["pairingCode"])
         print(f"Kode setup baru: {response['pairingCode']}\nBerlaku 15 menit. Buka {url}", flush=True)
         if arguments.open_setup and not open_setup_page(url):

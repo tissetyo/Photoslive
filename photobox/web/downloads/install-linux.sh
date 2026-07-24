@@ -55,6 +55,7 @@ systemctl --user daemon-reload
 systemctl --user enable photoslive-controller.service photoslive-agent.service
 systemctl --user restart photoslive-controller.service photoslive-agent.service
 sleep 3
-"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --status
 echo "Photoslive Agent diperbarui dan service sudah direstart."
 "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-code --open-setup
+echo "Status lokal terakhir:"
+"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --status || true

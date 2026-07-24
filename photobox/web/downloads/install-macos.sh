@@ -8,7 +8,7 @@ ARCHIVE="${TMPDIR:-/tmp}/photoslive-agent.zip"
 mkdir -p "${INSTALL_DIR}" "${LAUNCH_DIR}"
 command -v python3 >/dev/null || { echo "Python 3.10 atau lebih baru wajib tersedia."; exit 1; }
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || { echo "Photoslive memerlukan Python 3.10 atau lebih baru."; exit 1; }
-curl -fL "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -o "${ARCHIVE}"
+curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -o "${ARCHIVE}"
 rm -rf "${INSTALL_DIR}/source"
 unzip -q "${ARCHIVE}" -d "${INSTALL_DIR}/source"
 SOURCE_DIR="${INSTALL_DIR}/source/photobox"
@@ -30,6 +30,7 @@ launchctl bootout "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist" 2>/d
 launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.controller.plist"
 launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist"
 sleep 3
-"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --status
 echo "Photoslive Agent diperbarui dan service sudah direstart."
 "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-code --open-setup
+echo "Status lokal terakhir:"
+"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --status || true
