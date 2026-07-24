@@ -78,6 +78,25 @@ test("primary mode commits PostgreSQL before refreshing the Redis cache", async 
   assert.equal(commands.some(command => command[0] === "incr"), false);
 });
 
+test("primary mode keeps voucher creation successful when Redis cache is unavailable", async () => {
+  const version = await persistVoucherBatch({
+    multi() {
+      return {
+        set() { return this; },
+        sadd() { return this; },
+        incr() { return this; },
+        async exec() { throw new Error("ERR max requests limit exceeded"); },
+      };
+    },
+  }, "booth-one", [{ code: "SAFE-REDIS-DOWN", boothCode: "booth-one" }], {
+    environment: configuredEnvironment,
+    async fetchImplementation() {
+      return new Response(JSON.stringify({ version: 32, inserted: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.equal(version, 32);
+});
+
 test("primary mode fails closed and does not create Redis-only vouchers", async () => {
   const commands = [];
   await assert.rejects(persistVoucherBatch(transactionRedis(commands), "booth-one", [{ code: "SAFE-0002" }], {

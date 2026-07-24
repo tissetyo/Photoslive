@@ -37,8 +37,25 @@ test("primary settings writes database before refreshing Redis cache", async () 
     },
   });
   assert.equal(version, 9);
-  assert.deepEqual(commands.map(command => command[0]), ["set", "set"]);
-  assert.equal(commands[1][2], 9);
+  assert.deepEqual(commands.map(command => command[0]), ["set"]);
+  assert.equal(commands[0][2], 9);
+});
+
+test("primary settings succeeds even when Redis compatibility cache is unavailable", async () => {
+  const version = await persistSettingsSnapshot({
+    multi() {
+      return {
+        set() { return this; },
+        async exec() { throw new Error("ERR max requests limit exceeded"); },
+      };
+    },
+  }, "booth-one", { booth: { name: "Booth One" } }, {
+    environment,
+    async fetchImplementation() {
+      return new Response(JSON.stringify({ version: 10 }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.equal(version, 10);
 });
 
 test("primary settings failure leaves Redis untouched", async () => {

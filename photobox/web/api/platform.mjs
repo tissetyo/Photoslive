@@ -327,17 +327,21 @@ function mergeObjects(base, incoming) {
 }
 
 async function cloudSettings(redis, booth) {
-  let stored = await redis.get(cloudSettingsKey(booth.boothCode));
-  if (!stored && postgresSettingsStatus().primary) {
+  let stored = null;
+  if (postgresSettingsStatus().primary) {
     const snapshot = await readPostgresSettings(booth.boothCode);
     if (snapshot) {
       stored = snapshot.config;
-      const cache = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
-      cache.set(cloudSettingsKey(booth.boothCode), stored);
-      cache.set(settingsVersionKey(booth.boothCode), snapshot.version);
-      await cache.exec();
+      try {
+        const cache = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
+        cache.set(settingsVersionKey(booth.boothCode), snapshot.version);
+        await cache.exec();
+      } catch {
+        // Compatibility cache only. PostgreSQL remains authoritative.
+      }
     }
   }
+  if (!stored) stored = await redis.get(cloudSettingsKey(booth.boothCode));
   const settings = mergeObjects(DEFAULT_CLOUD_SETTINGS, stored);
   settings.booth.name = stored?.booth?.name || booth.name || settings.booth.name;
   settings.booth.location = stored?.booth?.location ?? booth.location ?? settings.booth.location;
@@ -352,10 +356,15 @@ export async function persistSettingsSnapshot(redis, boothCode, settings, option
     if (!postgresResult.ok) throw Object.assign(new Error(postgresResult.reason || "Penyimpanan settings PostgreSQL gagal"), { status: Number(postgresResult.status || 503) });
   }
   const transaction = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
-  transaction.set(cloudSettingsKey(boothCode), settings);
+  if (!postgresStatus.primary) transaction.set(cloudSettingsKey(boothCode), settings);
   if (postgresStatus.primary) transaction.set(settingsVersionKey(boothCode), postgresResult.version);
   else transaction.incr(settingsVersionKey(boothCode));
-  const results = await transaction.exec();
+  let results = [];
+  try {
+    results = await transaction.exec();
+  } catch (error) {
+    if (!postgresStatus.primary) throw error;
+  }
   const version = postgresStatus.primary ? postgresResult.version : Number(results.at(-1)?.result ?? results.at(-1) ?? 0);
   if (!Number.isSafeInteger(version) || version < 1) throw new Error("Versi settings tidak dapat diperbarui");
   if (postgresStatus.mode === "dual") await persistPostgresSettings({ boothCode, config: settings }, options);
@@ -381,13 +390,6 @@ async function appendAudit(redis, auth, boothCode, action, target = "", detail =
     detail,
     createdAt: now(),
   };
-  const serialized = JSON.stringify(record);
-  const pipeline = redis.pipeline();
-  pipeline.lpush(auditKey(boothCode), serialized);
-  pipeline.ltrim(auditKey(boothCode), 0, 499);
-  pipeline.lpush("photoslive:audit:global", serialized);
-  pipeline.ltrim("photoslive:audit:global", 0, 999);
-  await pipeline.exec();
   await writePostgresShadowEvent({
     entityType: "audit",
     legacyKey: `${boothCode}:${record.id}`,
@@ -396,6 +398,19 @@ async function appendAudit(redis, auth, boothCode, action, target = "", detail =
     correlationId: record.correlationId,
     payload: record,
   });
+  try {
+    const serialized = JSON.stringify(record);
+    const pipeline = redis.pipeline();
+    pipeline.lpush(auditKey(boothCode), serialized);
+    pipeline.ltrim(auditKey(boothCode), 0, 499);
+    pipeline.lpush("photoslive:audit:global", serialized);
+    pipeline.ltrim("photoslive:audit:global", 0, 999);
+    await pipeline.exec();
+  } catch {
+    // Redis is the short ring-buffer for browsing audit logs. Durable audit
+    // persistence above keeps admin mutations from failing when free Redis
+    // quota is exhausted.
+  }
   return record;
 }
 
@@ -1377,9 +1392,9 @@ function voucherSnapshotLoader(boothCode) {
 }
 
 async function voucherRecords(redis, boothCode, loadSnapshot = null) {
+  if (postgresVoucherStatus().primary) return (await (loadSnapshot?.() || readPostgresVoucherSnapshot(boothCode)))?.vouchers || [];
   const codes = await redis.smembers(voucherIndexKey(boothCode));
   if (!codes.length) {
-    if (postgresVoucherStatus().primary) return (await (loadSnapshot?.() || readPostgresVoucherSnapshot(boothCode)))?.vouchers || [];
     return [];
   }
   const keys = codes.map(code => voucherKey(boothCode, code));
@@ -1390,9 +1405,9 @@ async function voucherRecords(redis, boothCode, loadSnapshot = null) {
 }
 
 async function voucherEvents(redis, boothCode, loadSnapshot = null) {
+  if (postgresVoucherStatus().primary) return (await (loadSnapshot?.() || readPostgresVoucherSnapshot(boothCode)))?.events || [];
   const ids = await redis.smembers(voucherEventIndexKey(boothCode));
   if (!ids.length) {
-    if (postgresVoucherStatus().primary) return (await (loadSnapshot?.() || readPostgresVoucherSnapshot(boothCode)))?.events || [];
     return [];
   }
   const keys = ids.map(id => voucherEventKey(boothCode, id));
@@ -1532,12 +1547,17 @@ export async function persistVoucherBatch(redis, boothCode, vouchers, options = 
     postgresResult = await persistPostgresVoucherBatch({ boothCode, vouchers, correlationId: options.correlationId }, options);
     if (!postgresResult.ok) throw Object.assign(new Error(postgresResult.reason || "Penyimpanan voucher PostgreSQL gagal"), { status: 503 });
   }
-  const transaction = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
-  for (const record of vouchers) transaction.set(voucherKey(boothCode, record.code), record);
-  if (vouchers.length) transaction.sadd(voucherIndexKey(boothCode), ...vouchers.map(record => record.code));
-  if (postgresStatus.primary) transaction.set(voucherVersionKey(boothCode), postgresResult.version);
-  else transaction.incr(voucherVersionKey(boothCode));
-  const results = await transaction.exec();
+  let results = [];
+  try {
+    const transaction = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
+    for (const record of vouchers) transaction.set(voucherKey(boothCode, record.code), record);
+    if (vouchers.length) transaction.sadd(voucherIndexKey(boothCode), ...vouchers.map(record => record.code));
+    if (postgresStatus.primary) transaction.set(voucherVersionKey(boothCode), postgresResult.version);
+    else transaction.incr(voucherVersionKey(boothCode));
+    results = await transaction.exec();
+  } catch (error) {
+    if (!postgresStatus.primary) throw error;
+  }
   const versionResult = results.at(-1);
   const version = postgresStatus.primary
     ? postgresResult.version
@@ -2675,32 +2695,38 @@ async function cloudData(redis, request, payload, correlationId = "") {
   if (request.method === "POST" && path === "/api/vouchers/redeem") {
     const code = voucherCode(payload.data?.code);
     if (!code) return json({ error: "Masukkan kode voucher" }, 400);
+    const postgresStatus = postgresVoucherStatus();
     const lockKey = `photoslive:booth:${booth.boothCode}:voucher-lock:${code}`;
-    const locked = await redis.set(lockKey, "1", { nx: true, ex: 8 });
+    const locked = postgresStatus.primary ? true : await redis.set(lockKey, "1", { nx: true, ex: 8 });
     if (!locked) return json({ error: "Voucher sedang diperiksa. Coba sekali lagi." }, 409);
     try {
-      let record = await redis.get(voucherKey(booth.boothCode, code));
-      if (!record && postgresVoucherStatus().primary) record = (await voucherRecords(redis, booth.boothCode)).find(item => item.code === code) || null;
+      let record = postgresStatus.primary ? null : await redis.get(voucherKey(booth.boothCode, code));
+      if (!record && postgresStatus.primary) record = (await voucherRecords(redis, booth.boothCode)).find(item => item.code === code) || null;
       if (!record || record.redeemedAt) return json({ error: "Voucher tidak ditemukan atau sudah dipakai" }, 404);
-      let event = record.eventId ? await redis.get(voucherEventKey(booth.boothCode, record.eventId)) : null;
-      if (!event && record.eventId && postgresVoucherStatus().primary) event = (await voucherEvents(redis, booth.boothCode)).find(item => item.id === record.eventId) || null;
+      let event = !postgresStatus.primary && record.eventId ? await redis.get(voucherEventKey(booth.boothCode, record.eventId)) : null;
+      if (!event && record.eventId && postgresStatus.primary) event = (await voucherEvents(redis, booth.boothCode)).find(item => item.id === record.eventId) || null;
       if (eventExpired(event)) return json({ error: "Voucher event sudah kedaluwarsa" }, 410);
       record.redeemedAt = now();
-      const postgresStatus = postgresVoucherStatus();
       let postgresResult = null;
       if (postgresStatus.primary) {
         postgresResult = await redeemPostgresVoucher({ boothCode: booth.boothCode, code, redeemedAt: record.redeemedAt });
         if (!postgresResult.ok) return json({ error: postgresResult.reason || "Voucher belum dapat dipakai" }, Number(postgresResult.status || 503));
       }
-      await redis.set(voucherKey(booth.boothCode, code), record);
-      if (postgresStatus.primary) await redis.set(voucherVersionKey(booth.boothCode), postgresResult.version);
-      else {
+      if (postgresStatus.primary) {
+        try {
+          await redis.set(voucherKey(booth.boothCode, code), record);
+          await redis.set(voucherVersionKey(booth.boothCode), postgresResult.version);
+        } catch {
+          // Redis cache only. PostgreSQL already completed the redemption.
+        }
+      } else {
+        await redis.set(voucherKey(booth.boothCode, code), record);
         await redis.incr(voucherVersionKey(booth.boothCode));
         if (postgresStatus.mode === "dual") await redeemPostgresVoucher({ boothCode: booth.boothCode, code, redeemedAt: record.redeemedAt });
       }
       return json({ voucher: record });
     } finally {
-      await redis.del(lockKey);
+      if (!postgresStatus.primary) await redis.del(lockKey);
     }
   }
 
@@ -3090,10 +3116,21 @@ async function cloudData(redis, request, payload, correlationId = "") {
       postgresResult = await deletePostgresVoucher({ boothCode: booth.boothCode, code });
       if (!postgresResult.ok) return json({ error: postgresResult.reason || "Voucher belum dapat dihapus" }, Number(postgresResult.status || 503));
     }
-    await redis.del(voucherKey(booth.boothCode, code));
-    await redis.srem(voucherIndexKey(booth.boothCode), code);
+    if (postgresStatus.primary) {
+      try {
+        await redis.del(voucherKey(booth.boothCode, code));
+        await redis.srem(voucherIndexKey(booth.boothCode), code);
+      } catch {
+        // Redis cache only. PostgreSQL is authoritative.
+      }
+    } else {
+      await redis.del(voucherKey(booth.boothCode, code));
+      await redis.srem(voucherIndexKey(booth.boothCode), code);
+    }
     const voucherVersion = postgresStatus.primary ? postgresResult.version : await redis.incr(voucherVersionKey(booth.boothCode));
-    if (postgresStatus.primary) await redis.set(voucherVersionKey(booth.boothCode), voucherVersion);
+    if (postgresStatus.primary) {
+      try { await redis.set(voucherVersionKey(booth.boothCode), voucherVersion); } catch {}
+    }
     else if (postgresStatus.mode === "dual") await deletePostgresVoucher({ boothCode: booth.boothCode, code });
     await Promise.all([
       writePostgresShadowEvent({
@@ -3120,10 +3157,21 @@ async function cloudData(redis, request, payload, correlationId = "") {
       postgresResult = await persistPostgresVoucherEvent({ boothCode: booth.boothCode, event });
       if (!postgresResult.ok) return json({ error: postgresResult.reason || "Event belum dapat disimpan" }, 503);
     }
-    await redis.set(voucherEventKey(booth.boothCode, event.id), event);
-    await redis.sadd(voucherEventIndexKey(booth.boothCode), event.id);
+    if (postgresStatus.primary) {
+      try {
+        await redis.set(voucherEventKey(booth.boothCode, event.id), event);
+        await redis.sadd(voucherEventIndexKey(booth.boothCode), event.id);
+      } catch {
+        // Redis cache only. PostgreSQL is authoritative.
+      }
+    } else {
+      await redis.set(voucherEventKey(booth.boothCode, event.id), event);
+      await redis.sadd(voucherEventIndexKey(booth.boothCode), event.id);
+    }
     const voucherVersion = postgresStatus.primary ? postgresResult.version : await redis.incr(voucherVersionKey(booth.boothCode));
-    if (postgresStatus.primary) await redis.set(voucherVersionKey(booth.boothCode), voucherVersion);
+    if (postgresStatus.primary) {
+      try { await redis.set(voucherVersionKey(booth.boothCode), voucherVersion); } catch {}
+    }
     else if (postgresStatus.mode === "dual") await persistPostgresVoucherEvent({ boothCode: booth.boothCode, event });
     await Promise.all([
       writePostgresShadowEvent({

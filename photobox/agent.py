@@ -704,7 +704,14 @@ def sync_local_outbox_once(config: dict[str, Any]) -> bool:
 
 def poll_job_once(config: dict[str, Any]) -> bool:
     response = request_json(cloud_url(config, "claim_job"), "POST", {"machineId": config["machineId"]}, config["agentToken"])
+    next_poll_seconds = response.get("nextPollSeconds")
+    if next_poll_seconds:
+        try:
+            config["jobPollSeconds"] = max(JOB_POLL_SECONDS, min(900, int(next_poll_seconds)))
+        except (TypeError, ValueError):
+            config["jobPollSeconds"] = JOB_POLL_SECONDS
     if response.get("job"):
+        config["jobPollSeconds"] = JOB_POLL_SECONDS
         log_event("info", "Job diterima", jobId=response["job"].get("id"), jobType=response["job"].get("type"))
         execute_job(config, response["job"])
         return True
@@ -751,6 +758,7 @@ def main() -> int:
     last_status_write = 0.0
     heartbeat_at: float | None = None
     job_poll_at: float | None = None
+    job_poll_seconds = max(JOB_POLL_SECONDS, int(config.get("jobPollSeconds") or JOB_POLL_SECONDS))
     log_event("info", "Agent dimulai", version=VERSION, heartbeatSeconds=HEARTBEAT_SECONDS)
     while True:
         try:
@@ -770,7 +778,8 @@ def main() -> int:
                 sync_vouchers(config, heartbeat)
                 last_heartbeat = current
                 heartbeat_at = time.time()
-            if not paused and (not last_job_poll or current - last_job_poll >= JOB_POLL_SECONDS):
+            job_poll_seconds = max(JOB_POLL_SECONDS, int(config.get("jobPollSeconds") or job_poll_seconds))
+            if not paused and (not last_job_poll or current - last_job_poll >= job_poll_seconds):
                 worked = poll_job_once(config)
                 worked = sync_local_outbox_once(config) or worked
                 last_job_poll = current

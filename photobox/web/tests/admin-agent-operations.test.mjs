@@ -50,6 +50,25 @@ test("heartbeat is throttled and Redis quota exhaustion is surfaced as actionabl
   assert.match(platform, /http\.error\.log_failed/);
 });
 
+test("Agent bridge keeps primary cloud data out of Redis hot paths and backs off idle polling", () => {
+  assert.match(bridge, /readPostgresSettings/);
+  assert.match(bridge, /readPostgresVoucherSnapshot/);
+  assert.match(bridge, /redeemPostgresVoucher/);
+  assert.match(bridge, /source: "postgres"/);
+  assert.match(bridge, /source: "redis"/);
+  assert.match(bridge, /IDLE_JOB_POLL_SECONDS/);
+  assert.match(bridge, /nextPollSeconds: IDLE_JOB_POLL_SECONDS/);
+  assert.match(agent, /response\.get\("nextPollSeconds"\)/);
+  assert.match(agent, /config\["jobPollSeconds"\]/);
+  assert.match(agent, /min\(900, int\(next_poll_seconds\)\)/);
+  assert.match(platform, /readPostgresSettings\(booth\.boothCode\)/);
+  assert.match(platform, /if \(!postgresStatus\.primary\) transaction\.set\(cloudSettingsKey\(boothCode\), settings\)/);
+  assert.match(platform, /if \(postgresVoucherStatus\(\)\.primary\) return/);
+  assert.match(platform, /Compatibility cache only\. PostgreSQL remains authoritative/);
+  assert.match(platform, /Redis cache only\. PostgreSQL already completed the redemption/);
+  assert.match(platform, /Redis is the short ring-buffer for browsing audit logs/);
+});
+
 test("heartbeat carries bounded operational summaries instead of remote file payloads", () => {
   assert.match(agent, /"sync": local_status\.get\("sync"\)/);
   assert.match(agent, /"queue": local_status\.get\("queue"\)/);

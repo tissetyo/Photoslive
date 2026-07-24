@@ -29,6 +29,8 @@ import { recordTelemetrySnapshot } from "./_telemetry_history.mjs";
 import { trackPublicSessionFileRetention, trackPublicSessionRetention } from "./_session_retention.mjs";
 import { resolveProviderRuntime, resolveProviderRuntimeForCapability } from "./_provider_connections.mjs";
 import { persistPostgresSession, postgresSessionStatus } from "./_postgres_sessions.mjs";
+import { postgresSettingsStatus, readPostgresSettings } from "./_postgres_settings.mjs";
+import { postgresVoucherStatus, readPostgresVoucherSnapshot, redeemPostgresVoucher } from "./_postgres_vouchers.mjs";
 
 const json = (response, status = 200, headers = {}) => new Response(JSON.stringify(response), {
   status,
@@ -105,6 +107,7 @@ const SESSION_FILE_KINDS = new Set(["capture", "composite", "gif"]);
 const MULTIPART_MIN_PART_BYTES = 5 * 1024 * 1024;
 const HEARTBEAT_MIN_INTERVAL_MS = Math.max(60_000, Number(process.env.PHOTOSLIVE_HEARTBEAT_MIN_INTERVAL_MS || 300_000));
 const REDIS_QUOTA_RETRY_AFTER_SECONDS = Math.max(300, Number(process.env.PHOTOSLIVE_REDIS_QUOTA_RETRY_AFTER_SECONDS || 1_800));
+const IDLE_JOB_POLL_SECONDS = Math.max(60, Number(process.env.PHOTOSLIVE_IDLE_JOB_POLL_SECONDS || 300));
 const heartbeatCache = globalThis.__photosliveHeartbeatCache ||= new Map();
 
 function normalizedPublicSessionCode(value) {
@@ -540,10 +543,15 @@ async function settingsSnapshot(redis, request, payload) {
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine?.paired) return json({ error: "Credential Agent tidak valid" }, 401);
   const boothCode = persistentBoothCode(machine);
+  if (postgresSettingsStatus().primary) {
+    const snapshot = await readPostgresSettings(boothCode);
+    if (snapshot) return json({ boothCode, version: snapshot.version, settings: snapshot.config, source: "postgres" });
+  }
   return json({
     boothCode,
     version: Number(await redis.get(`photoslive:booth:${boothCode}:settings-version`) || 0),
     settings: await redis.get(`photoslive:booth:${boothCode}:settings`) || null,
+    source: "redis",
   });
 }
 
@@ -551,11 +559,15 @@ async function voucherSnapshot(redis, request, payload) {
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine?.paired) return json({ error: "Credential Agent tidak valid" }, 401);
   const boothCode = persistentBoothCode(machine);
+  if (postgresVoucherStatus().primary) {
+    const snapshot = await readPostgresVoucherSnapshot(boothCode);
+    if (snapshot) return json({ boothCode, version: snapshot.version, vouchers: snapshot.vouchers, events: snapshot.events, source: "postgres" });
+  }
   const codes = await redis.smembers(`photoslive:booth:${boothCode}:vouchers`);
   const eventIds = await redis.smembers(`photoslive:booth:${boothCode}:voucher-events`);
   const vouchers = (await Promise.all(codes.slice(0, 5000).map(code => redis.get(`photoslive:booth:${boothCode}:voucher:${code}`)))).filter(Boolean);
   const events = (await Promise.all(eventIds.slice(0, 500).map(id => redis.get(`photoslive:booth:${boothCode}:voucher-event:${id}`)))).filter(Boolean);
-  return json({ boothCode, version: Number(await redis.get(`photoslive:booth:${boothCode}:voucher-version`) || 0), vouchers, events });
+  return json({ boothCode, version: Number(await redis.get(`photoslive:booth:${boothCode}:voucher-version`) || 0), vouchers, events, source: "redis" });
 }
 
 async function syncVoucherRedemptions(redis, request, payload) {
@@ -565,6 +577,12 @@ async function syncVoucherRedemptions(redis, request, payload) {
   let updated = 0;
   for (const item of (Array.isArray(payload.redemptions) ? payload.redemptions : []).slice(0, 500)) {
     const code = String(item.code || "").toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 32);
+    if (!code) continue;
+    if (postgresVoucherStatus().primary) {
+      const result = await redeemPostgresVoucher({ boothCode, code, redeemedAt: item.redeemedAt || now() });
+      if (result.ok) updated += 1;
+      continue;
+    }
     const record = code ? await redis.get(`photoslive:booth:${boothCode}:voucher:${code}`) : null;
     if (!record || record.redeemedAt) continue;
     record.redeemedAt = item.redeemedAt || now();
@@ -600,7 +618,7 @@ async function claimJob(redis, request, payload) {
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
   const id = await redis.lpop(queueKey(machine.id));
-  if (!id) return json({ job: null });
+  if (!id) return json({ job: null, nextPollSeconds: IDLE_JOB_POLL_SECONDS });
   const job = await redis.get(jobKey(id));
   if (!job) return json({ job: null });
   if (job.expiresAt && Date.parse(job.expiresAt) <= Date.now()) {
