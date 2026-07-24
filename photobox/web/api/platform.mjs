@@ -29,6 +29,8 @@ import { persistPostgresSettings, postgresSettingsStatus, readPostgresSettings }
 import { persistPostgresBoothDirectory, postgresDirectoryStatus, readPostgresBoothDirectory, updatePostgresBoothAccess } from "./_postgres_directory.mjs";
 import { expirePostgresSession, persistPostgresSession, postgresSessionStatus, readPostgresSession, requestPostgresSessionDeletion } from "./_postgres_sessions.mjs";
 import { deletePostgresAsset, persistPostgresAsset, postgresAssetStatus, readPostgresAssets, requestPostgresAssetDeletion } from "./_postgres_assets.mjs";
+import { markPostgresMachinePaired, postgresMachineStatus, readPostgresPairing } from "./_postgres_machines.mjs";
+import { listPostgresAdminUsers, persistPostgresAdminUser, postgresUsersStatus, readPostgresAdminUserByEmail, readPostgresAdminUserById } from "./_postgres_users.mjs";
 
 const encoder = new TextEncoder();
 const json = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), {
@@ -94,6 +96,20 @@ function sessionSecret() {
 async function signature(value) {
   const key = await crypto.subtle.importKey("raw", encoder.encode(sessionSecret()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return bytesToHex(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+}
+
+function encodeSessionPayload(payload) {
+  return btoa(JSON.stringify(payload)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+}
+
+function decodeSessionPayload(encoded) {
+  try {
+    const normalized = String(encoded || "").replaceAll("-", "+").replaceAll("_", "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
 }
 
 export async function verifyLocalLoginAssertion(redis, assertion, booth, atMs = Date.now()) {
@@ -170,20 +186,38 @@ async function verifyPlatformReauthentication(redis, auth, password) {
 async function createSession(redis, data) {
   const id = randomId("login");
   const record = { id, ...data, createdAt: now(), expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString() };
-  await redis.set(sessionKey(id), record, { ex: 7 * 86_400 });
-  if (record.userId) await redis.sadd(userSessionIndexKey(record.userId), id);
-  return `${id}.${await signature(id)}`;
+  try {
+    await redis.set(sessionKey(id), record, { ex: 7 * 86_400 });
+    if (record.userId) await redis.sadd(userSessionIndexKey(record.userId), id);
+    return `${id}.${await signature(id)}`;
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error) && !postgresUsersStatus().primary) throw error;
+    const encoded = encodeSessionPayload(record);
+    return `st.${encoded}.${await signature(`stateless:${encoded}`)}`;
+  }
 }
 
 async function authenticate(redis, request) {
   const token = cookieMap(request)["__Host-photoslive_session"] || "";
+  if (token.startsWith("st.")) {
+    const [, encoded, supplied] = token.split(".");
+    if (!encoded || !supplied || supplied !== await signature(`stateless:${encoded}`)) return null;
+    const session = decodeSessionPayload(encoded);
+    if (!session?.id || (session.expiresAt && Date.parse(session.expiresAt) <= Date.now())) return null;
+    return session;
+  }
   const [id, supplied] = token.split(".");
   if (!id || !supplied || supplied !== await signature(id)) return null;
-  const session = await redis.get(sessionKey(id));
+  let session = null;
+  try {
+    session = await redis.get(sessionKey(id));
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
   if (!session) return null;
   if (session.expiresAt && Date.parse(session.expiresAt) <= Date.now()) {
-    await redis.del(sessionKey(id));
-    if (session.userId) await redis.srem(userSessionIndexKey(session.userId), id);
+    await redisBestEffort(() => redis.del(sessionKey(id)));
+    if (session.userId) await redisBestEffort(() => redis.srem(userSessionIndexKey(session.userId), id));
     return null;
   }
   if (session.role === "superadmin" && session.userId !== "superadmin") {
@@ -192,8 +226,8 @@ async function authenticate(redis, request) {
     // record yet. Registered staff, however, are denied immediately once
     // suspended or revoked.
     if (staff && staff.status !== "active") {
-      await redis.del(sessionKey(id));
-      await redis.srem(userSessionIndexKey(session.userId), id);
+      await redisBestEffort(() => redis.del(sessionKey(id)));
+      await redisBestEffort(() => redis.srem(userSessionIndexKey(session.userId), id));
       return null;
     }
   }
@@ -203,19 +237,19 @@ async function authenticate(redis, request) {
 export async function logout(redis, request) {
   const auth = await authenticate(redis, request);
   if (auth?.id) {
-    await redis.del(sessionKey(auth.id));
-    if (auth.userId) await redis.srem(userSessionIndexKey(auth.userId), auth.id);
+    await redisBestEffort(() => redis.del(sessionKey(auth.id)));
+    if (auth.userId) await redisBestEffort(() => redis.srem(userSessionIndexKey(auth.userId), auth.id));
   }
   return json({ ok: true }, 200, { "set-cookie": clearCookie });
 }
 
 async function activeUserSessionIds(redis, userId) {
-  const ids = (await redis.smembers(userSessionIndexKey(userId))).slice(0, 100);
+  const ids = (await redisBestEffort(() => redis.smembers(userSessionIndexKey(userId)), [])).slice(0, 100);
   const active = [];
   for (const id of ids) {
-    const session = await redis.get(sessionKey(id));
+    const session = await redisBestEffort(() => redis.get(sessionKey(id)));
     if (session && (!session.expiresAt || Date.parse(session.expiresAt) > Date.now())) active.push(id);
-    else await redis.srem(userSessionIndexKey(userId), id);
+    else await redisBestEffort(() => redis.srem(userSessionIndexKey(userId), id));
   }
   return active;
 }
@@ -1510,11 +1544,13 @@ async function voucherPayload(redis, boothCode) {
 async function createCloudVoucher(redis, boothCode, payload, options = {}) {
   const code = voucherCode(payload.code) || `${pairingVoucherPart()}-${pairingVoucherPart()}`;
   if (code.length < 4) return json({ error: "Kode voucher minimal 4 karakter" }, 400);
-  let existing = await redis.get(voucherKey(boothCode, code));
-  if (!existing && postgresVoucherStatus().primary) existing = (await voucherRecords(redis, boothCode)).find(record => record.code === code) || null;
+  const voucherStatus = postgresVoucherStatus();
+  let existing = voucherStatus.primary
+    ? (await voucherRecords(redis, boothCode)).find(record => record.code === code) || null
+    : await redisBestEffort(() => redis.get(voucherKey(boothCode, code)));
   if (existing) return json({ error: "Kode voucher sudah digunakan" }, 409);
-  let event = payload.eventId ? await redis.get(voucherEventKey(boothCode, String(payload.eventId))) : null;
-  if (!event && payload.eventId && postgresVoucherStatus().primary) {
+  let event = payload.eventId && !voucherStatus.primary ? await redisBestEffort(() => redis.get(voucherEventKey(boothCode, String(payload.eventId)))) : null;
+  if (!event && payload.eventId && voucherStatus.primary) {
     event = (await voucherEvents(redis, boothCode)).find(record => record.id === String(payload.eventId)) || null;
   }
   if (payload.eventId && (!event || eventExpired(event))) return json({ error: "Event tidak ditemukan atau sudah berakhir" }, 404);
@@ -1575,7 +1611,7 @@ async function hydratePostgresBoothDirectory(redis, code) {
   if (!postgresDirectoryStatus().primary) return null;
   const directory = await readPostgresBoothDirectory(code);
   if (!directory) return null;
-  const cached = await redis.get(machineKey(directory.machineId)) || {};
+  const cached = await redisBestEffort(() => redis.get(machineKey(directory.machineId)), {}) || {};
   const machine = {
     ...cached,
     id: directory.machineId,
@@ -1590,20 +1626,109 @@ async function hydratePostgresBoothDirectory(redis, code) {
     controllerState: cached.controllerState || "unknown",
     updatedAt: directory.updatedAt || cached.updatedAt || now(),
   };
-  const transaction = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
-  transaction.set(machineKey(machine.id), machine);
-  transaction.set(boothKey(directory.boothCode), machine.id);
-  transaction.sadd("photoslive:machines", machine.id);
-  await transaction.exec();
+  await redisBestEffort(async () => {
+    const transaction = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
+    transaction.set(machineKey(machine.id), machine);
+    transaction.set(boothKey(directory.boothCode), machine.id);
+    transaction.sadd("photoslive:machines", machine.id);
+    return transaction.exec();
+  });
   return machine;
+}
+
+async function readSetupMachine(redis, code) {
+  const normalized = String(code || "").trim().toUpperCase();
+  if (!normalized) return { machineId: null, machine: null, source: "" };
+  const postgresStatus = postgresMachineStatus();
+  if (postgresStatus.primary) {
+    const machine = await readPostgresPairing(normalized);
+    if (machine) return { machineId: machine.id, machine, source: "postgres" };
+  }
+  try {
+    const machineId = await redis.get(`photoslive:pairing:${normalized}`);
+    const machine = machineId ? await redis.get(machineKey(machineId)) : null;
+    if (machine) return { machineId, machine, source: "redis" };
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
+  if (postgresStatus.enabled && !postgresStatus.primary) {
+    const machine = await readPostgresPairing(normalized);
+    if (machine) return { machineId: machine.id, machine, source: "postgres" };
+  }
+  return { machineId: null, machine: null, source: "" };
+}
+
+async function redisBestEffort(operation, fallback = null) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+    return fallback;
+  }
+}
+
+async function readAdminUserByEmail(redis, email) {
+  const normalized = normalizeEmail(email);
+  const postgresStatus = postgresUsersStatus();
+  if (postgresStatus.primary) return readPostgresAdminUserByEmail(normalized);
+  try {
+    const userId = await redis.get(`photoslive:email:${normalized}`);
+    const user = userId ? await redis.get(userKey(userId)) : null;
+    if (user) return user;
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
+  return postgresStatus.enabled ? readPostgresAdminUserByEmail(normalized) : null;
+}
+
+async function readAdminUserById(redis, userId) {
+  const postgresStatus = postgresUsersStatus();
+  if (postgresStatus.primary) return readPostgresAdminUserById(userId);
+  try {
+    const user = await redis.get(userKey(userId));
+    if (user) return user;
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
+  return postgresStatus.enabled ? readPostgresAdminUserById(userId) : null;
+}
+
+async function listAdminUsers(redis, boothCode) {
+  const postgresStatus = postgresUsersStatus();
+  if (postgresStatus.primary) return listPostgresAdminUsers(boothCode);
+  try {
+    const ids = await redis.smembers(`photoslive:booth:${boothCode}:users`);
+    const users = [];
+    for (const id of ids) {
+      const user = await redis.get(userKey(id));
+      if (user) users.push(user);
+    }
+    if (users.length) return users;
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
+  return postgresStatus.enabled ? listPostgresAdminUsers(boothCode) : [];
+}
+
+async function persistAdminUser(redis, user) {
+  const postgresStatus = postgresUsersStatus();
+  if (postgresStatus.primary) {
+    const persisted = await persistPostgresAdminUser(user);
+    if (!persisted.ok) return persisted;
+  }
+  await redisBestEffort(() => redis.set(userKey(user.id), user));
+  await redisBestEffort(() => redis.set(`photoslive:email:${user.email}`, user.id));
+  await redisBestEffort(() => redis.sadd(`photoslive:booth:${user.boothCode}:users`, user.id));
+  if (postgresStatus.mode === "dual") await persistPostgresAdminUser(user).catch(() => null);
+  return { ok: true, user };
 }
 
 export async function resolveBooth(redis, code) {
   const lookupCode = normalizeCode(code);
-  let machineId = await redis.get(boothKey(lookupCode));
+  let machineId = await redisBestEffort(() => redis.get(boothKey(lookupCode)));
   if (!machineId) machineId = (await hydratePostgresBoothDirectory(redis, lookupCode))?.id || null;
   if (!machineId) return null;
-  let machine = await redis.get(machineKey(machineId));
+  let machine = await redisBestEffort(() => redis.get(machineKey(machineId)));
   if (!machine) machine = await hydratePostgresBoothDirectory(redis, lookupCode);
   if (!machine) return null;
   const boothCode = normalizeCode(machine.boothCode || lookupCode);
@@ -1658,9 +1783,8 @@ export function safeBackupTelemetry(value) {
 export async function validateSetupCode(redis, payload) {
   const code = String(payload.pairingCode || "").trim().toUpperCase();
   if (!code) return json({ error: "Masukkan kode setup dari Photoslive Agent" }, 400);
-  const machineId = await redis.get(`photoslive:pairing:${code}`);
+  const { machineId, machine } = await readSetupMachine(redis, code);
   if (!machineId) return json({ error: "Kode setup tidak ditemukan atau sudah kedaluwarsa. Buat kode baru dari Agent." }, 404);
-  const machine = await redis.get(machineKey(machineId));
   if (!machine) return json({ error: "Mesin tidak ditemukan" }, 404);
   if (machine.pairingCode !== code) return json({ error: "Kode setup bukan kode terbaru untuk mesin ini" }, 409);
   if (machine.paired) return json({ error: "Mesin sudah memiliki pemilik. Gunakan halaman masuk." }, 409);
@@ -1684,21 +1808,24 @@ export async function setupBooth(redis, payload) {
   const email = normalizeEmail(payload.email);
   if (!code || !email) return json({ error: "Kode setup dan email wajib diisi" }, 400);
   if (!/^\d{6}$/.test(String(payload.pin || "")) || payload.pin !== payload.confirmPin) return json({ error: "PIN harus 6 angka dan konfirmasinya harus sama" }, 400);
-  const machineId = await redis.get(`photoslive:pairing:${code}`);
+  const setupMachine = await readSetupMachine(redis, code);
+  const machineId = setupMachine.machineId;
   if (!machineId) return json({ error: "Kode setup tidak ditemukan atau sudah kedaluwarsa. Jalankan Agent dengan --setup-code." }, 404);
-  const machine = await redis.get(machineKey(machineId));
+  const machine = setupMachine.machine;
   if (!machine) return json({ error: "Mesin tidak ditemukan" }, 404);
   if (machine.pairingCode !== code) return json({ error: "Kode setup bukan kode terbaru untuk mesin ini" }, 409);
   if (machine.paired) return json({ error: "Mesin sudah memiliki pemilik. Masuk dengan akun yang ada atau minta pemilik menambahkan pengguna." }, 409);
   const claimId = randomId("setup_claim");
   const claimKey = `photoslive:pairing-claim:${code}`;
-  const claimed = await redis.set(claimKey, claimId, { nx: true, ex: 120 });
+  const claimed = await redisBestEffort(() => redis.set(claimKey, claimId, { nx: true, ex: 120 }), "OK");
   if (!claimed) return json({ error: "Kode setup sedang diproses. Tunggu sebentar lalu periksa status mesin." }, 409);
   try {
-    const activeMachineId = await redis.get(`photoslive:pairing:${code}`);
+    const activeMachineId = setupMachine.source === "postgres"
+      ? (await readPostgresPairing(code))?.id
+      : await redisBestEffort(() => redis.get(`photoslive:pairing:${code}`));
     if (activeMachineId !== machineId) return json({ error: "Kode setup sudah digunakan atau diganti" }, 409);
   const boothCode = normalizeCode(machine.boothCode || code);
-  const existingEmail = await redis.get(`photoslive:email:${email}`);
+  const existingEmail = await readAdminUserByEmail(redis, email);
   if (existingEmail) return json({ error: "Email sudah digunakan" }, 409);
   const directoryStatus = postgresDirectoryStatus();
   const directoryInput = {
@@ -1727,21 +1854,26 @@ export async function setupBooth(redis, payload) {
   machine.setupAt = now();
   delete machine.pairingCode;
   const user = { id: randomId("user"), boothCode, machineId, email, name: "Pemilik", role: "owner", passwordHash: payload.password ? await hashCredential(payload.password) : "", pinHash: await hashCredential(payload.pin), createdAt: now(), active: true };
-  await redis.set(machineKey(machineId), machine);
-  await redis.set(boothKey(boothCode), machineId);
+  const postgresMachine = postgresMachineStatus();
+  if (postgresMachine.primary) await markPostgresMachinePaired(code, machine, boothCode);
+  await redisBestEffort(() => redis.set(machineKey(machineId), machine));
+  await redisBestEffort(() => redis.set(boothKey(boothCode), machineId));
   // A setup code is also a permanent login alias. Users commonly keep the
   // code shown by Agent, while the canonical booth URL may predate onboarding.
-  await redis.set(boothKey(code), machineId);
-  await redis.set(userKey(user.id), user);
-  await redis.set(`photoslive:email:${email}`, user.id);
-  await redis.sadd(`photoslive:booth:${boothCode}:users`, user.id);
-  await redis.sadd("photoslive:machines", machineId);
-  await redis.del(`photoslive:pairing:${code}`);
+  await redisBestEffort(() => redis.set(boothKey(code), machineId));
+  const persistedUser = await persistAdminUser(redis, user);
+  if (!persistedUser.ok) return json({
+    error: "Akun owner belum dapat disimpan ke database. Setup belum diterapkan; coba lagi setelah koneksi cloud pulih.",
+    retryable: true,
+  }, 503);
+  await redisBestEffort(() => redis.sadd("photoslive:machines", machineId));
+  await redisBestEffort(() => redis.del(`photoslive:pairing:${code}`));
+  if (postgresMachine.mode === "dual") await markPostgresMachinePaired(code, machine, boothCode);
   if (directoryStatus.mode === "dual") await persistPostgresBoothDirectory(directoryInput);
   const token = await createSession(redis, { userId: user.id, boothCode, machineId, role: user.role });
   return json({ booth: await resolveBooth(redis, boothCode), user: { id: user.id, email, name: user.name, role: user.role } }, 201, { "set-cookie": sessionCookie(token) });
   } finally {
-    if (await redis.get(claimKey) === claimId) await redis.del(claimKey);
+    if (await redisBestEffort(() => redis.get(claimKey)) === claimId) await redisBestEffort(() => redis.del(claimKey));
   }
 }
 
@@ -1753,15 +1885,14 @@ export async function login(redis, payload) {
   if (!booth) {
     const recoveryEmail = normalizeEmail(payload.email);
     if (!recoveryEmail || !payload.pin) return json({ error: "Kode photobox belum tertaut. Masukkan email pemilik untuk memulihkannya.", recoveryRequired: true }, 404);
-    const recoveryUserId = await redis.get(`photoslive:email:${recoveryEmail}`);
-    const recoveryUser = recoveryUserId ? await redis.get(userKey(recoveryUserId)) : null;
+    const recoveryUser = await readAdminUserByEmail(redis, recoveryEmail);
     if (!recoveryUser?.active || !await verifyCredential(payload.pin, recoveryUser.pinHash)) return json({ error: "Email pemilik atau PIN tidak benar", recoveryRequired: true }, 401);
     booth = await resolveBooth(redis, recoveryUser.boothCode);
     if (!booth || !booth.enabled) return json({ error: "Akses photobox dinonaktifkan" }, 403);
     const localProof = await verifyLocalLoginAssertion(redis, payload.localAssertion, booth);
     if (!localProof.valid) return json({ error: localProof.error }, 403);
-    const existingAlias = await redis.get(boothKey(lookupCode));
-    if (!existingAlias || existingAlias === booth.machineId) await redis.set(boothKey(lookupCode), booth.machineId);
+    const existingAlias = await redisBestEffort(() => redis.get(boothKey(lookupCode)));
+    if (!existingAlias || existingAlias === booth.machineId) await redisBestEffort(() => redis.set(boothKey(lookupCode), booth.machineId));
     const token = await createSession(redis, { userId: recoveryUser.id, boothCode: booth.boothCode, machineId: booth.machineId, role: recoveryUser.role });
     return json({ booth, user: { id: recoveryUser.id, email: recoveryUser.email, name: recoveryUser.name, role: recoveryUser.role }, aliasRepaired: true }, 200, { "set-cookie": sessionCookie(token) });
   }
@@ -1771,10 +1902,9 @@ export async function login(redis, payload) {
     if (!localProof.valid) return json({ error: localProof.error }, 403);
   }
   const boothCode = booth.boothCode;
-  const ids = await redis.smembers(`photoslive:booth:${boothCode}:users`);
+  const users = await listAdminUsers(redis, boothCode);
   let matched = null;
-  for (const id of ids) {
-    const user = await redis.get(userKey(id));
+  for (const user of users) {
     if (!user?.active) continue;
     if (payload.pin && await verifyCredential(payload.pin, user.pinHash)) { matched = user; break; }
     if (normalizeEmail(payload.email) === user.email && await verifyCredential(payload.password, user.passwordHash)) { matched = user; break; }
@@ -1782,8 +1912,8 @@ export async function login(redis, payload) {
   if (!matched) return json({ error: "Email/password atau PIN tidak benar" }, 401);
   const aliasCode = normalizeCode(payload.aliasCode);
   if (aliasCode && aliasCode !== boothCode) {
-    const existingAlias = await redis.get(boothKey(aliasCode));
-    if (!existingAlias || existingAlias === booth.machineId) await redis.set(boothKey(aliasCode), booth.machineId);
+    const existingAlias = await redisBestEffort(() => redis.get(boothKey(aliasCode)));
+    if (!existingAlias || existingAlias === booth.machineId) await redisBestEffort(() => redis.set(boothKey(aliasCode), booth.machineId));
   }
   const token = await createSession(redis, { userId: matched.id, boothCode, machineId: booth.machineId, role: matched.role });
   return json({ booth, user: { id: matched.id, email: matched.email, name: matched.name, role: matched.role } }, 200, { "set-cookie": sessionCookie(token) });
@@ -1821,17 +1951,16 @@ export async function currentUser(redis, request) {
   const auth = await authenticate(redis, request);
   if (!auth) return json({ user: null }, 401);
   if (auth.role === "superadmin") return json({ user: safePlatformIdentity(auth, await platformIdentityEmail(redis, auth)) });
-  const user = await redis.get(userKey(auth.userId));
+  const user = await readAdminUserById(redis, auth.userId);
   return json({ user: user ? { id: user.id, email: user.email, name: user.name, role: user.role, boothCode: user.boothCode, hasRemotePassword: Boolean(user.passwordHash) } : null, booth: await resolveBooth(redis, auth.boothCode) });
 }
 
 async function listUsers(redis, request) {
   const auth = await authenticate(redis, request);
   if (!auth?.boothCode) return json({ error: "Login admin diperlukan" }, 401);
-  const ids = await redis.smembers(`photoslive:booth:${auth.boothCode}:users`);
+  const records = await listAdminUsers(redis, auth.boothCode);
   const users = [];
-  for (const id of ids) {
-    const user = await redis.get(userKey(id));
+  for (const user of records) {
     if (!user) continue;
     users.push({
       id: user.id,
@@ -1874,9 +2003,10 @@ async function addUser(redis, request, payload) {
   if (!auth?.boothCode || !["owner", "admin"].includes(auth.role)) return json({ error: "Akses pemilik/admin diperlukan" }, 403);
   const email = normalizeEmail(payload.email);
   if (!email || String(payload.password || "").length < 8 || !/^\d{6}$/.test(String(payload.pin || ""))) return json({ error: "Email, password minimal 8 karakter, dan PIN 6 angka wajib diisi" }, 400);
-  if (await redis.get(`photoslive:email:${email}`)) return json({ error: "Email sudah digunakan" }, 409);
+  if (await readAdminUserByEmail(redis, email)) return json({ error: "Email sudah digunakan" }, 409);
   const user = { id: randomId("user"), boothCode: auth.boothCode, machineId: auth.machineId, email, name: String(payload.name || "Operator").slice(0, 80), role: payload.role === "admin" ? "admin" : "operator", passwordHash: await hashCredential(payload.password), pinHash: await hashCredential(payload.pin), createdAt: now(), active: true };
-  await redis.set(userKey(user.id), user); await redis.set(`photoslive:email:${email}`, user.id); await redis.sadd(`photoslive:booth:${auth.boothCode}:users`, user.id);
+  const persisted = await persistAdminUser(redis, user);
+  if (!persisted.ok) return json({ error: "Pengguna belum dapat disimpan ke database", retryable: true }, 503);
   await appendAudit(redis, auth, auth.boothCode, "user.created", user.id, { role: user.role, email: user.email });
   return json({ user: { id: user.id, email, name: user.name, role: user.role, active: true } }, 201);
 }
@@ -1884,29 +2014,28 @@ async function addUser(redis, request, payload) {
 export async function updateProfile(redis, request, payload) {
   const auth = await authenticate(redis, request);
   if (!auth?.userId || auth.role === "superadmin") return json({ error: "Login pengguna diperlukan" }, 401);
-  const user = await redis.get(userKey(auth.userId));
+  const user = await readAdminUserById(redis, auth.userId);
   if (!user) return json({ error: "Pengguna tidak ditemukan" }, 404);
   const changed = [];
   if (payload.email && normalizeEmail(payload.email) !== user.email) {
-    const email = normalizeEmail(payload.email); if (await redis.get(`photoslive:email:${email}`)) return json({ error: "Email sudah digunakan" }, 409);
-    await redis.del(`photoslive:email:${user.email}`); await redis.set(`photoslive:email:${email}`, user.id); user.email = email;
+    const email = normalizeEmail(payload.email); if (await readAdminUserByEmail(redis, email)) return json({ error: "Email sudah digunakan" }, 409);
+    await redisBestEffort(() => redis.del(`photoslive:email:${user.email}`)); await redisBestEffort(() => redis.set(`photoslive:email:${email}`, user.id)); user.email = email;
     changed.push("email");
   }
   if (payload.password) { if (String(payload.password).length < 8) return json({ error: "Password minimal 8 karakter" }, 400); user.passwordHash = await hashCredential(payload.password); changed.push("remote_password"); }
   if (payload.pin) { if (!/^\d{6}$/.test(String(payload.pin))) return json({ error: "PIN harus 6 angka" }, 400); user.pinHash = await hashCredential(payload.pin); }
   if (payload.pin) changed.push("local_pin");
   if (payload.name) { user.name = String(payload.name).slice(0, 80); changed.push("name"); }
-  user.updatedAt = now(); await redis.set(userKey(user.id), user);
+  user.updatedAt = now(); await persistAdminUser(redis, user);
   await appendAudit(redis, auth, user.boothCode, "profile.updated", user.id, { changed: [...new Set(changed)] });
   return json({ user: { id: user.id, email: user.email, name: user.name, role: user.role, hasRemotePassword: Boolean(user.passwordHash) } });
 }
 
 export async function forgotPassword(redis, payload) {
   const email = normalizeEmail(payload.email);
-  const userId = await redis.get(`photoslive:email:${email}`);
-  if (!userId) return json({ error: "Email tidak terdaftar, permintaan ditolak" }, 404);
-  const user = await redis.get(userKey(userId));
-  const request = { id: randomId("reset"), userId, email, boothCode: user.boothCode, status: "pending", message: String(payload.message || "").slice(0, 500), createdAt: now() };
+  const user = await readAdminUserByEmail(redis, email);
+  if (!user) return json({ error: "Email tidak terdaftar, permintaan ditolak" }, 404);
+  const request = { id: randomId("reset"), userId: user.id, email, boothCode: user.boothCode, status: "pending", message: String(payload.message || "").slice(0, 500), createdAt: now() };
   await redis.set(`photoslive:reset:${request.id}`, request);
   await redis.sadd("photoslive:reset-requests", request.id);
   return json({ request: { id: request.id, status: request.status } }, 201);

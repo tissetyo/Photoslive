@@ -31,6 +31,7 @@ import { resolveProviderRuntime, resolveProviderRuntimeForCapability } from "./_
 import { persistPostgresSession, postgresSessionStatus } from "./_postgres_sessions.mjs";
 import { postgresSettingsStatus, readPostgresSettings } from "./_postgres_settings.mjs";
 import { postgresVoucherStatus, readPostgresVoucherSnapshot, redeemPostgresVoucher } from "./_postgres_vouchers.mjs";
+import { createPostgresSetupCode, persistPostgresHeartbeat, persistPostgresMachine, postgresMachineStatus, readPostgresMachine } from "./_postgres_machines.mjs";
 
 const json = (response, status = 200, headers = {}) => new Response(JSON.stringify(response), {
   status,
@@ -52,9 +53,32 @@ async function body(request) {
 async function authenticateAgent(redis, request, machineId) {
   const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
   if (!machineId || !token) return null;
-  const machine = await redis.get(machineKey(machineId));
-  if (!machine || machine.agentTokenHash !== await sha256(token)) return null;
-  return machine;
+  const tokenHash = await sha256(token);
+  const postgresStatus = postgresMachineStatus();
+  if (postgresStatus.primary) {
+    const durable = await readPostgresMachine(machineId, tokenHash);
+    if (durable) return durable;
+  }
+  try {
+    const machine = await redis.get(machineKey(machineId));
+    if (machine?.agentTokenHash === tokenHash) return machine;
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
+  if (postgresStatus.enabled && !postgresStatus.primary) {
+    const durable = await readPostgresMachine(machineId, tokenHash);
+    if (durable) return durable;
+  }
+  return null;
+}
+
+async function bestEffortRedis(operation, fallback = null) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+    return fallback;
+  }
 }
 
 export const boothControllerPathAllowed = value => {
@@ -414,10 +438,12 @@ async function commandSignature(secret, job) {
 }
 
 async function createPairing(redis, payload) {
+  const postgresStatus = postgresMachineStatus();
   const machineId = randomId("machine");
   const agentToken = payload.agentToken || randomId("agent");
   const code = pairingCode();
   const createdAt = now();
+  const agentTokenHash = await sha256(agentToken);
   const machine = {
     id: machineId,
     name: String(payload.name || "Photoslive Booth").slice(0, 80),
@@ -427,7 +453,8 @@ async function createPairing(redis, payload) {
     paired: false,
     pairingCode: code,
     boothCode: code.toLowerCase(),
-    agentTokenHash: await sha256(agentToken),
+    pairingExpiresAt: new Date(Date.now() + 900_000).toISOString(),
+    agentTokenHash,
     createdAt,
     lastSeenAt: null,
     telemetry: {},
@@ -438,8 +465,15 @@ async function createPairing(redis, payload) {
     update: { status: "idle" },
     commandKey: randomId("command"),
   };
-  await redis.set(machineKey(machineId), machine);
-  await redis.set(`photoslive:pairing:${code}`, machineId, { ex: 900 });
+  if (postgresStatus.primary) {
+    const persisted = await persistPostgresMachine(machine);
+    if (!persisted.ok) throw Object.assign(new Error(persisted.reason || "Pairing PostgreSQL gagal dibuat"), { status: Number(persisted.status || 503) });
+  }
+  await bestEffortRedis(async () => {
+    await redis.set(machineKey(machineId), machine);
+    await redis.set(`photoslive:pairing:${code}`, machineId, { ex: 900 });
+  });
+  if (postgresStatus.mode === "dual") await persistPostgresMachine(machine);
   return { machineId, agentToken, commandKey: machine.commandKey, pairingCode: code, expiresInSeconds: 900 };
 }
 
@@ -469,19 +503,30 @@ export async function claimPairing(redis, request, payload) {
 
 
 export async function createSetupCode(redis, request, payload) {
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
+  const tokenHash = token ? await sha256(token) : "";
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
+  const postgresStatus = postgresMachineStatus();
   const code = pairingCode();
   const previousCode = String(machine.pairingCode || "").trim().toUpperCase();
-  if (previousCode) await redis.del(`photoslive:pairing:${previousCode}`);
+  if (previousCode) await bestEffortRedis(() => redis.del(`photoslive:pairing:${previousCode}`));
   machine.pairingCode = code;
+  machine.pairingExpiresAt = new Date(Date.now() + 900_000).toISOString();
   machine.boothCode = persistentBoothCode(machine);
-  await redis.set(machineKey(machine.id), machine);
-  await redis.set(`photoslive:pairing:${code}`, machine.id, { ex: 900 });
-  await redis.set(boothKey(machine.boothCode), machine.id);
+  if (postgresStatus.primary) {
+    const persisted = await createPostgresSetupCode(machine, tokenHash, code);
+    if (!persisted.ok) return json({ error: persisted.reason || "Kode setup belum dapat dibuat di database", retryable: true }, Number(persisted.status || 503));
+  }
+  await bestEffortRedis(async () => {
+    await redis.set(machineKey(machine.id), machine);
+    await redis.set(`photoslive:pairing:${code}`, machine.id, { ex: 900 });
+    await redis.set(boothKey(machine.boothCode), machine.id);
+  });
   // Keep the short code useful after onboarding as an alias to the canonical
   // photobox. The expiring pairing key still controls whether setup is valid.
-  await redis.set(boothKey(code), machine.id);
+  await bestEffortRedis(() => redis.set(boothKey(code), machine.id));
+  if (postgresStatus.mode === "dual") await createPostgresSetupCode(machine, tokenHash, code);
   return json({ pairingCode: code, boothCode: machine.boothCode, expiresInSeconds: 900 });
 }
 
@@ -489,8 +534,11 @@ async function heartbeat(redis, request, payload) {
   const cacheKey = await heartbeatCacheKey(request, payload);
   const cached = cachedHeartbeatResponse(cacheKey);
   if (cached) return cached;
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
+  const tokenHash = token ? await sha256(token) : "";
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
+  const postgresStatus = postgresMachineStatus();
   const protocolVersion = Math.max(1, Number(payload.protocolVersion || request.headers.get("x-photoslive-protocol-version") || 1));
   if (protocolVersion > 2) return json({ error: "Versi protokol Agent lebih baru daripada Cloud", minimumProtocolVersion: 1, protocolVersion: 2 }, 426);
   machine.lastSeenAt = now();
@@ -519,14 +567,31 @@ async function heartbeat(redis, request, payload) {
   } : { sessions: [] };
   machine.commandKey ||= randomId("command");
   machine.boothCode = persistentBoothCode(machine);
-  await recordTelemetrySnapshot(redis, machine).catch(() => null);
-  await resolveMachineIncident(redis, machine, machine.lastSeenAt);
-  await redis.sadd("photoslive:machines", machine.id);
-  if (machine.paired) await redis.set(boothKey(machine.boothCode), machine.id);
-  const voucherVersion = machine.paired ? Number(await redis.get(`photoslive:booth:${machine.boothCode}:voucher-version`) || 0) : 0;
-  const settingsVersion = machine.paired ? Number(await redis.get(`photoslive:booth:${machine.boothCode}:settings-version`) || 0) : 0;
+  await recordTelemetrySnapshot(redis, machine).catch(error => {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+    return null;
+  });
+  await bestEffortRedis(() => resolveMachineIncident(redis, machine, machine.lastSeenAt));
+  await bestEffortRedis(() => redis.sadd("photoslive:machines", machine.id));
+  if (machine.paired) await bestEffortRedis(() => redis.set(boothKey(machine.boothCode), machine.id));
+  let voucherVersion = 0;
+  let settingsVersion = 0;
+  if (machine.paired && postgresVoucherStatus().primary) {
+    voucherVersion = Number((await readPostgresVoucherSnapshot(machine.boothCode))?.version || 0);
+  } else if (machine.paired) {
+    voucherVersion = Number(await bestEffortRedis(() => redis.get(`photoslive:booth:${machine.boothCode}:voucher-version`), 0) || 0);
+  }
+  if (machine.paired && postgresSettingsStatus().primary) {
+    settingsVersion = Number((await readPostgresSettings(machine.boothCode))?.version || 0);
+  } else if (machine.paired) {
+    settingsVersion = Number(await bestEffortRedis(() => redis.get(`photoslive:booth:${machine.boothCode}:settings-version`), 0) || 0);
+  }
   machine.protocolVersion = protocolVersion;
-  await redis.set(machineKey(machine.id), machine);
+  if (postgresStatus.primary) {
+    await persistPostgresHeartbeat(machine, tokenHash).catch(() => null);
+  }
+  await bestEffortRedis(() => redis.set(machineKey(machine.id), machine));
+  if (postgresStatus.mode === "dual") await persistPostgresHeartbeat(machine, tokenHash).catch(() => null);
   const accessEnabled = machine.accessEnabled !== false;
   const response = {
     ok: true, paired: machine.paired, boothCode: machine.boothCode,
@@ -617,22 +682,22 @@ async function enqueueJob(redis, request, payload) {
 async function claimJob(redis, request, payload) {
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
-  const id = await redis.lpop(queueKey(machine.id));
+  const id = await bestEffortRedis(() => redis.lpop(queueKey(machine.id)), null);
   if (!id) return json({ job: null, nextPollSeconds: IDLE_JOB_POLL_SECONDS });
-  const job = await redis.get(jobKey(id));
+  const job = await bestEffortRedis(() => redis.get(jobKey(id)), null);
   if (!job) return json({ job: null });
   if (job.expiresAt && Date.parse(job.expiresAt) <= Date.now()) {
     job.status = "expired";
     job.error = "Command kedaluwarsa sebelum dijalankan";
     job.updatedAt = now();
-    await redis.set(jobKey(id), job, { ex: 86_400 });
+    await bestEffortRedis(() => redis.set(jobKey(id), job, { ex: 86_400 }));
     return claimJob(redis, request, payload);
   }
   job.status = "claimed";
   job.claimedAt = now();
   job.updatedAt = now();
   job.attempts = Number(job.attempts || 0) + 1;
-  await redis.set(jobKey(id), job, { ex: 86_400 });
+  await bestEffortRedis(() => redis.set(jobKey(id), job, { ex: 86_400 }));
   return json({ job });
 }
 
