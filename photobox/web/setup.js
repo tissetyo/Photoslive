@@ -735,9 +735,9 @@ window.addEventListener("beforeinstallprompt", event => {
 });
 window.addEventListener("appinstalled", () => refreshTabletCapabilities("Photoslive berhasil di-install."));
 const setupCommands = {
-  windows: { label: 'Windows PowerShell', installCommand: 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', setupCommand: 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-windows.ps1', downloadName: 'install-photoslive-windows.ps1', downloadLabel: 'Download untuk Windows', icon: 'windows' },
-  macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Download untuk macOS', icon: 'apple' },
-  linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Download untuk Linux', icon: 'linux' },
+  windows: { label: 'Windows PowerShell', installCommand: 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', setupCommand: 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-windows.ps1', downloadName: 'install-photoslive-windows.ps1', downloadLabel: 'Ambil installer Windows', icon: 'windows' },
+  macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Ambil installer macOS', icon: 'apple' },
+  linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Ambil installer Linux', icon: 'linux' },
 };
 function detectedOperatingSystem() {
   const platform = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
@@ -759,7 +759,7 @@ function agentOperatingSystem(name) {
 }
 document.querySelectorAll("[data-agent-platform]").forEach(button => button.addEventListener("click", () => agentPlatform(button.dataset.agentPlatform)));
 document.querySelectorAll("[data-agent-os]").forEach(button => button.addEventListener("click", () => agentOperatingSystem(button.dataset.agentOs)));
-$("#primary-agent-download").addEventListener("click", () => { $("#copy-feedback").textContent = "Download dimulai. Setelah selesai, jalankan file installer."; });
+$("#primary-agent-download").addEventListener("click", () => { $("#copy-feedback").textContent = "Installer ringan diunduh. Jalankan file itu; setelah selesai Setup/Local Manager akan terbuka di browser."; });
 $("#use-companion-agent").addEventListener("click", event => {
   const help = $("#companion-setup-help");
   const expanded = event.currentTarget.getAttribute("aria-expanded") !== "true";

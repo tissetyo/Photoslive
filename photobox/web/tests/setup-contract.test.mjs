@@ -41,6 +41,8 @@ test("setup detects the operating system and keeps secrets out of restart draft"
   assert.match(setup, /navigator\.userAgentData\?\.platform/);
   assert.match(setup, /function detectedOperatingSystem/);
   assert.match(html, /id="primary-agent-download"/);
+  assert.match(html, /Download installer ringan/);
+  assert.match(html, /GUI lokal tersedia di/);
   assert.match(html, /Pakai sistem operasi lain/);
   assert.match(html, /Metode teknisi melalui Terminal/);
   assert.match(setup, /primary-agent-download/);
