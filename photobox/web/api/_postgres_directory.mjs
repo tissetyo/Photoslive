@@ -3,11 +3,12 @@ import { redactLogValue } from "./_observability.mjs";
 const MODES = new Set(["off", "dual", "primary"]);
 const clean = (value, maximum = 120) => String(value ?? "").trim().slice(0, maximum);
 const baseUrl = value => clean(value, 500).replace(/\/+$/g, "");
+const supabaseUrl = environment => baseUrl(environment.SUPABASE_URL || environment.NEXT_PUBLIC_SUPABASE_URL);
 
 export function postgresDirectoryStatus(environment = process.env) {
   const requested = clean(environment.PHOTOSLIVE_POSTGRES_DIRECTORY, 20).toLowerCase() || "off";
   const mode = MODES.has(requested) ? requested : "off";
-  const configured = Boolean(baseUrl(environment.SUPABASE_URL) && clean(environment.SUPABASE_SERVICE_ROLE_KEY, 8));
+  const configured = Boolean(supabaseUrl(environment) && clean(environment.SUPABASE_SERVICE_ROLE_KEY, 8));
   const configuredTimeout = Number(environment.PHOTOSLIVE_POSTGRES_TIMEOUT_MS || 1_500);
   return {
     mode,
@@ -27,7 +28,7 @@ async function directoryRpc(name, body, identity, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), status.timeoutMs);
   try {
-    const response = await (options.fetchImplementation || fetch)(`${baseUrl(environment.SUPABASE_URL)}/rest/v1/rpc/${name}`, {
+    const response = await (options.fetchImplementation || fetch)(`${supabaseUrl(environment)}/rest/v1/rpc/${name}`, {
       method: "POST",
       headers: {
         apikey: environment.SUPABASE_SERVICE_ROLE_KEY,

@@ -32,7 +32,7 @@ const environment = {
   PHOTOSLIVE_POSTGRES_MACHINES: "primary",
   PHOTOSLIVE_POSTGRES_USERS: "primary",
   PHOTOSLIVE_POSTGRES_TIMEOUT_MS: "800",
-  SUPABASE_URL: "https://example.supabase.co",
+  NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_SERVICE_ROLE_KEY: "server-service-role-secret",
 };
 

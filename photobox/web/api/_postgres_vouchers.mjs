@@ -5,11 +5,12 @@ const MODES = new Set(["off", "dual", "primary"]);
 
 const baseUrl = value => String(value || "").trim().replace(/\/+$/g, "");
 const clean = (value, maximum = 120) => String(value ?? "").trim().slice(0, maximum);
+const supabaseUrl = environment => baseUrl(environment.SUPABASE_URL || environment.NEXT_PUBLIC_SUPABASE_URL);
 
 export function postgresVoucherStatus(environment = process.env) {
   const requestedMode = clean(environment.PHOTOSLIVE_POSTGRES_CLOUD_DATA, 20).toLowerCase() || "off";
   const mode = MODES.has(requestedMode) ? requestedMode : "off";
-  const configured = Boolean(baseUrl(environment.SUPABASE_URL) && clean(environment.SUPABASE_SERVICE_ROLE_KEY, 8));
+  const configured = Boolean(supabaseUrl(environment) && clean(environment.SUPABASE_SERVICE_ROLE_KEY, 8));
   const configuredTimeout = Number(environment.PHOTOSLIVE_POSTGRES_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(configuredTimeout)
     ? Math.max(100, Math.min(5_000, Math.round(configuredTimeout)))
@@ -23,7 +24,7 @@ export function postgresVoucherStatus(environment = process.env) {
     timeoutMs,
     reason: mode === "off"
       ? "PostgreSQL cloud data belum diaktifkan"
-      : configured ? "" : "SUPABASE_URL atau SUPABASE_SERVICE_ROLE_KEY belum dikonfigurasi",
+      : configured ? "" : "SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL atau SUPABASE_SERVICE_ROLE_KEY belum dikonfigurasi",
   };
 }
 
@@ -53,7 +54,7 @@ export async function persistPostgresVoucherBatch(input = {}, options = {}) {
   const timeout = setTimeout(() => controller.abort(), status.timeoutMs);
   try {
     const response = await fetchImplementation(
-      `${baseUrl(environment.SUPABASE_URL)}/rest/v1/rpc/photoslive_persist_voucher_batch`,
+      `${supabaseUrl(environment)}/rest/v1/rpc/photoslive_persist_voucher_batch`,
       {
         method: "POST",
         headers: {
@@ -93,7 +94,7 @@ async function invokeVoucherRpc(name, body, identity, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), status.timeoutMs);
   try {
-    const response = await fetchImplementation(`${baseUrl(environment.SUPABASE_URL)}/rest/v1/rpc/${name}`, {
+    const response = await fetchImplementation(`${supabaseUrl(environment)}/rest/v1/rpc/${name}`, {
       method: "POST",
       headers: {
         apikey: environment.SUPABASE_SERVICE_ROLE_KEY,
