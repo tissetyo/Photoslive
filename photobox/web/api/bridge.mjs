@@ -183,10 +183,11 @@ function storeHeartbeatResponse(cacheKey, response) {
 
 function redisQuotaResponse(contextId = "") {
   return json({
-    error: "Kuota Redis Upstash habis. Cloud sementara tidak bisa menulis atau membaca data.",
+    error: "Cache Redis Upstash sedang mencapai batas gratis. Data utama tetap disimpan di Supabase jika mode PostgreSQL aktif.",
     code: "UPSTASH_MAX_REQUESTS_EXCEEDED",
     retryable: true,
-    actionRequired: "Redis gratis sedang mencapai batas request. Agent akan otomatis menunggu lebih lama. Reset/ganti credential Redis jika pairing perlu langsung dipakai.",
+    degraded: true,
+    actionRequired: "Tidak perlu install ulang Agent. Tunggu reset kuota Redis atau ganti credential Redis hanya untuk memulihkan cache, job remote, dan status real-time.",
     retryAfterSeconds: REDIS_QUOTA_RETRY_AFTER_SECONDS,
     correlationId: contextId || undefined,
   }, 503, { "retry-after": String(REDIS_QUOTA_RETRY_AFTER_SECONDS) });
@@ -730,7 +731,13 @@ async function dispatch(request) {
     const url = new URL(request.url);
     const action = url.searchParams.get("action") || "health";
     const payload = { ...Object.fromEntries(url.searchParams), ...await body(request) };
-    if (action === "health") return json({ status: "ok", metadataStorage: "upstash", objectStorage: publicObjectStorageStatus(), time: now() });
+    if (action === "health") return json({
+      status: "ok",
+      metadataStorage: postgresMachineStatus().primary ? "supabase-postgres" : "upstash",
+      cacheStorage: "upstash",
+      objectStorage: publicObjectStorageStatus(),
+      time: now(),
+    });
     const redis = getRedis();
     if (action === "create_pairing" && request.method === "POST") return json(await createPairing(redis, payload), 201);
     if (action === "claim_pairing" && request.method === "POST") return claimPairing(redis, request, payload);

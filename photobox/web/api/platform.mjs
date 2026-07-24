@@ -3449,10 +3449,11 @@ async function handler(request) {
       }));
     }
     if (isUpstashMaxRequestsError(error)) return observedResponse(json({
-      error: "Kuota Redis Upstash habis. Cloud sementara tidak bisa menyimpan atau membaca data.",
+      error: "Cache Redis Upstash sedang mencapai batas gratis. Data utama tetap disimpan di Supabase jika mode PostgreSQL aktif.",
       code: "UPSTASH_MAX_REQUESTS_EXCEEDED",
       retryable: true,
-      actionRequired: "Upgrade/reset Upstash Redis atau ganti credential Redis di Vercel. Setelah itu coba ulang aksi ini.",
+      degraded: true,
+      actionRequired: "Jangan install ulang Agent. Coba ulang nanti untuk status real-time, job remote, atau fitur legacy yang masih memakai Redis.",
       correlationId: context.id,
     }, 503, { "retry-after": "300" }), context, { action });
     return observedResponse(json({ error: error instanceof Error ? error.message : "Kesalahan server", correlationId: context.id }, 500), context, { action });
