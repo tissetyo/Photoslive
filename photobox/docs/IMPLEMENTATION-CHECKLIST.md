@@ -230,7 +230,7 @@ Exit gate:
 - [x] macOS memakai LaunchAgent KeepAlive.
 - [x] Windows memakai restart-on-failure/watchdog.
 - [x] Installer membuat installation token.
-- [x] Installer membuka setup code otomatis.
+- [x] Installer membuka wizard dengan token registrasi internal otomatis.
 - [x] Heartbeat berjalan setiap 60 detik.
 - [x] Agent tetap heartbeat ketika booth access dimatikan.
 - [x] Implementasikan pause/resume cloud connection.
@@ -269,7 +269,7 @@ Exit gate:
 - [x] Implementasikan **Rollback**.
 - [x] Implementasikan **Tes perangkat**.
 - [x] Implementasikan **Pilih folder**.
-- [x] Implementasikan **Buat kode setup**.
+- [x] Implementasikan **Jalankan ulang wizard** tanpa input kode manual.
 - [x] Implementasikan **Diagnosis**.
 - [x] Implementasikan **Lihat/export log**.
 - [x] Implementasikan hard stop hanya pada Advanced.
@@ -287,7 +287,7 @@ Exit gate:
 
 - [x] Deteksi OS otomatis.
 - [x] Tampilkan satu installer utama.
-- [x] Validasi setup code 15 menit.
+- [x] Validasi token registrasi internal 15 menit.
 - [x] Input nama photobox.
 - [x] Input lokasi.
 - [x] Input email owner.

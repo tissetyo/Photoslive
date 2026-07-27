@@ -11,7 +11,7 @@ const [html, app, agent, bridge, platform] = await Promise.all([
   read("../api/platform.mjs"),
 ]);
 
-test("admin Agent operations expose real status and lifecycle controls", () => {
+test("admin machine controls expose real status and lifecycle operations", () => {
   for (const id of [
     "agent-connection-control", "agent-sync-value", "agent-print-queue-value",
     "agent-update-value", "agent-install-update", "agent-rollback-update", "agent-operation-status",
@@ -42,7 +42,8 @@ test("heartbeat is throttled and Redis quota exhaustion is surfaced as actionabl
   assert.match(bridge, /retry-after/);
   assert.match(bridge, /http\.error\.log_failed/);
   assert.match(agent, /HEARTBEAT_SECONDS = max\(60, int\(os\.environ\.get\("PHOTOSLIVE_HEARTBEAT_SECONDS", "300"\)\)\)/);
-  assert.match(agent, /JOB_POLL_SECONDS = max\(10, int\(os\.environ\.get\("PHOTOSLIVE_JOB_POLL_SECONDS", "60"\)\)\)/);
+  assert.match(agent, /JOB_POLL_SECONDS = max\(300, int\(os\.environ\.get\("PHOTOSLIVE_JOB_POLL_SECONDS", "900"\)\)\)/);
+  assert.match(agent, /OUTBOX_CHECK_SECONDS = max\(2, int\(os\.environ\.get\("PHOTOSLIVE_OUTBOX_CHECK_SECONDS", "5"\)\)\)/);
   assert.match(agent, /class CloudRequestError/);
   assert.match(agent, /retry_after/);
   assert.match(platform, /isUpstashMaxRequestsError/);
@@ -60,7 +61,7 @@ test("Agent bridge keeps primary cloud data out of Redis hot paths and backs off
   assert.match(bridge, /nextPollSeconds: IDLE_JOB_POLL_SECONDS/);
   assert.match(agent, /response\.get\("nextPollSeconds"\)/);
   assert.match(agent, /config\["jobPollSeconds"\]/);
-  assert.match(agent, /min\(900, int\(next_poll_seconds\)\)/);
+  assert.match(agent, /max\(JOB_POLL_SECONDS, min\(3600, int\(next_poll_seconds\)\)\)/);
   assert.match(platform, /readPostgresSettings\(booth\.boothCode\)/);
   assert.match(platform, /if \(!postgresStatus\.primary\) transaction\.set\(cloudSettingsKey\(boothCode\), settings\)/);
   assert.match(platform, /if \(postgresVoucherStatus\(\)\.primary\) return/);
@@ -103,11 +104,24 @@ test("admin session recovery uses a bounded secret-free heartbeat projection and
   assert.match(app, /queueAgentJob\("session\.recover", \{ sessionId:/);
 });
 
-test("hardware actions expose pending state and become unavailable while Agent is offline", () => {
+test("hardware actions expose pending state and become unavailable while the machine is offline", () => {
   assert.match(app, /\[data-agent-job\]:not\(#agent-connection-control\)/);
   assert.match(app, /button\.disabled = !online/);
   assert.match(app, /button\.dataset\.availability = online \? "ready" : "unavailable"/);
   assert.match(app, /button\.dataset\.jobState = "pending"/);
   assert.match(app, /button\.dataset\.jobState = String\(result\.job\.status/);
-  assert.match(app, /Agent offline\. Simpan pengaturan cloud tetap tersedia/);
+  assert.match(app, /Mesin offline\. Pengaturan cloud tetap dapat disimpan/);
+});
+
+test("admin presents a simple machine-first UI while preserving technical controls", () => {
+  assert.match(html, /data-view="agent"[\s\S]{0,160}Mesin &amp; koneksi/);
+  assert.match(html, /id="agent-setup-guide"/);
+  assert.match(html, /class="agent-advanced-controls"/);
+  assert.match(html, />Pengaturan lanjutan</);
+  assert.match(html, />Sinkronkan sekarang</);
+  assert.match(html, /Kondisi mesin diperiksa otomatis setiap 60 detik/);
+  assert.doesNotMatch(html, /Kondisi mesin diperiksa otomatis setiap 30 detik/);
+  assert.doesNotMatch(html, />Photoslive Agent</);
+  assert.match(app, /setupGuide\.hidden = true/);
+  assert.match(app, /setTimeout\(loadAgentStatus, 60000\)/);
 });

@@ -304,7 +304,7 @@ class LocalFirstTests(unittest.TestCase):
 
     def test_setup_url_is_prefilled_and_browser_open_is_best_effort(self):
         url = agent.setup_url({"cloud": "https://photoslive.example/"}, "ABCD-1234")
-        self.assertEqual(url, "https://photoslive.example/setup?code=ABCD-1234")
+        self.assertEqual(url, "https://photoslive.example/setup?setup=ABCD-1234")
         with mock.patch.object(agent.webbrowser, "open", return_value=True) as opener:
             self.assertTrue(agent.open_setup_page(url))
             opener.assert_called_once_with(url, new=2)
@@ -1229,6 +1229,61 @@ class LocalFirstTests(unittest.TestCase):
         self.assertEqual(len(successful), 1)
         self.assertEqual(len(rejected), 1)
 
+    def test_daily_reconciliation_snapshot_is_bounded_and_metadata_only(self):
+        with mock.patch.object(server, "storage_safety", return_value={
+            "blocked": False,
+            "warning": False,
+            "message": "Penyimpanan siap",
+        }):
+            session = server.create_photo_session(consent={
+                "accepted": True,
+                "version": server.PHOTO_CONSENT_VERSION,
+                "method": "test",
+            })
+        capture = self.register_selected_capture(session, color="#17324d")
+
+        snapshot = server.reconciliation_snapshot(limit=250)
+
+        self.assertEqual(snapshot["count"], 1)
+        self.assertEqual(len(snapshot["sessions"]), 1)
+        record = snapshot["sessions"][0]
+        self.assertEqual(record["localSessionId"], session["id"])
+        self.assertEqual(record["shareCode"], session["shareToken"])
+        self.assertEqual(record["files"][0]["id"], capture["id"])
+        self.assertEqual(record["files"][0]["checksumSha256"], capture["checksumSha256"])
+        self.assertGreater(record["files"][0]["size"], 0)
+        self.assertNotIn("path", record["files"][0])
+        self.assertNotIn("body", record["files"][0])
+        self.assertNotIn("bodyBase64", record["files"][0])
+
+        completed = server.complete_reconciliation({
+            "sessionCount": snapshot["count"],
+            "cloudUpdated": 1,
+            "correlationId": "reconcile-test",
+        })
+        status = server.sync_status()
+        self.assertEqual(status["lastFullReconcileAt"], completed["completedAt"])
+        self.assertEqual(status["lastFullReconcileCount"], 1)
+        self.assertEqual(server.get_local_state("sync_reconciliation")["cloudUpdated"], 1)
+
+    def test_daily_reconciliation_runs_only_after_schedule_and_once_per_day(self):
+        local_now = agent.datetime.now().astimezone().replace(hour=4, minute=0, second=0, microsecond=0)
+        sync = {
+            "schedule": {"fullReconcileHour": 3, "fullReconcileMinute": 15},
+            "lastFullReconcileAt": None,
+        }
+        self.assertTrue(agent.reconciliation_due(sync, local_now.timestamp()))
+
+        sync["lastFullReconcileAt"] = local_now.isoformat()
+        self.assertFalse(agent.reconciliation_due(sync, local_now.timestamp()))
+
+        previous_day = agent.datetime.fromtimestamp(local_now.timestamp() - 86_400, agent.timezone.utc).isoformat()
+        sync["lastFullReconcileAt"] = previous_day
+        self.assertTrue(agent.reconciliation_due(sync, local_now.timestamp()))
+
+        before_schedule = local_now.replace(hour=2, minute=45)
+        self.assertFalse(agent.reconciliation_due(sync, before_schedule.timestamp()))
+
 
 class ControllerProcessRecoveryTests(unittest.TestCase):
     """Acceptance coverage that uses a real Controller process and HTTP API."""
@@ -1461,7 +1516,6 @@ class ControllerProcessRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered["session"]["status"], "active")
         local = self.json_request("/api/booth/recovery")["session"]
         self.assertEqual(local["shareToken"], created["shareToken"])
-
 
 if __name__ == "__main__":
     unittest.main()

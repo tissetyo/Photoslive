@@ -197,6 +197,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "uploadFinalOnly": True,
         "deleteOnlyAfterUpload": True,
     },
+    "sync": {
+        "incrementalCheckSeconds": 5,
+        "remoteJobPollSeconds": 900,
+        "fullReconcileHour": 3,
+        "fullReconcileMinute": 15,
+        "reconcileBatchSize": 250,
+    },
     "devices": {
         "cameraSource": "auto",
         "browserCameraId": "",
@@ -743,6 +750,8 @@ def sync_status() -> dict[str, Any]:
         ).fetchone()
     counts = {status: count for status, count in rows}
     open_jobs = sum(counts.get(status, 0) for status in ("pending", "running", "failed", "dead"))
+    settings = load_settings().get("sync", {})
+    reconciliation = get_local_state("sync_reconciliation", {})
     return {
         "pending": counts.get("pending", 0),
         "running": counts.get("running", 0),
@@ -754,6 +763,16 @@ def sync_status() -> dict[str, Any]:
         "remainingCapacity": max(0, MAX_PENDING_SYNC_JOBS - open_jobs),
         "lastError": last_error[0] if last_error else None,
         "lastErrorAt": last_error[1] if last_error else None,
+        "lastIncrementalSyncAt": get_local_state("sync_last_incremental_at", None),
+        "lastFullReconcileAt": reconciliation.get("completedAt") if isinstance(reconciliation, dict) else None,
+        "lastFullReconcileCount": int(reconciliation.get("sessionCount") or 0) if isinstance(reconciliation, dict) else 0,
+        "schedule": {
+            "incrementalCheckSeconds": max(2, min(60, int(settings.get("incrementalCheckSeconds") or 5))),
+            "remoteJobPollSeconds": max(300, min(3600, int(settings.get("remoteJobPollSeconds") or 900))),
+            "fullReconcileHour": max(0, min(23, int(settings.get("fullReconcileHour") or 0))),
+            "fullReconcileMinute": max(0, min(59, int(settings.get("fullReconcileMinute") or 0))),
+            "reconcileBatchSize": max(50, min(500, int(settings.get("reconcileBatchSize") or 250))),
+        },
     }
 
 
@@ -976,6 +995,8 @@ def update_sync_job(job_id: str, succeeded: bool, error: str = "") -> dict[str, 
                 (next_status, str(error or "Sinkronisasi gagal")[:500], next_attempt, timestamp, job_id),
             )
         db.commit()
+    if succeeded:
+        set_local_state("sync_last_incremental_at", timestamp)
     return {"id": job_id, "status": "completed" if succeeded else next_status, "updatedAt": timestamp}
 
 
@@ -2713,6 +2734,74 @@ def get_local_state(key: str, fallback: Any = None) -> Any:
         return fallback
 
 
+def reconciliation_snapshot(limit: int = 250) -> dict[str, Any]:
+    """Return a bounded metadata-only snapshot for daily cloud reconciliation."""
+    safe_limit = max(50, min(500, int(limit or 250)))
+    with sqlite3.connect(DB_PATH) as db:
+        sessions = db.execute(
+            """SELECT id, share_token, status, frame_id, photo_slots, created_at,
+                      expires_at, uploaded_at
+               FROM photo_sessions
+               ORDER BY created_at DESC LIMIT ?""",
+            (safe_limit,),
+        ).fetchall()
+        session_ids = [str(row[0]) for row in sessions]
+        files_by_session: dict[str, list[dict[str, Any]]] = {session_id: [] for session_id in session_ids}
+        if session_ids:
+            placeholders = ",".join("?" for _ in session_ids)
+            rows = db.execute(
+                f"""SELECT id, session_id, slot_index, file_kind, checksum_sha256,
+                           uploaded_at, path
+                    FROM photo_files WHERE session_id IN ({placeholders})
+                    ORDER BY session_id, slot_index, attempt_number""",
+                session_ids,
+            ).fetchall()
+            for file_id, session_id, slot_index, file_kind, checksum, uploaded_at, path in rows:
+                try:
+                    size = (photo_root() / str(path)).stat().st_size
+                except OSError:
+                    size = 0
+                files_by_session.setdefault(str(session_id), []).append({
+                    "id": str(file_id),
+                    "kind": str(file_kind or "capture"),
+                    "slotIndex": int(slot_index or 0),
+                    "contentType": "image/gif" if file_kind == "gif" else "image/jpeg",
+                    "size": int(size),
+                    "checksumSha256": str(checksum or ""),
+                    "uploadedAt": uploaded_at,
+                })
+    records = [{
+        "localSessionId": str(row[0]),
+        "shareCode": str(row[1]),
+        "status": str(row[2]),
+        "frameId": str(row[3] or ""),
+        "photoSlots": int(row[4] or 1),
+        "createdAt": str(row[5]),
+        "completedAt": str(row[7] or row[5]) if row[2] == "completed" else None,
+        "expiresAt": str(row[6]),
+        "updatedAt": str(row[7] or row[5]),
+        "files": files_by_session.get(str(row[0]), [])[:16],
+    } for row in sessions]
+    return {
+        "sessions": records,
+        "count": len(records),
+        "generatedAt": utc_now(),
+        "truncated": len(records) >= safe_limit,
+    }
+
+
+def complete_reconciliation(payload: dict[str, Any]) -> dict[str, Any]:
+    completed_at = utc_now()
+    state = {
+        "completedAt": completed_at,
+        "sessionCount": max(0, min(500, int(payload.get("sessionCount") or 0))),
+        "cloudUpdated": max(0, int(payload.get("cloudUpdated") or 0)),
+        "correlationId": str(payload.get("correlationId") or "")[:120] or None,
+    }
+    set_local_state("sync_reconciliation", state)
+    return state
+
+
 def _offline_policy_signature(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hmac.new(installation_token().encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -3906,15 +3995,15 @@ def start_update_task(action: str) -> dict[str, Any]:
 
 
 def create_agent_setup_code() -> dict[str, Any]:
-    ok, output = command_output([sys.executable, str(ROOT / "agent.py"), "--setup-code"], timeout=25)
+    ok, output = command_output([sys.executable, str(ROOT / "agent.py"), "--setup-link"], timeout=25)
     if not ok:
-        raise ValueError(output or "Kode setup gagal dibuat. Pastikan Agent terhubung ke internet.")
-    match = re.search(r"Kode setup baru:\s*([A-Z0-9-]+)", output)
+        raise ValueError(output or "Tautan setup gagal dibuat. Pastikan Agent terhubung ke internet.")
+    match = re.search(r"\bBuka\s+(https?://\S+/setup\?setup=[A-Z0-9]+)", output)
     if not match:
-        raise ValueError("Agent tidak mengembalikan kode setup")
-    code = match.group(1)
-    add_event("agent", "Kode setup baru dibuat dari Local Manager")
-    return {"code": code, "expiresInSeconds": 900, "setupUrl": f"https://photoslive.vercel.app/setup?code={code}"}
+        raise ValueError("Agent tidak mengembalikan tautan setup")
+    setup_url_value = match.group(1)
+    add_event("agent", "Tautan setup aman dibuat dari Local Manager")
+    return {"expiresInSeconds": 900, "setupUrl": setup_url_value}
 
 
 def system_status() -> dict[str, Any]:
@@ -4192,6 +4281,14 @@ class ApiHandler(SimpleHTTPRequestHandler):
             return self.send_json({"database": database_health(), "backups": list_local_database_backups(), "restore": local_restore_status()})
         if path == "/api/local/sync/status":
             return self.send_json(sync_status())
+        if path == "/api/local/sync/reconciliation":
+            if not self.require_local_token():
+                return
+            try:
+                limit = int(query.get("limit", ["250"])[0])
+                return self.send_json(reconciliation_snapshot(limit))
+            except (ValueError, sqlite3.DatabaseError) as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         if path == "/api/local/sync/jobs":
             if not self.require_local_token():
                 return
@@ -4572,6 +4669,13 @@ class ApiHandler(SimpleHTTPRequestHandler):
                 return self.send_json({"job": retry_sync_job(str(self.read_json().get("jobId") or ""))})
             except (ValueError, sqlite3.DatabaseError, json.JSONDecodeError) as exc:
                 return self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+        if path == "/api/local/sync/reconciliation/complete":
+            if not self.require_local_token():
+                return
+            try:
+                return self.send_json({"reconciliation": complete_reconciliation(self.read_json())})
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         if path == "/api/local/print/retry-job":
             if not self.require_local_token():
                 return

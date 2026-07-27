@@ -30,19 +30,21 @@ DSLR/mirrorless dan printer harus melalui Agent.
 
 Pada pemasangan pertama, halaman `/setup` menyediakan installer Agent terpisah
 untuk Windows, macOS, dan Linux melalui perintah satu baris yang dapat disalin
-ke Terminal atau PowerShell. Installer langsung membuat kode setup setelah
-service aktif. Android/iPad dapat menjalankan layar booth dan
+ke Terminal atau PowerShell. Installer langsung membuat dan membuka tautan setup
+aman setelah service aktif; operator tidak perlu membaca atau memasukkan kode.
+Android/iPad dapat menjalankan layar booth dan
 kamera browser, tetapi belum dapat menjadi Agent perangkat: printer USB,
 DSLR/mirrorless, telemetry mesin, dan pairing tetap memerlukan satu komputer
 pendamping Windows, macOS, atau Linux.
 
-## Alur pairing mesin
+## Alur onboarding mesin
 
-1. Admin membuka **Mesin > Hubungkan ke cloud** pada mini PC.
-2. Agent membuat kode pairing/setup sekali pakai yang berlaku 15 menit.
-3. Admin memasukkan kode pada `/setup`. Cloud memvalidasi kode tanpa menghapusnya,
-   lalu wizard meminta nama, lokasi, email, dan PIN pemilik.
-4. Setelah email dan PIN berhasil disimpan, kode sekali pakai dihapus
+1. Operator menjalankan installer Photoslive pada komputer photobox.
+2. Agent membuat token setup sekali pakai yang berlaku 15 menit, memasukkannya
+   hanya ke tautan HTTPS, lalu membuka `/setup` otomatis.
+3. Cloud memvalidasi token dari tautan tanpa meminta operator mengetik atau
+   menyalinnya, lalu wizard meminta nama, lokasi, email, dan PIN pemilik.
+4. Setelah email dan PIN berhasil disimpan, token sekali pakai dihapus
    (`pairingCode` menjadi `null`)
    dan `boothCode` permanen digunakan untuk URL tenant.
 5. Wizard meminta scan perangkat baru melalui Agent, hanya menampilkan entri
@@ -67,7 +69,7 @@ Endpoint minimum:
 
 | Method | Endpoint | Pemakai | Fungsi |
 | --- | --- | --- | --- |
-| `POST` | `/api/cloud/pairings` | Agent | Membuat kode pairing |
+| `POST` | `/api/cloud/pairings` | Agent | Membuat tautan setup aman |
 | `POST` | `/api/cloud/pairings/claim` | Admin | Menghubungkan mesin |
 | `POST` | `/api/agent/heartbeat` | Agent | Status dan telemetry |
 | `POST` | `/api/agent/jobs/claim` | Agent | Mengambil satu job atomik |

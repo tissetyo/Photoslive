@@ -42,6 +42,15 @@ async function requestBody(request) {
   return request.method === "GET" ? {} : request.json().catch(() => ({}));
 }
 
+async function bestEffortRedis(operation, fallback = null) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+    return fallback;
+  }
+}
+
 const providerContextForBooth = booth => ({
   boothCode: booth?.boothCode || "",
   organizationId: booth?.organizationId || booth?.organization?.id || "",
@@ -56,10 +65,16 @@ async function storageRuntime(redis, booth, providerId = "") {
 
 async function deploymentCapabilitiesForBooth(redis, booth) {
   const context = providerContextForBooth(booth);
-  const [storage, qris] = await Promise.all([
-    resolveProviderRuntimeForCapability(redis, "cloudStorage", context),
-    resolveProviderRuntimeForCapability(redis, "qris", context),
-  ]);
+  let storage = null;
+  let qris = null;
+  try {
+    [storage, qris] = await Promise.all([
+      resolveProviderRuntimeForCapability(redis, "cloudStorage", context),
+      resolveProviderRuntimeForCapability(redis, "qris", context),
+    ]);
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
   return deploymentCapabilities({ ...process.env, ...(storage?.environment || {}), ...(qris?.environment || {}) });
 }
 
@@ -308,12 +323,18 @@ function publicBoothProjection(booth) {
 }
 
 async function recoverPublicSession(redis, boothCode, shareCode) {
-  let record = await redis.get(publicSessionKey(boothCode, shareCode));
-  if (!record && postgresSessionStatus().primary) {
-    const snapshot = await readPostgresSession(boothCode, shareCode);
-    if (snapshot && !snapshot.deleted && !["expired", "cancelled"].includes(snapshot.status) && publicSessionRemainingTtl(snapshot) > 0) {
-      record = snapshot;
-      const ttl = publicSessionRemainingTtl(record);
+  const postgres = postgresSessionStatus();
+  let record = postgres.primary
+    ? await readPostgresSession(boothCode, shareCode)
+    : await bestEffortRedis(() => redis.get(publicSessionKey(boothCode, shareCode)), null);
+  if (!record && postgres.primary) {
+    record = await bestEffortRedis(() => redis.get(publicSessionKey(boothCode, shareCode)), null);
+  } else if (!record && postgres.enabled) {
+    record = await readPostgresSession(boothCode, shareCode);
+  }
+  if (record && postgres.primary && !record.deleted && !["expired", "cancelled"].includes(record.status) && publicSessionRemainingTtl(record) > 0) {
+    const ttl = publicSessionRemainingTtl(record);
+    await bestEffortRedis(async () => {
       await redis.set(publicSessionKey(boothCode, shareCode), record, { ex: ttl });
       await trackPublicSessionRetention(redis, record);
       const filesById = new Map((record.files || []).map(file => [String(file.id || ""), file]));
@@ -324,7 +345,7 @@ async function recoverPublicSession(redis, boothCode, shareCode) {
         await redis.set(publicSessionFileKey(boothCode, shareCode, manifest.id), fileRecord, { ex: ttl });
         await trackPublicSessionFileRetention(redis, record, fileRecord);
       }
-    }
+    });
   }
   return record;
 }
@@ -349,6 +370,7 @@ const DEFAULT_CLOUD_SETTINGS = {
   },
   storage: { cloudEnabled: false, provider: "Cloudflare R2", uploadFinalOnly: true, deleteOnlyAfterUpload: true },
   devices: { preferredCamera: "auto", preferredPrinter: "auto", paperSize: "4x6", printLayout: "photo-strip-vertical", stripsPerSheet: 2, borderless: true, cameraSource: "auto", browserCameraId: "", cameraMirror: false, cameraRotation: "0" },
+  sync: { incrementalCheckSeconds: 5, remoteJobPollSeconds: 900, fullReconcileHour: 3, fullReconcileMinute: 15, reconcileBatchSize: 250 },
 };
 
 const clone = value => structuredClone(value);
@@ -361,8 +383,9 @@ function mergeObjects(base, incoming) {
 }
 
 async function cloudSettings(redis, booth) {
+  const postgresStatus = postgresSettingsStatus();
   let stored = null;
-  if (postgresSettingsStatus().primary) {
+  if (postgresStatus.primary) {
     const snapshot = await readPostgresSettings(booth.boothCode);
     if (snapshot) {
       stored = snapshot.config;
@@ -375,7 +398,9 @@ async function cloudSettings(redis, booth) {
       }
     }
   }
-  if (!stored) stored = await redis.get(cloudSettingsKey(booth.boothCode));
+  if (!stored) stored = postgresStatus.primary
+    ? await redisBestEffort(() => redis.get(cloudSettingsKey(booth.boothCode)))
+    : await redis.get(cloudSettingsKey(booth.boothCode));
   const settings = mergeObjects(DEFAULT_CLOUD_SETTINGS, stored);
   settings.booth.name = stored?.booth?.name || booth.name || settings.booth.name;
   settings.booth.location = stored?.booth?.location ?? booth.location ?? settings.booth.location;
@@ -1472,13 +1497,30 @@ async function cacheAssetRecord(redis, record) {
 }
 
 async function assetRecords(redis, boothCode) {
+  const postgresStatus = postgresAssetStatus();
+  if (postgresStatus.primary) {
+    const durable = await readPostgresAssets(boothCode);
+    if (durable) {
+      await Promise.all(durable.map(record => redisBestEffort(() => cacheAssetRecord(redis, record))));
+      return durable;
+    }
+    return await redisBestEffort(async () => {
+      const cached = [];
+      await Promise.all(ASSET_KINDS.map(async kind => {
+        const ids = await redis.smembers(assetIndexKey(boothCode, kind));
+        const records = (await Promise.all(ids.map(id => redis.get(assetKey(boothCode, id))))).filter(Boolean);
+        cached.push(...records);
+      }));
+      return cached;
+    }, []);
+  }
   const cached = [];
   await Promise.all(ASSET_KINDS.map(async kind => {
     const ids = await redis.smembers(assetIndexKey(boothCode, kind));
     const records = (await Promise.all(ids.map(id => redis.get(assetKey(boothCode, id))))).filter(Boolean);
     cached.push(...records);
   }));
-  if (!postgresAssetStatus().primary) return cached;
+  if (!postgresStatus.primary) return cached;
   const durable = await readPostgresAssets(boothCode);
   if (!durable) return cached;
   await Promise.all(durable.map(record => cacheAssetRecord(redis, record)));
@@ -1667,6 +1709,28 @@ async function redisBestEffort(operation, fallback = null) {
   }
 }
 
+function postgresCanServeActionWithoutRedis(action) {
+  const normalized = String(action || "").toLowerCase();
+  if (["public_status", "backend_health", "resolve_booth"].includes(normalized)) return true;
+  if (normalized === "validate_setup") {
+    const machineStore = postgresMachineStatus();
+    return machineStore.primary || (machineStore.enabled && machineStore.configured);
+  }
+  if (normalized === "setup") return postgresMachineStatus().primary && postgresDirectoryStatus().primary && postgresUsersStatus().primary;
+  if (["login", "me", "logout", "profile", "users", "revoke_sessions"].includes(normalized)) return postgresUsersStatus().primary && postgresDirectoryStatus().primary;
+  if (["cloud_data", "qris_create"].includes(normalized)) return postgresDirectoryStatus().primary;
+  return false;
+}
+
+async function consumeRateLimitBestEffort(redis, request, action, rule, identity = "") {
+  try {
+    return await consumeRateLimit(redis, request, action, rule, identity);
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error) || !postgresCanServeActionWithoutRedis(action)) throw error;
+    return { allowed: true, remaining: null, retryAfter: 0, limit: rule?.limit || null, degraded: true };
+  }
+}
+
 async function readAdminUserByEmail(redis, email) {
   const normalized = normalizeEmail(email);
   const postgresStatus = postgresUsersStatus();
@@ -1781,12 +1845,12 @@ export function safeBackupTelemetry(value) {
 }
 
 export async function validateSetupCode(redis, payload) {
-  const code = String(payload.pairingCode || "").trim().toUpperCase();
-  if (!code) return json({ error: "Masukkan kode setup dari Photoslive Agent" }, 400);
+  const code = String(payload.setupToken || payload.pairingCode || "").trim().toUpperCase();
+  if (!code) return json({ error: "Tautan setup tidak lengkap. Buka kembali Photoslive dari Agent." }, 400);
   const { machineId, machine } = await readSetupMachine(redis, code);
-  if (!machineId) return json({ error: "Kode setup tidak ditemukan atau sudah kedaluwarsa. Buat kode baru dari Agent." }, 404);
+  if (!machineId) return json({ error: "Tautan setup sudah kedaluwarsa. Buka Local Manager untuk membuat tautan baru." }, 404);
   if (!machine) return json({ error: "Mesin tidak ditemukan" }, 404);
-  if (machine.pairingCode !== code) return json({ error: "Kode setup bukan kode terbaru untuk mesin ini" }, 409);
+  if (machine.pairingCode !== code) return json({ error: "Tautan setup sudah diganti. Buka tautan terbaru dari Agent." }, 409);
   if (machine.paired) return json({ error: "Mesin sudah memiliki pemilik. Gunakan halaman masuk." }, 409);
   const lastSeen = machine.lastSeenAt ? Date.parse(machine.lastSeenAt) : 0;
   return json({
@@ -1804,26 +1868,26 @@ export async function validateSetupCode(redis, payload) {
 }
 
 export async function setupBooth(redis, payload) {
-  const code = String(payload.pairingCode || "").trim().toUpperCase();
+  const code = String(payload.setupToken || payload.pairingCode || "").trim().toUpperCase();
   const email = normalizeEmail(payload.email);
-  if (!code || !email) return json({ error: "Kode setup dan email wajib diisi" }, 400);
+  if (!code || !email) return json({ error: "Tautan setup dan email wajib tersedia" }, 400);
   if (!/^\d{6}$/.test(String(payload.pin || "")) || payload.pin !== payload.confirmPin) return json({ error: "PIN harus 6 angka dan konfirmasinya harus sama" }, 400);
   const setupMachine = await readSetupMachine(redis, code);
   const machineId = setupMachine.machineId;
-  if (!machineId) return json({ error: "Kode setup tidak ditemukan atau sudah kedaluwarsa. Jalankan Agent dengan --setup-code." }, 404);
+  if (!machineId) return json({ error: "Tautan setup sudah kedaluwarsa. Buka Local Manager untuk membuat tautan baru." }, 404);
   const machine = setupMachine.machine;
   if (!machine) return json({ error: "Mesin tidak ditemukan" }, 404);
-  if (machine.pairingCode !== code) return json({ error: "Kode setup bukan kode terbaru untuk mesin ini" }, 409);
+  if (machine.pairingCode !== code) return json({ error: "Tautan setup sudah diganti. Buka tautan terbaru dari Agent." }, 409);
   if (machine.paired) return json({ error: "Mesin sudah memiliki pemilik. Masuk dengan akun yang ada atau minta pemilik menambahkan pengguna." }, 409);
   const claimId = randomId("setup_claim");
   const claimKey = `photoslive:pairing-claim:${code}`;
   const claimed = await redisBestEffort(() => redis.set(claimKey, claimId, { nx: true, ex: 120 }), "OK");
-  if (!claimed) return json({ error: "Kode setup sedang diproses. Tunggu sebentar lalu periksa status mesin." }, 409);
+  if (!claimed) return json({ error: "Tautan setup sedang diproses. Tunggu sebentar lalu coba lagi." }, 409);
   try {
     const activeMachineId = setupMachine.source === "postgres"
       ? (await readPostgresPairing(code))?.id
       : await redisBestEffort(() => redis.get(`photoslive:pairing:${code}`));
-    if (activeMachineId !== machineId) return json({ error: "Kode setup sudah digunakan atau diganti" }, 409);
+    if (activeMachineId !== machineId) return json({ error: "Tautan setup sudah digunakan atau diganti" }, 409);
   const boothCode = normalizeCode(machine.boothCode || code);
   const existingEmail = await readAdminUserByEmail(redis, email);
   if (existingEmail) return json({ error: "Email sudah digunakan" }, 409);
@@ -2533,7 +2597,7 @@ async function registerPhotoSession(redis, request, payload) {
   if (!booth || booth.machineId !== payload.machineId || !booth.enabled) return json({ error: "Photobox tidak valid" }, 403);
   const shareCode = normalizePublicSessionCode(payload.shareCode);
   if (!shareCode) return json({ error: "Kode sesi tidak valid" }, 400);
-  const previous = await redis.get(publicSessionKey(booth.boothCode, shareCode));
+  const previous = await recoverPublicSession(redis, booth.boothCode, shareCode);
   const allowedStatuses = new Set(["active", "completed", "cancelled", "sync_pending"]);
   const requestedStatus = String(payload.status || previous?.status || "active");
   const status = allowedStatuses.has(requestedStatus) ? requestedStatus : "active";
@@ -2545,8 +2609,10 @@ async function registerPhotoSession(redis, request, payload) {
     const persisted = await persistPostgresSession(record);
     if (!persisted.ok) return json({ error: "Metadata sesi belum dapat disimpan ke cloud. Foto lokal tetap aman dan sinkronisasi dapat dicoba lagi.", retryable: true }, 503);
   }
-  await redis.set(publicSessionKey(booth.boothCode, shareCode), record, { ex: ttl });
-  await trackPublicSessionRetention(redis, record);
+  await bestEffortRedis(async () => {
+    await redis.set(publicSessionKey(booth.boothCode, shareCode), record, { ex: ttl });
+    await trackPublicSessionRetention(redis, record);
+  });
   if (postgresStatus.mode === "dual") await persistPostgresSession(record);
   return json({ session: publicSessionProjection(record), url: `/${booth.boothCode}/sesi/${shareCode}` }, 201);
 }
@@ -2560,7 +2626,7 @@ async function uploadPhotoSessionFile(redis, request, payload) {
   const slotIndex = fileKind === "capture" ? Math.max(1, Math.min(8, Number(payload.slotIndex || 1))) : 0;
   const fileId = String(payload.fileId || `${fileKind}-${slotIndex}`).replace(/[^a-zA-Z0-9:_-]/g, "").slice(0, 160);
   if (!fileId) return json({ error: "ID file sesi tidak valid" }, 400);
-  const record = await redis.get(publicSessionKey(boothCode, shareCode));
+  const record = await recoverPublicSession(redis, boothCode, shareCode);
   if (!record || Date.parse(record.expiresAt) <= Date.now()) return json({ error: "Sesi tidak ditemukan atau sudah kedaluwarsa" }, 404);
   if (!payload.machineId || payload.machineId !== record.machineId) return json({ error: "Mesin pengunggah tidak sesuai dengan sesi" }, 403);
   const contentType = String(payload.contentType || "image/jpeg").toLowerCase();
@@ -2583,7 +2649,6 @@ async function uploadPhotoSessionFile(redis, request, payload) {
   const ttl = publicSessionRemainingTtl(record);
   if (!ttl) return json({ error: "Sesi tidak ditemukan atau sudah kedaluwarsa" }, 404);
   const storedRecord = stored ? { ...file, storageMode: "object-storage", storageProvider: stored.provider, objectKey, etag: stored.etag } : { ...file, storageMode: "legacy-redis", bodyBase64 };
-  await redis.set(publicSessionFileKey(boothCode, shareCode, fileId), storedRecord, { ex: ttl });
   record.files = [...(record.files || []).filter(item => item.id !== fileId && !(fileKind === "capture" && (item.kind || "capture") === "capture" && Number(item.slotIndex) === slotIndex)), file]
     .sort((a, b) => Number(a.slotIndex || 0) - Number(b.slotIndex || 0));
   record.fileManifests = (record.fileManifests || []).filter(item => item.id !== fileId);
@@ -2596,10 +2661,22 @@ async function uploadPhotoSessionFile(redis, request, payload) {
     : "completed";
   if (record.status === "completed") record.completedAt ||= now();
   record.updatedAt = now();
-  await redis.set(publicSessionKey(boothCode, shareCode), record, { ex: ttl });
-  await trackPublicSessionFileRetention(redis, record, storedRecord);
   const postgresStatus = postgresSessionStatus();
-  if (postgresStatus.enabled) {
+  if (postgresStatus.primary && stored?.objectKey) {
+    const persisted = await persistPostgresSession(record);
+    if (!persisted.ok) return json({ error: "Foto tersimpan, tetapi metadata cloud belum tersinkron. Coba sinkronisasi lagi.", retryable: true, stored: true, file }, 503);
+  }
+  const cacheWrite = async () => {
+    await redis.set(publicSessionFileKey(boothCode, shareCode, fileId), storedRecord, { ex: ttl });
+    await redis.set(publicSessionKey(boothCode, shareCode), record, { ex: ttl });
+    await trackPublicSessionFileRetention(redis, record, storedRecord);
+  };
+  if (!stored?.objectKey) {
+    await cacheWrite();
+  } else {
+    await bestEffortRedis(cacheWrite);
+  }
+  if (postgresStatus.mode === "dual" || (postgresStatus.primary && !stored?.objectKey)) {
     const persisted = await persistPostgresSession(record);
     if (postgresStatus.primary && !persisted.ok) return json({ error: "Foto tersimpan, tetapi metadata cloud belum tersinkron. Coba sinkronisasi lagi.", retryable: true, stored: true, file }, 503);
   }
@@ -2667,8 +2744,10 @@ export async function publicPhotoSessionFile(redis, payload) {
   const legacySlot = Math.max(1, Math.min(8, Number(payload.slot || 1)));
   const allowedFileIds = new Set((session.files || []).map(file => String(file.id || "")));
   if (requestedFile && !allowedFileIds.has(requestedFile)) return json({ error: "Foto belum tersedia" }, 404);
-  let record = await redis.get(publicSessionFileKey(boothCode, shareCode, requestedFile || legacySlot));
-  if (!record && requestedFile) record = await redis.get(publicSessionFileKey(boothCode, shareCode, legacySlot));
+  let record = await bestEffortRedis(() => redis.get(publicSessionFileKey(boothCode, shareCode, requestedFile || legacySlot)), null);
+  if (!record && requestedFile) {
+    record = await bestEffortRedis(() => redis.get(publicSessionFileKey(boothCode, shareCode, legacySlot)), null);
+  }
   if (!record && requestedFile) {
     const publicFile = (session.files || []).find(file => String(file.id || "") === requestedFile);
     const manifest = (session.fileManifests || []).find(item => String(item.id || "") === requestedFile);
@@ -2676,7 +2755,12 @@ export async function publicPhotoSessionFile(redis, payload) {
   }
   if (record?.objectKey) {
     const booth = await resolveBooth(redis, boothCode);
-    const runtime = await storageRuntime(redis, booth || { boothCode }, record.storageProvider);
+    let runtime = null;
+    try {
+      runtime = await storageRuntime(redis, booth || { boothCode }, record.storageProvider);
+    } catch (error) {
+      if (!isUpstashMaxRequestsError(error)) throw error;
+    }
     const download = await presignObjectRequest({ method: "GET", objectKey: record.objectKey, expiresIn: 300, environment: runtime?.environment || process.env });
     if (!download) return json({ error: "Object storage tidak tersedia" }, 503);
     return new Response(null, { status: 302, headers: { location: download.url, "cache-control": "private, no-store" } });
@@ -2704,7 +2788,13 @@ export async function withCloudIdempotency(redis, request, payload, operation) {
   const fingerprint = await sha256(JSON.stringify({ method: request.method, boothCode, path: payload.path || "", data: payload.data || null }));
   const cacheKey = `photoslive:idempotency:${boothCode}:${idempotencyKey}`;
   const lockKey = `${cacheKey}:lock`;
-  const cached = await redis.get(cacheKey);
+  let cached = null;
+  try {
+    cached = await redis.get(cacheKey);
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error) || !postgresCanServeActionWithoutRedis("cloud_data")) throw error;
+    return operation();
+  }
   if (cached) {
     if (cached.fingerprint !== fingerprint) return json({ error: "Idempotency-Key sudah dipakai untuk request berbeda" }, 409);
     return new Response(cached.body, {
@@ -2716,22 +2806,28 @@ export async function withCloudIdempotency(redis, request, payload, operation) {
       },
     });
   }
-  const locked = await redis.set(lockKey, fingerprint, { nx: true, ex: 20 });
+  let locked = null;
+  try {
+    locked = await redis.set(lockKey, fingerprint, { nx: true, ex: 20 });
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error) || !postgresCanServeActionWithoutRedis("cloud_data")) throw error;
+    return operation();
+  }
   if (!locked) return json({ error: "Request yang sama masih diproses" }, 409, { "retry-after": "1" });
   try {
     const response = await operation();
     if (response.ok) {
-      await redis.set(cacheKey, {
+      await redisBestEffort(async () => redis.set(cacheKey, {
         fingerprint,
         status: response.status,
         contentType: response.headers.get("content-type") || "application/json; charset=utf-8",
         body: await response.clone().text(),
         createdAt: now(),
-      }, { ex: 86_400 });
+      }, { ex: 86_400 }));
     }
     return response;
   } finally {
-    await redis.del(lockKey);
+    await redisBestEffort(() => redis.del(lockKey));
   }
 }
 
@@ -2862,8 +2958,10 @@ async function cloudData(redis, request, payload, correlationId = "") {
   if (request.method === "POST" && path === "/api/booth/client") {
     const id = String(payload.clientId || randomId("client")).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
     const record = { id, boothCode: booth.boothCode, ...payload.data, updatedAt: now() };
-    await redis.set(`photoslive:booth:${booth.boothCode}:client:${id}`, record, { ex: 180 });
-    await redis.sadd(`photoslive:booth:${booth.boothCode}:clients`, id);
+    await redisBestEffort(async () => {
+      await redis.set(`photoslive:booth:${booth.boothCode}:client:${id}`, record, { ex: 180 });
+      await redis.sadd(`photoslive:booth:${booth.boothCode}:clients`, id);
+    });
     return json({ client: record }, 201);
   }
 
@@ -2872,7 +2970,7 @@ async function cloudData(redis, request, payload, correlationId = "") {
     const purpose = String(payload.data?.purpose || "session").toLowerCase();
     const enabled = purpose === "print" ? settings.payment.paidPrintEnabled : settings.payment.qrisEnabled;
     if (!enabled) return json({ error: purpose === "print" ? "Print berbayar sedang dinonaktifkan" : "Pembayaran QRIS sedang dinonaktifkan" }, 409);
-    const paymentRate = await consumeRateLimit(redis, request, "qris_create", PLATFORM_RATE_LIMITS.qris_create, `${booth.boothCode}:${payload.clientId || "anonymous"}`);
+    const paymentRate = await consumeRateLimitBestEffort(redis, request, "qris_create", PLATFORM_RATE_LIMITS.qris_create, `${booth.boothCode}:${payload.clientId || "anonymous"}`);
     if (!paymentRate.allowed) return json(
       { error: `Terlalu banyak permintaan QRIS. Coba lagi dalam ${paymentRate.retryAfter} detik.`, retryAfter: paymentRate.retryAfter },
       429,
@@ -3197,12 +3295,17 @@ async function cloudData(redis, request, payload, correlationId = "") {
   }
   if (request.method === "POST" && path === "/api/vouchers/generate") {
     const count = Math.max(1, Math.min(100, Number(payload.data?.count || 100)));
-    let event = payload.data?.eventId ? await redis.get(voucherEventKey(booth.boothCode, String(payload.data.eventId))) : null;
-    if (!event && payload.data?.eventId && postgresVoucherStatus().primary) {
+    const postgresStatus = postgresVoucherStatus();
+    let event = payload.data?.eventId && !postgresStatus.primary
+      ? await redis.get(voucherEventKey(booth.boothCode, String(payload.data.eventId)))
+      : null;
+    if (!event && payload.data?.eventId && postgresStatus.primary) {
       event = (await voucherEvents(redis, booth.boothCode)).find(record => record.id === String(payload.data.eventId)) || null;
     }
     if (payload.data?.eventId && (!event || eventExpired(event))) return json({ error: "Event tidak ditemukan atau sudah berakhir" }, 404);
-    const existing = new Set(await redis.smembers(voucherIndexKey(booth.boothCode)));
+    const existing = new Set(postgresStatus.primary
+      ? (await voucherRecords(redis, booth.boothCode)).map(record => record.code)
+      : await redis.smembers(voucherIndexKey(booth.boothCode)));
     const vouchers = [];
     for (let attempt = 0; vouchers.length < count && attempt < count * 3; attempt += 1) {
       const code = `${pairingVoucherPart()}-${pairingVoucherPart()}`;
@@ -3236,10 +3339,10 @@ async function cloudData(redis, request, payload, correlationId = "") {
   }
   if (request.method === "DELETE" && path.startsWith("/api/vouchers/")) {
     const code = voucherCode(decodeURIComponent(path.slice("/api/vouchers/".length)));
-    let record = code ? await redis.get(voucherKey(booth.boothCode, code)) : null;
-    if (!record && code && postgresVoucherStatus().primary) record = (await voucherRecords(redis, booth.boothCode)).find(item => item.code === code) || null;
-    if (!record || record.redeemedAt) return json({ error: "Voucher tidak ditemukan atau sudah dipakai" }, 404);
     const postgresStatus = postgresVoucherStatus();
+    let record = code && !postgresStatus.primary ? await redis.get(voucherKey(booth.boothCode, code)) : null;
+    if (!record && code && postgresStatus.primary) record = (await voucherRecords(redis, booth.boothCode)).find(item => item.code === code) || null;
+    if (!record || record.redeemedAt) return json({ error: "Voucher tidak ditemukan atau sudah dipakai" }, 404);
     let postgresResult = null;
     if (postgresStatus.primary) {
       postgresResult = await deletePostgresVoucher({ boothCode: booth.boothCode, code });
@@ -3357,7 +3460,7 @@ async function dispatch(request, context) {
     const rateRule = PLATFORM_RATE_LIMITS[action];
     if (rateRule && request.method === "POST") {
       const identity = payload.boothCode || payload.booth || payload.email || "";
-      const rate = await consumeRateLimit(redis, request, action, rateRule, identity);
+      const rate = await consumeRateLimitBestEffort(redis, request, action, rateRule, identity);
       if (!rate.allowed) return json(
         { error: `Terlalu banyak percobaan. Coba lagi dalam ${rate.retryAfter} detik.`, retryAfter: rate.retryAfter },
         429,

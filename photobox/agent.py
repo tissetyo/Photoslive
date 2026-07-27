@@ -26,7 +26,7 @@ from typing import Any
 from redaction import redact_log_value, redact_text
 
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 PROTOCOL_VERSION = 2
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
@@ -36,7 +36,8 @@ STATUS_PATH = CONFIG_DIR / "agent-status.json"
 CONTROL_PATH = CONFIG_DIR / "agent-control.json"
 LOG_PATH = CONFIG_DIR / "agent.log"
 HEARTBEAT_SECONDS = max(60, int(os.environ.get("PHOTOSLIVE_HEARTBEAT_SECONDS", "300")))
-JOB_POLL_SECONDS = max(10, int(os.environ.get("PHOTOSLIVE_JOB_POLL_SECONDS", "60")))
+JOB_POLL_SECONDS = max(300, int(os.environ.get("PHOTOSLIVE_JOB_POLL_SECONDS", "900")))
+OUTBOX_CHECK_SECONDS = max(2, int(os.environ.get("PHOTOSLIVE_OUTBOX_CHECK_SECONDS", "5")))
 STATUS_WRITE_SECONDS = 15
 LOG_MAX_BYTES = 512_000
 MAX_CLOUD_RETRY_SECONDS = max(300, int(os.environ.get("PHOTOSLIVE_MAX_CLOUD_RETRY_SECONDS", "1800")))
@@ -114,8 +115,8 @@ def cloud_url(config: dict[str, Any], action: str) -> str:
     return f"{config['cloud'].rstrip('/')}/api/bridge?action={urllib.parse.quote(action)}"
 
 
-def setup_url(config: dict[str, Any], pairing_code: str) -> str:
-    query = urllib.parse.urlencode({"code": pairing_code})
+def setup_url(config: dict[str, Any], setup_token: str) -> str:
+    query = urllib.parse.urlencode({"setup": setup_token})
     return f"{str(config['cloud']).rstrip('/')}/setup?{query}"
 
 
@@ -198,7 +199,7 @@ def request_setup_code(config: dict[str, Any], attempts: int = 4) -> dict[str, A
             print(f"Cloud belum stabil ({error}). Coba lagi {attempt + 1}/{attempts} dalam {wait_seconds} detik…", flush=True)
             log_event("warning", "Setup code ditunda karena cloud belum stabil", attempt=attempt, attempts=attempts, error=str(error), code=error.code)
             time.sleep(wait_seconds)
-    raise last_error or CloudRequestError("Kode setup belum dapat dibuat")
+    raise last_error or CloudRequestError("Tautan setup belum dapat dibuat")
 
 
 def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
@@ -215,9 +216,16 @@ def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
             "agentToken": token,
         },
     )
-    config.update({"machineId": response["machineId"], "agentToken": token, "commandKey": response.get("commandKey"), "pairingCode": response["pairingCode"]})
+    setup_token = response.get("setupToken") or response["pairingCode"]
+    config.update({
+        "machineId": response["machineId"],
+        "agentToken": token,
+        "commandKey": response.get("commandKey"),
+        "setupToken": setup_token,
+        "boothCode": response.get("boothCode"),
+    })
     save_config(config)
-    print(f"\nKode pairing Photoslive: {response['pairingCode']}\nBuka {config['cloud']}?view=agent lalu masukkan kode tersebut.\n", flush=True)
+    print("\nMesin berhasil didaftarkan. Setup akan dibuka otomatis oleh installer.\n", flush=True)
     return config
 
 
@@ -482,10 +490,13 @@ def heartbeat_once(config: dict[str, Any]) -> dict[str, Any]:
     if heartbeat.get("boothCode") and config.get("boothCode") != heartbeat["boothCode"]:
         config["boothCode"] = heartbeat["boothCode"]
         save_config(config)
-    if heartbeat.get("paired") and config.pop("pairingCode", None):
-        save_config(config)
-        print("Mesin berhasil dipasangkan dengan Photoslive Cloud.", flush=True)
-        log_event("info", "Mesin berhasil dipasangkan", boothCode=config.get("boothCode"))
+    if heartbeat.get("paired"):
+        setup_secret_removed = bool(config.pop("pairingCode", None))
+        setup_secret_removed = bool(config.pop("setupToken", None)) or setup_secret_removed
+        if setup_secret_removed:
+            save_config(config)
+            print("Mesin berhasil dipasangkan dengan Photoslive Cloud.", flush=True)
+            log_event("info", "Mesin berhasil dipasangkan", boothCode=config.get("boothCode"))
     return heartbeat
 
 
@@ -510,14 +521,14 @@ def refresh_offline_policy(config: dict[str, Any], heartbeat: dict[str, Any]) ->
         log_event("warning", "Lease offline belum diterapkan ke Controller", error=str(error))
 
 
-def sync_vouchers(config: dict[str, Any], heartbeat: dict[str, Any]) -> None:
+def sync_vouchers(config: dict[str, Any], heartbeat: dict[str, Any], force: bool = False) -> None:
     """Keep an offline SQLite voucher cache and replay local redemptions."""
     if not heartbeat.get("paired"):
         return
     try:
         cloud_version = max(0, int(heartbeat.get("voucherVersion") or 0))
         local_version = max(0, int(config.get("voucherVersion") or 0))
-        if cloud_version != local_version:
+        if force or cloud_version != local_version:
             snapshot = request_json(
                 cloud_url(config, "voucher_snapshot"),
                 "POST",
@@ -547,14 +558,14 @@ def sync_vouchers(config: dict[str, Any], heartbeat: dict[str, Any]) -> None:
         log_event("warning", "Sinkronisasi voucher ditunda", error=str(error))
 
 
-def sync_settings(config: dict[str, Any], heartbeat: dict[str, Any]) -> None:
+def sync_settings(config: dict[str, Any], heartbeat: dict[str, Any], force: bool = False) -> None:
     """Pull cloud settings by version without creating one hardware job per save."""
     if not heartbeat.get("paired"):
         return
     try:
         cloud_version = max(0, int(heartbeat.get("settingsVersion") or 0))
         local_version = max(0, int(config.get("settingsVersion") or 0))
-        if cloud_version == local_version:
+        if not force and cloud_version == local_version:
             return
         snapshot = request_json(
             cloud_url(config, "settings_snapshot"),
@@ -735,12 +746,67 @@ def sync_local_outbox_once(config: dict[str, Any]) -> bool:
     return True
 
 
+def reconciliation_due(sync: dict[str, Any], current_time: float | None = None) -> bool:
+    schedule = sync.get("schedule") if isinstance(sync.get("schedule"), dict) else {}
+    hour = max(0, min(23, int(schedule.get("fullReconcileHour") or 0)))
+    minute = max(0, min(59, int(schedule.get("fullReconcileMinute") or 0)))
+    now_local = datetime.fromtimestamp(current_time or time.time()).astimezone()
+    scheduled = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now_local < scheduled:
+        return False
+    last_value = str(sync.get("lastFullReconcileAt") or "")
+    try:
+        last_local = datetime.fromisoformat(last_value.replace("Z", "+00:00")).astimezone()
+    except (TypeError, ValueError):
+        return True
+    return last_local.date() < now_local.date()
+
+
+def reconcile_local_sessions_once(config: dict[str, Any], sync: dict[str, Any]) -> bool:
+    """Reconcile bounded local metadata once daily without uploading photo bodies."""
+    schedule = sync.get("schedule") if isinstance(sync.get("schedule"), dict) else {}
+    limit = max(50, min(500, int(schedule.get("reconcileBatchSize") or 250)))
+    try:
+        snapshot = controller_request(
+            config,
+            f"/api/local/sync/reconciliation?limit={limit}",
+            protected=True,
+        )
+        sessions = snapshot.get("sessions") if isinstance(snapshot.get("sessions"), list) else []
+        result = request_json(
+            cloud_url(config, "reconcile_sessions"),
+            "POST",
+            {"machineId": config["machineId"], "sessions": sessions},
+            config["agentToken"],
+            timeout=30,
+        )
+        controller_request(
+            config,
+            "/api/local/sync/reconciliation/complete",
+            "POST",
+            {
+                "sessionCount": len(sessions),
+                "cloudUpdated": int(result.get("updated") or 0),
+                "correlationId": result.get("correlationId"),
+            },
+            protected=True,
+        )
+        force_heartbeat = {"paired": True, "settingsVersion": config.get("settingsVersion", 0), "voucherVersion": config.get("voucherVersion", 0)}
+        sync_settings(config, force_heartbeat, force=True)
+        sync_vouchers(config, force_heartbeat, force=True)
+        log_event("info", "Rekonsiliasi harian selesai", sessions=len(sessions), updated=int(result.get("updated") or 0))
+        return True
+    except Exception as error:
+        log_event("warning", "Rekonsiliasi harian ditunda", error=str(error))
+        return False
+
+
 def poll_job_once(config: dict[str, Any]) -> bool:
     response = request_json(cloud_url(config, "claim_job"), "POST", {"machineId": config["machineId"]}, config["agentToken"])
     next_poll_seconds = response.get("nextPollSeconds")
     if next_poll_seconds:
         try:
-            config["jobPollSeconds"] = max(JOB_POLL_SECONDS, min(900, int(next_poll_seconds)))
+            config["jobPollSeconds"] = max(JOB_POLL_SECONDS, min(3600, int(next_poll_seconds)))
         except (TypeError, ValueError):
             config["jobPollSeconds"] = JOB_POLL_SECONDS
     if response.get("job"):
@@ -757,7 +823,7 @@ def main() -> int:
     parser.add_argument("--controller", default=os.environ.get("PHOTOSLIVE_CONTROLLER_URL", DEFAULT_CONTROLLER))
     parser.add_argument("--once", action="store_true", help="Jalankan satu heartbeat lalu berhenti")
     parser.add_argument("--status", action="store_true", help="Tampilkan konfigurasi/status lokal")
-    parser.add_argument("--setup-code", action="store_true", help="Buat kode setup baru untuk mesin yang sudah pernah dipasangkan")
+    parser.add_argument("--setup-link", "--setup-code", dest="setup_code", action="store_true", help="Buat tautan setup aman dan buka onboarding")
     parser.add_argument("--open-setup", action="store_true", help="Buka halaman setup setelah kode berhasil dibuat")
     parser.add_argument("--pause", action="store_true", help="Jeda job cloud tanpa menghentikan heartbeat")
     parser.add_argument("--resume", action="store_true", help="Lanjutkan job cloud")
@@ -769,9 +835,16 @@ def main() -> int:
         print("Koneksi job Agent dijeda" if arguments.pause else "Koneksi job Agent dilanjutkan", flush=True)
         return 0
     if arguments.setup_code:
+        is_new_registration = not (config.get("machineId") and config.get("agentToken"))
         config = ensure_pairing(config)
-        response = request_setup_code(config)
-        config.update({"pairingCode": response["pairingCode"], "boothCode": response.get("boothCode")})
+        response = (
+            {"setupToken": config["setupToken"], "boothCode": config.get("boothCode")}
+            if is_new_registration and config.get("setupToken")
+            else request_setup_code(config)
+        )
+        setup_token = response.get("setupToken") or response["pairingCode"]
+        config.update({"setupToken": setup_token, "boothCode": response.get("boothCode")})
+        config.pop("pairingCode", None)
         save_config(config)
         previous_status = {}
         if STATUS_PATH.exists():
@@ -784,20 +857,19 @@ def main() -> int:
             "online": bool(previous_status.get("online", False)),
             "version": VERSION,
             "machineId": config.get("machineId"),
-            "pairingCode": response["pairingCode"],
             "boothCode": response.get("boothCode") or config.get("boothCode"),
-            "setupCodeCreatedAt": time.time(),
+            "setupLinkCreatedAt": time.time(),
             "updatedAt": time.time(),
             "error": None,
         })
-        url = setup_url(config, response["pairingCode"])
-        print(f"Kode setup baru: {response['pairingCode']}\nBerlaku 15 menit. Buka {url}", flush=True)
+        url = setup_url(config, setup_token)
+        print(f"Tautan setup aman siap dan berlaku 15 menit.\nBuka {url}", flush=True)
         if arguments.open_setup and not open_setup_page(url):
             print("Browser tidak dapat dibuka otomatis. Salin URL di atas.", flush=True)
         return 0
     if arguments.status:
         safe_config = {**config}
-        for secret in ("agentToken", "installationToken", "commandKey"):
+        for secret in ("agentToken", "installationToken", "commandKey", "setupToken", "pairingCode"):
             if safe_config.get(secret):
                 safe_config[secret] = "***"
         print(json.dumps({"config": safe_config, "status": json.loads(STATUS_PATH.read_text()) if STATUS_PATH.exists() else {}}, indent=2))
@@ -805,11 +877,27 @@ def main() -> int:
     retry = 2
     last_heartbeat = 0.0
     last_job_poll = 0.0
+    last_outbox_check = 0.0
     last_status_write = 0.0
     heartbeat_at: float | None = None
     job_poll_at: float | None = None
+    outbox_check_at: float | None = None
+    full_reconcile_at: float | None = None
+    local_sync: dict[str, Any] = {
+        "schedule": {
+            "incrementalCheckSeconds": OUTBOX_CHECK_SECONDS,
+            "remoteJobPollSeconds": JOB_POLL_SECONDS,
+            "fullReconcileHour": 3,
+            "fullReconcileMinute": 15,
+            "reconcileBatchSize": 250,
+        },
+    }
     job_poll_seconds = max(JOB_POLL_SECONDS, int(config.get("jobPollSeconds") or JOB_POLL_SECONDS))
-    log_event("info", "Agent dimulai", version=VERSION, heartbeatSeconds=HEARTBEAT_SECONDS)
+    log_event(
+        "info", "Agent dimulai", version=VERSION,
+        heartbeatSeconds=HEARTBEAT_SECONDS, remoteJobPollSeconds=job_poll_seconds,
+        outboxCheckSeconds=OUTBOX_CHECK_SECONDS,
+    )
     while True:
         try:
             config = ensure_pairing(config)
@@ -828,10 +916,30 @@ def main() -> int:
                 sync_vouchers(config, heartbeat)
                 last_heartbeat = current
                 heartbeat_at = time.time()
-            job_poll_seconds = max(JOB_POLL_SECONDS, int(config.get("jobPollSeconds") or job_poll_seconds))
+            incremental_seconds = max(
+                2, min(60, int((local_sync.get("schedule") or {}).get("incrementalCheckSeconds") or OUTBOX_CHECK_SECONDS))
+            )
+            if not paused and (not last_outbox_check or current - last_outbox_check >= incremental_seconds):
+                try:
+                    local_sync = controller_request(config, "/api/local/sync/status", protected=True)
+                    worked_count = 0
+                    while worked_count < 3 and sync_local_outbox_once(config):
+                        worked = True
+                        worked_count += 1
+                    if reconciliation_due(local_sync):
+                        if reconcile_local_sessions_once(config, local_sync):
+                            full_reconcile_at = time.time()
+                            local_sync = controller_request(config, "/api/local/sync/status", protected=True)
+                    outbox_check_at = time.time()
+                except Exception as local_error:
+                    # Controller availability is independent from cloud health.
+                    # Record it, but do not increase the cloud backoff.
+                    log_event("warning", "Controller lokal belum dapat diperiksa", error=str(local_error))
+                last_outbox_check = current
+            configured_remote_poll = int((local_sync.get("schedule") or {}).get("remoteJobPollSeconds") or job_poll_seconds)
+            job_poll_seconds = max(JOB_POLL_SECONDS, min(3600, configured_remote_poll))
             if not paused and (not last_job_poll or current - last_job_poll >= job_poll_seconds):
-                worked = poll_job_once(config)
-                worked = sync_local_outbox_once(config) or worked
+                worked = poll_job_once(config) or worked
                 last_job_poll = current
                 job_poll_at = time.time()
             if not last_status_write or current - last_status_write >= STATUS_WRITE_SECONDS or worked:
@@ -840,10 +948,12 @@ def main() -> int:
                     "paused": paused,
                     "version": VERSION,
                     "machineId": config["machineId"],
-                    "pairingCode": config.get("pairingCode"),
                     "updatedAt": time.time(),
                     "lastHeartbeatAt": heartbeat_at,
                     "lastJobPollAt": job_poll_at,
+                    "lastOutboxCheckAt": outbox_check_at,
+                    "lastFullReconcileAt": full_reconcile_at or local_sync.get("lastFullReconcileAt"),
+                    "sync": local_sync,
                     "error": None,
                 }
                 save_status(status)
@@ -855,7 +965,7 @@ def main() -> int:
         except KeyboardInterrupt:
             return 0
         except Exception as error:
-            save_status({"online": False, "version": VERSION, "machineId": config.get("machineId"), "pairingCode": config.get("pairingCode"), "updatedAt": time.time(), "lastHeartbeatAt": heartbeat_at, "lastJobPollAt": job_poll_at, "error": str(error)})
+            save_status({"online": False, "version": VERSION, "machineId": config.get("machineId"), "updatedAt": time.time(), "lastHeartbeatAt": heartbeat_at, "lastJobPollAt": job_poll_at, "error": str(error)})
             cloud_retry = getattr(error, "retry_after", None)
             retry_seconds = min(MAX_CLOUD_RETRY_SECONDS, max(retry, int(cloud_retry or 0))) if cloud_retry else retry
             log_event("error", str(error), retrySeconds=retry_seconds, statusCode=getattr(error, "status_code", None), code=getattr(error, "code", None))

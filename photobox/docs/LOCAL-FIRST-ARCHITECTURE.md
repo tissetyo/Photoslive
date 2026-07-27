@@ -10,7 +10,7 @@ Photoslive memiliki dua jalur yang sengaja dipisahkan:
 - **Local Controller** di `127.0.0.1:8080` menjalankan booth, kamera, compositor,
   penyimpanan foto, dan print. SQLite serta filesystem lokal tetap bekerja saat
   internet mati.
-- **Agent** hanya mengirim heartbeat setiap 60 detik, menarik snapshot config
+- **Agent** hanya mengirim heartbeat setiap 5 menit, menarik snapshot config
   dan voucher berdasarkan nomor versi, menjalankan command hardware yang
   ditandatangani, serta menyinkronkan hasil offline.
 
@@ -26,28 +26,27 @@ berjalan paralel. Jika pelanggan sudah masuk pemilihan frame/capture, snapshot
 baru ditahan dan baru diterapkan setelah sesi kembali ke welcome agar jumlah
 slot, harga, atau frame tidak berubah di tengah sesi.
 
-## Transisi Redis ke PostgreSQL
+## PostgreSQL utama dan Redis opsional
 
-Redis masih menjadi source of truth cloud selama migrasi bertahap. Migration
-Supabase menyediakan schema final dan tabel `migration_shadow_events` sebagai
-jurnal server-only. Audit mutation dapat di-shadow-write secara idempotent ke
-jurnal tersebut tanpa memberikan akses kepada role `anon` atau
-`authenticated`.
+Supabase PostgreSQL adalah penyimpanan cloud tahan lama untuk registry mesin,
+directory booth, akun admin, pengaturan, voucher/event, dan metadata sesi.
+Mode `primary` diaktifkan per kapabilitas melalui environment variable
+`PHOTOSLIVE_POSTGRES_*`. Service-role key hanya digunakan oleh function
+server-side dan tidak pernah dikirim ke browser, Agent, atau log.
 
-Shadow-write untuk audit, config, voucher/event, dan metadata aset default-nya
-mati. Generate voucher menulis satu event batch, bukan satu request per kode.
-Aktivasi hanya dilakukan pada server dengan:
+Redis bukan lagi sumber kebenaran untuk kapabilitas yang sudah berada pada mode
+PostgreSQL `primary`. Redis hanya dipakai best-effort untuk cache singkat,
+presence, dan antrean perintah hardware jarak jauh. Jika kuota Redis habis:
 
-- `PHOTOSLIVE_POSTGRES_SHADOW=true`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `PHOTOSLIVE_POSTGRES_TIMEOUT_MS` opsional, default 400 ms dan maksimum 2 detik
+- setup, login, pengaturan, voucher, heartbeat, dan metadata sesi tetap memakai
+  PostgreSQL;
+- booth lokal, capture, print, serta antrean SQLite tetap berjalan;
+- status presence dan perintah hardware jarak jauh dapat berstatus terbatas;
+- operator tidak perlu memasang ulang Agent.
 
-Service-role key tidak pernah dikirim ke browser atau log. Ketika Supabase
-timeout/gagal, request Redis-primary tetap berhasil dan kegagalan dicatat
-sebagai structured log. Ini baru fondasi observasi migrasi, bukan dual-read atau
-cutover entity; booth/config/voucher tetap dibaca dari Redis sampai checksum,
-backup, RLS runtime test, dan rollback gate selesai.
+Mode `dual` dan fallback legacy tetap tersedia selama rollout. Data lama tidak
+dihapus otomatis; cutover dan penghentian write lama harus melalui laporan
+migrasi, checksum, backup, dan approval terpisah.
 
 ## Data lokal
 
@@ -86,6 +85,19 @@ Kegagalan memakai exponential backoff. Setelah 10 kegagalan, job masuk
 dead-letter agar mini PC tidak melakukan retry tanpa batas. Job gagal maupun
 dead-letter dapat diretry manual melalui
 `POST /api/local/sync/retry`.
+
+Agent memeriksa outbox SQLite setiap 5 detik. Pemeriksaan ini lokal dan tidak
+membuat request internet ketika antrean kosong. Saat koneksi pulih, maksimal
+tiga job dikirim per putaran agar booth tetap responsif. Perintah hardware
+jarak jauh diperiksa terpisah setiap 15 menit ketika tidak ada pekerjaan.
+
+Setiap hari pukul 03.15 waktu lokal mesin, Agent menjalankan rekonsiliasi penuh
+yang dibatasi maksimal 250 sesi per batch. Rekonsiliasi hanya mengirim metadata
+dan checksum; file foto tetap mengikuti outbox/resumable upload. RPC PostgreSQL
+bersifat idempotent dan seluruh batch diproses dalam satu transaksi. Waktu
+terakhir sync incremental, rekonsiliasi penuh, jumlah sesi, jadwal, dan antrean
+ditampilkan pada halaman admin. Foto tanpa `uploaded_at` tidak pernah menjadi
+kandidat cleanup.
 
 Antrean aktif dibatasi 1.000 job. Controller menolak penyelesaian sesi baru
 dengan pesan yang dapat ditindaklanjuti ketika batas tercapai, sementara 200
@@ -129,7 +141,7 @@ menampilkan kapasitas tersisa agar Local Manager dapat memperingatkan operator.
 - Local Manager menampilkan state dan pesan lease sehingga operator tahu kapan
   internet perlu dipulihkan sebelum batas 72 jam.
 - Local Manager juga menampilkan status Controller/Agent/cloud, booth dan
-  pairing code, perangkat aktual, RAM/CPU/disk, uptime, sync/print queue,
+  status onboarding, perangkat aktual, RAM/CPU/disk, uptime, sync/print queue,
   folder, versi, update state, dan error terakhir. Kontrol mutasi menggunakan
   installation token loopback; log yang diexport berasal dari log berotasi dan
   tidak memuat installation/Agent token.
@@ -139,14 +151,16 @@ menampilkan kapasitas tersisa agar Local Manager dapat memperingatkan operator.
 Source saat ini menyediakan script pemasangan teknisi, systemd user service,
 macOS LaunchAgent, dan Windows scheduled task. Ketiga script menjalankan
 Controller/Agent melalui supervisor OS, membuat installation token ketika
-Controller mulai, lalu membuka `/setup?code=...` secara best-effort. Paket
+Controller mulai, lalu membuka tautan `/setup?setup=...` secara best-effort
+tanpa input kode manual. Paket
 `.deb`, signed `.exe`, serta
 signed/notarized `.pkg`, update atomik dengan rollback, dan watchdog Windows
 belum dapat dinyatakan production-ready tanpa certificate, pipeline release,
 dan acceptance test pada ketiga OS.
 
-Wizard membaca parameter `code` dari URL sebagai sumber utama, mengisinya ke
-form, lalu membersihkan URL setelah state dimuat. Progress non-sensitif disimpan
+Wizard membaca token `setup` dari URL sebagai sumber utama, memvalidasinya satu
+kali tanpa menampilkannya ke operator, lalu membersihkan URL setelah state
+dimuat. Progress non-sensitif disimpan
 agar setup dapat dilanjutkan setelah reload/restart, sedangkan PIN dan isi file
 tidak pernah masuk localStorage. Langkah perangkat/folder dan frame dapat
 dilewati; readiness tetap membedakan item siap dari item yang perlu diatur di

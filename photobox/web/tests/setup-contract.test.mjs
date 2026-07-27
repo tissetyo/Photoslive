@@ -5,25 +5,29 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const read = path => readFile(new URL(path, root), "utf8");
 
-test("operator installer and setup share a prefilled 15 minute setup-code contract", async () => {
+test("operator installer opens an opaque 15 minute setup link without manual code entry", async () => {
   const [setup, platform, bridge, agent] = await Promise.all([
     read("setup.js"),
     read("api/platform.mjs"),
     read("api/bridge.mjs"),
     read("../agent.py"),
   ]);
-  assert.match(setup, /params\.get\("code"\)/);
-  assert.match(setup, /restoreSetupDraft\(setupCodeFromUrl\)/);
+  assert.match(setup, /params\.get\("setup"\)/);
+  assert.match(setup, /validateSetupLink\(setupTokenFromUrl\)/);
+  assert.match(setup, /sessionStorage\.setItem\(SETUP_SESSION_TOKEN_KEY/);
+  assert.match(setup, /sessionStorage\.removeItem\(SETUP_SESSION_TOKEN_KEY\)/);
+  assert.doesNotMatch(setup, /localStorage\.setItem\([^)]*setupToken/);
   assert.match(platform, /photoslive:pairing:\$\{code\}/);
   assert.match(bridge, /\{ ex: 900 \}/);
-  assert.match(agent, /urlencode\(\{"code": pairing_code\}\)/);
+  assert.match(agent, /urlencode\(\{"setup": setup_token\}\)/);
   assert.match(agent, /\/setup\?\{query\}/);
+  assert.match(agent, /is_new_registration[\s\S]*config\["setupToken"\]/);
 });
 
 test("computer setup exposes every required real onboarding control", async () => {
   const [html, setup] = await Promise.all([read("setup.html"), read("setup.js")]);
   const requiredIds = [
-    "pairing-code", "booth-name", "booth-location", "owner-email", "owner-pin",
+    "setup-token", "booth-name", "booth-location", "owner-email", "owner-pin",
     "owner-pin-confirm", "setup-camera-select", "test-setup-camera",
     "setup-printer-select", "test-setup-printer", "pick-setup-storage-folder",
     "starter-frame-file", "ready-checklist", "finish-onboarding",
@@ -42,7 +46,7 @@ test("setup detects the operating system and keeps secrets out of restart draft"
   assert.match(setup, /function detectedOperatingSystem/);
   assert.match(html, /id="primary-agent-download"/);
   assert.match(html, /Download installer ringan/);
-  assert.match(html, /GUI lokal tersedia di/);
+  assert.match(html, /Local Manager tersedia di/);
   assert.match(html, /Pakai sistem operasi lain/);
   assert.match(html, /Metode teknisi melalui Terminal/);
   assert.match(setup, /primary-agent-download/);
@@ -95,4 +99,34 @@ test("setup and booth register an API-safe offline PWA shell", async () => {
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /pathname === "\/setup"/);
   assert.match(serviceWorker, /return "\/booth\.html"/);
+});
+
+test("Local Manager opens a secure setup link without exposing a manual code", async () => {
+  const [localManager, localManagerScript, controller] = await Promise.all([
+    read("local-agent.html"),
+    read("local-agent.js"),
+    read("../server.py"),
+  ]);
+  assert.match(localManager, /<b>Jalankan ulang wizard<\/b>/);
+  assert.doesNotMatch(localManager, /Buat kode setup|Kode pairing/);
+  assert.match(localManagerScript, /location\.assign\(result\.setupUrl\)/);
+  assert.doesNotMatch(localManagerScript, /navigator\.clipboard.*result\.code/);
+  assert.match(controller, /agent\.py"\), "--setup-link"/);
+  assert.match(controller, /"setupUrl": setup_url_value/);
+});
+
+test("setup UI hides internal registration details and avoids a one-option selector", async () => {
+  const [html, css, setup] = await Promise.all([
+    read("setup.html"),
+    read("setup.css"),
+    read("setup.js"),
+  ]);
+  assert.match(html, /id="setup-token" type="hidden"/);
+  assert.doesNotMatch(html, />\s*(Kode setup|Masukkan pairing code)\s*</i);
+  assert.match(html, /class="login-methods single-method"/);
+  assert.match(html, /class="login-method-note"[^>]*>[\s\S]*Email &amp; password/);
+  assert.match(css, /\.login-methods\.single-method \.method-switch \{ display: none; \}/);
+  assert.match(css, /\.setup-icon\s*\{[\s\S]*mask: var\(--setup-icon\)/);
+  assert.match(setup, /methods\.classList\.remove\("single-method"\)/);
+  assert.match(setup, /if \(!capability\.available \|\| !capability\.boothCode\) return/);
 });

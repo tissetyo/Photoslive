@@ -3,8 +3,17 @@ import { providerRegistry } from "./_providers.mjs";
 import { probeObjectStorage } from "./_object_storage.mjs";
 import { probeXendit } from "./_payments.mjs";
 import { probeResend } from "./_email.mjs";
+import { isUpstashMaxRequestsError } from "./_store.mjs";
 
 const elapsed = startedAt => Math.max(0, Math.round((performance.now() - startedAt) * 10) / 10);
+const DEFAULT_HEALTH_CACHE_MS = 2 * 60 * 1000;
+let cachedBackendHealth = null;
+
+function healthCacheMs(environment) {
+  const raw = Number(environment.PHOTOSLIVE_BACKEND_HEALTH_CACHE_MS || "");
+  if (Number.isFinite(raw) && raw >= 10_000) return Math.min(raw, 15 * 60 * 1000);
+  return DEFAULT_HEALTH_CACHE_MS;
+}
 
 async function probeRedis(redis) {
   const startedAt = performance.now();
@@ -17,7 +26,7 @@ async function probeRedis(redis) {
     if (stored !== value) throw new Error("Verifikasi read-after-write gagal");
     return { state: "ready", readWrite: true, latencyMs: elapsed(startedAt), message: "Read/write cache berhasil" };
   } catch (error) {
-    await redis.del(key).catch(() => {});
+    if (!isUpstashMaxRequestsError(error)) await redis.del(key).catch(() => {});
     return { state: "error", readWrite: false, latencyMs: elapsed(startedAt), message: error instanceof Error ? error.message.slice(0, 180) : "Probe cache gagal" };
   }
 }
@@ -53,6 +62,11 @@ async function probePostgres(environment, fetchImplementation) {
 export async function backendHealth(redis, options = {}) {
   const environment = options.environment || process.env;
   const fetchImplementation = options.fetchImplementation || fetch;
+  const cacheable = !options.disableCache && !options.environment && !options.fetchImplementation && !options.providerFetchImplementation;
+  const now = Date.now();
+  if (cacheable && cachedBackendHealth && now - cachedBackendHealth.createdAt <= healthCacheMs(environment)) {
+    return cachedBackendHealth.value;
+  }
   const [cache, database, objectStorage, xendit, resend] = await Promise.all([
     probeRedis(redis),
     probePostgres(environment, fetchImplementation),
@@ -91,5 +105,7 @@ export async function backendHealth(redis, options = {}) {
       missingConfigurationCount: provider.missingConfiguration.length,
     };
   });
-  return { checkedAt: new Date().toISOString(), cache, database, providers };
+  const result = { checkedAt: new Date().toISOString(), cache, database, providers };
+  if (cacheable) cachedBackendHealth = { createdAt: now, value: result };
+  return result;
 }

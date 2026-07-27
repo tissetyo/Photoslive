@@ -4,13 +4,17 @@ const publicState = value => value === "ready" || value === "standby" ? "operati
 
 export function publicStatusProjection(health, checkedAt = new Date().toISOString()) {
   const cacheState = publicState(health?.cache?.state);
+  const databaseState = publicState(health?.database?.state);
+  const configurationState = databaseState === "operational" ? "operational" : cacheState;
+  const realtimeState = cacheState === "outage" && databaseState === "operational" ? "limited" : cacheState;
   const storageProviders = Array.isArray(health?.providers) ? health.providers.filter(provider => provider.kind === "storage") : [];
   const activeStorage = storageProviders.find(provider => provider.state === "ready") || storageProviders.find(provider => provider.state === "error");
   const storageState = activeStorage ? publicState(activeStorage.state) : "limited";
   const components = [
     { id: "cloud-api", label: "Cloud API", state: "operational" },
-    { id: "configuration", label: "Konfigurasi & voucher", state: cacheState },
+    { id: "configuration", label: "Konfigurasi & voucher", state: configurationState },
     { id: "customer-assets", label: "Upload & hasil pelanggan", state: storageState },
+    { id: "realtime-cache", label: "Status real-time & job remote", state: realtimeState },
   ];
   const overall = components.some(component => component.state === "outage")
     ? "outage"

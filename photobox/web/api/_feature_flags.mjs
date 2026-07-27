@@ -86,7 +86,13 @@ export async function resolveFeatureFlags(redis, context = {}) {
     ...(boothCode ? [["booth", boothCode]] : []),
   ];
   const lookups = candidates.flatMap(([scope, targetId]) => FEATURE_FLAG_DEFINITIONS.map(definition => ({ scope, targetId, key: definition.key, redisKey: recordKey(featureFlagRecordId(scope, targetId, definition.key)) })));
-  const records = lookups.length ? (typeof redis.mget === "function" ? await redis.mget(...lookups.map(item => item.redisKey)) : await Promise.all(lookups.map(item => redis.get(item.redisKey)))) : [];
+  let records = [];
+  try {
+    records = lookups.length ? (typeof redis.mget === "function" ? await redis.mget(...lookups.map(item => item.redisKey)) : await Promise.all(lookups.map(item => redis.get(item.redisKey)))) : [];
+  } catch (error) {
+    if (!/ERR max requests limit exceeded/i.test(error instanceof Error ? error.message : String(error || ""))) throw error;
+    return effective;
+  }
   for (const [index, lookup] of lookups.entries()) {
     const record = records[index];
     if (record) effective[lookup.key] = { enabled: Boolean(record.enabled), config: record.config || {}, sourceScope: lookup.scope, sourceTarget: lookup.targetId };

@@ -89,15 +89,16 @@ ditampilkan sebagai object storage production.
 
 | Langkah | Wajib | Selesai jika |
 | --- | --- | --- |
-| Kode setup | ya | kode 15 menit tervalidasi |
+| Tautan setup otomatis | ya | token internal 15 menit tervalidasi |
 | Identitas | nama; lokasi opsional | draft tersimpan dan wizard dapat dilanjutkan |
 | Akses owner | email dan PIN | machine diklaim, owner/session cloud dibuat |
 | Perangkat/folder | dapat dilewati | nama perangkat nyata tampil; tes memberi hasil nyata |
 | Frame | dapat dilewati | pilihan atau editor tersimpan; preview slot nyata |
 | Readiness | ya | route booth/admin jelas dan satu primary action |
 
-Kode dari installer dikirim sebagai `/setup?code=...`, harus mengalahkan draft
-lama, lalu dihapus dari address bar setelah dimuat. Aksi readiness utama adalah
+Token dari installer dikirim melalui tautan `/setup?setup=...`, harus mengalahkan
+draft lama, lalu dihapus dari address bar setelah dimuat. Token tidak pernah
+diminta atau ditampilkan sebagai input operator. Aksi readiness utama adalah
 **Mulai gunakan photobox** dan membuka route booth; admin tetap tersedia sebagai
 route terpisah. PIN/file input tidak boleh masuk draft browser.
 
@@ -110,10 +111,16 @@ terbuka sampai artifact release lintas OS tersedia dan diuji.
 
 Kontrol nyata saat ini: Periksa, Pause, Resume, Restart melalui supervisor,
 periksa/pasang update bertanda tangan, rollback versi dengan konfirmasi,
-Diagnosis, Buat kode setup, Pilih folder, backup/restore database lokal, buka
+Diagnosis, Jalankan ulang wizard, Pilih folder, backup/restore database lokal, buka
 booth/admin, refresh dan log. Antrean upload menampilkan progres per-file dan
 jumlah part yang tersimpan, error terakhir, retry semua, dan retry satu job
 tanpa mengulang file/part yang sudah memiliki checkpoint selesai.
+
+Di admin booth, permukaan ini diberi label **Mesin & koneksi**. Istilah
+**Agent** hanya digunakan untuk protokol, log teknisi, Local Manager, dan
+dokumentasi internal. Setup disembunyikan setelah mesin terdaftar, sedangkan
+koneksi, update, rollback, dan tes perangkat ditempatkan di
+**Pengaturan lanjutan** agar operator harian hanya melihat tindakan yang aman.
 Antrean cetak menampilkan file hasil, keberadaan file, jumlah percobaan, error
 printer asli, dan retry satu job gagal. Retry tidak membuat job cetak kedua.
 Panel kesehatan membaca `/api/local/metrics` dengan installation token,

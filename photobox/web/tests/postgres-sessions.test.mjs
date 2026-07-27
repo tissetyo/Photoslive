@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { expirePostgresSession, persistPostgresSession, postgresSessionStatus, readPostgresSession, requestPostgresSessionDeletion } from "../api/_postgres_sessions.mjs";
+import { expirePostgresSession, persistPostgresSession, postgresSessionStatus, readPostgresSession, reconcilePostgresSessions, requestPostgresSessionDeletion } from "../api/_postgres_sessions.mjs";
 import { publicPhotoSession, publicPhotoSessionFile } from "../api/platform.mjs";
 import { boothKey, machineKey } from "../api/_store.mjs";
 
@@ -83,6 +83,46 @@ test("deletion request is durable and separate from final expiry", async () => {
   assert.equal(result.ok, true);
   assert.equal(result.session.deletionRequested, true);
   assert.match(calls[0].url, /request_photo_session_deletion$/);
+});
+
+test("daily reconciliation sends one bounded metadata batch", async () => {
+  let request;
+  const result = await reconcilePostgresSessions(session.boothCode, session.machineId, [session], {
+    environment,
+    fetchImplementation: async (url, options) => {
+      request = { url, options };
+      return Response.json({ updated: 1, reconciledAt: "2026-07-22T11:00:00.000Z" });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.updated, 1);
+  assert.match(request.url, /photoslive_reconcile_photo_sessions$/);
+  const body = JSON.parse(request.options.body);
+  assert.equal(body.p_booth_code, session.boothCode);
+  assert.equal(body.p_machine_id, session.machineId);
+  assert.equal(body.p_sessions.length, 1);
+  assert.equal(body.p_sessions[0].shareCode, session.shareCode);
+  assert.equal(JSON.stringify(body).includes("objectKey"), false);
+  assert.equal(JSON.stringify(body).includes(environment.SUPABASE_SERVICE_ROLE_KEY), false);
+});
+
+test("daily reconciliation rejects oversized or malformed batches before network", async () => {
+  let called = false;
+  await assert.rejects(
+    () => reconcilePostgresSessions(session.boothCode, session.machineId, Array.from({ length: 501 }, () => session), {
+      environment,
+      fetchImplementation: async () => { called = true; },
+    }),
+    /Batch rekonsiliasi PostgreSQL tidak valid/,
+  );
+  await assert.rejects(
+    () => reconcilePostgresSessions(session.boothCode, session.machineId, [{ ...session, shareCode: "short" }], {
+      environment,
+      fetchImplementation: async () => { called = true; },
+    }),
+    /metadata rekonsiliasi tidak valid/i,
+  );
+  assert.equal(called, false);
 });
 
 test("primary public read recovers metadata but strips machine identity", async () => {
@@ -177,4 +217,10 @@ test("session migration is service-role-only and prevents terminal regression", 
   assert.match(deletionSql, /deletionRequestedAt/);
   assert.match(deletionSql, /revoke all[\s\S]+authenticated/);
   assert.match(deletionSql, /grant execute[\s\S]+service_role/);
+  const reconciliationSql = readFileSync(new URL("../../../supabase/migrations/20260727120000_daily_session_reconciliation.sql", import.meta.url), "utf8");
+  assert.match(reconciliationSql, /jsonb_array_length\(p_sessions\) > 500/);
+  assert.match(reconciliationSql, /photoslive_persist_photo_session/);
+  assert.match(reconciliationSql, /revoke all[\s\S]+authenticated/);
+  assert.match(reconciliationSql, /grant execute[\s\S]+service_role/);
+  assert.match(reconciliationSql, /alter publication supabase_realtime add table public\.photo_sessions/);
 });

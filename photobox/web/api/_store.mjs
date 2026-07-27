@@ -33,6 +33,15 @@ export function pairingCode() {
   return `${value.slice(0, 4)}-${value.slice(4)}`;
 }
 
+// Setup links are intentionally opaque and are never entered by an operator.
+// Sixteen base32 characters provide 80 bits of entropy while remaining
+// compatible with the existing 16-character PostgreSQL pairing field.
+export function setupToken() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map(byte => alphabet[byte % alphabet.length]).join("");
+}
+
 export async function sha256(value) {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);

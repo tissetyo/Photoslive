@@ -86,7 +86,7 @@ kontrak endpoint dijelaskan di [docs/SESSION-FLOW.md](docs/SESSION-FLOW.md).
 Dokumen tersebut menjadi acuan ketika membangun UI pelanggan dan service capture
 agar perilakunya selalu sama dengan konfigurasi admin.
 
-Arsitektur domain publik, pairing mini PC, pembagian tanggung jawab Vercel dan
+Arsitektur domain publik, onboarding aman mini PC, pembagian tanggung jawab Vercel dan
 Photoslive Agent, kontrak job perangkat, keamanan, serta checklist production
 dijelaskan di [docs/CLOUD-DEVICE-BRIDGE.md](docs/CLOUD-DEVICE-BRIDGE.md). Vercel
 tidak boleh dianggap dapat mengakses USB atau CUPS secara langsung; akses
@@ -94,9 +94,10 @@ hardware produksi selalu dijalankan Agent pada mesin tempat perangkat terpasang.
 
 ## Photoslive Agent
 
-Agent bridge tersedia di `photobox/agent.py`. Agent membuat pairing code,
-mengirim heartbeat/telemetry, mengambil job dari cloud, lalu meneruskannya ke
-controller lokal di `http://127.0.0.1:8080`.
+Agent bridge tersedia di `photobox/agent.py`. Installer membuat tautan setup
+sekali pakai dan membukanya otomatis tanpa input kode oleh operator. Setelah
+onboarding, Agent mengirim heartbeat/telemetry, mengambil job dari cloud, lalu
+meneruskannya ke controller lokal di `http://127.0.0.1:8080`.
 
 ```bash
 python3 photobox/server.py

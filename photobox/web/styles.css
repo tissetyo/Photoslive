@@ -698,15 +698,34 @@ dialog .dialog-switch { min-height: 66px; padding: var(--space-2) 0; }
 .agent-command { display: grid; gap: 6px; margin-top: var(--space-3); padding: var(--space-3); border-radius: var(--radius-sm); background: #111319; color: white; }
 .agent-command small { color: #aeb2bf; font-size: 9px; font-weight: 800; letter-spacing: .1em; }
 .agent-command code { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.agent-pair-form { display: grid; gap: var(--space-3); }
-.agent-pair-form .button { justify-self: start; }
+.agent-technician-command { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.agent-technician-command summary { min-height: 44px; display: flex; align-items: center; color: var(--muted); cursor: pointer; font-weight: 800; }
+.agent-technician-command summary:hover { color: var(--text); }
 .agent-pair-message { margin-top: var(--space-3); padding: var(--space-3); border-radius: var(--radius-sm); background: #f7f6ff; color: #5f5a85; font-size: 11px; line-height: 1.5; }
+.agent-onboarding { display: grid; gap: var(--space-3); }
+.agent-onboarding-step { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: var(--space-3); align-items: start; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fafafd; }
+.agent-onboarding-step > span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: var(--radius-sm); background: #f0efff; }
+.agent-onboarding-step img { width: 18px; height: 18px; }
+.agent-onboarding-step b { display: block; margin-bottom: 3px; }
+.agent-onboarding-step p { margin: 0; color: var(--muted); line-height: 1.45; }
+.agent-onboarding-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .agent-machine-panel { margin-top: var(--space-5); }
 .agent-empty { min-height: 190px; display: grid; place-items: center; align-content: center; gap: var(--space-2); text-align: center; color: var(--muted); }
 .agent-empty img { width: 27px; height: 27px; opacity: .7; }
 .agent-empty b { color: var(--text); font-size: 14px; }
 .agent-empty p { margin: 0; font-size: 11px; }
 .agent-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-4) 0; }
+.agent-primary-actions { margin-bottom: var(--space-2); }
+.agent-advanced-controls { margin-top: var(--space-4); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fafafd; }
+.agent-advanced-controls > summary { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); cursor: pointer; list-style: none; }
+.agent-advanced-controls > summary::-webkit-details-marker { display: none; }
+.agent-advanced-controls > summary span { min-width: 0; display: grid; gap: 3px; }
+.agent-advanced-controls > summary b { color: var(--text); }
+.agent-advanced-controls > summary small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.agent-advanced-controls > summary > img { width: 16px; height: 16px; transition: transform .16s ease; }
+.agent-advanced-controls[open] > summary > img { transform: rotate(180deg); }
+.agent-advanced-controls .agent-actions:first-of-type { margin-top: var(--space-3); }
+.agent-advanced-controls .agent-actions:last-of-type { margin-bottom: var(--space-2); }
 .agent-device-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-3); }
 
 @media (max-width: 1120px) {

@@ -6,7 +6,8 @@
 2. Website mendeteksi sistem operasi. Tekan satu tombol installer yang tampil.
 3. Jalankan installer. Controller dan Agent dipasang sebagai service; menutup
    browser tidak menghentikannya.
-4. Installer membuka `/setup?code=...`. Kode berlaku 15 menit dan sudah terisi.
+4. Installer membuka tautan `/setup?setup=...` yang berlaku 15 menit. Token
+   diamankan di tautan dan tidak perlu dibaca, disalin, atau diketik operator.
 5. Isi nama photobox, lokasi, email owner, PIN lokal, dan konfirmasi PIN.
 6. Pilih kamera dan printer yang benar-benar terdeteksi, lalu tekan tombol tes.
    Perangkat yang tidak ditemukan tidak boleh ditampilkan sebagai tersambung.

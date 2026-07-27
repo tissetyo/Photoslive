@@ -6,7 +6,7 @@ import {
   jobKey,
   machineKey,
   now,
-  pairingCode,
+  setupToken,
   queueKey,
   randomId,
   sha256,
@@ -28,10 +28,18 @@ import { resolveMachineIncident } from "./_fleet_health.mjs";
 import { recordTelemetrySnapshot } from "./_telemetry_history.mjs";
 import { trackPublicSessionFileRetention, trackPublicSessionRetention } from "./_session_retention.mjs";
 import { resolveProviderRuntime, resolveProviderRuntimeForCapability } from "./_provider_connections.mjs";
-import { persistPostgresSession, postgresSessionStatus } from "./_postgres_sessions.mjs";
+import { persistPostgresSession, postgresSessionStatus, readPostgresSession, reconcilePostgresSessions } from "./_postgres_sessions.mjs";
 import { postgresSettingsStatus, readPostgresSettings } from "./_postgres_settings.mjs";
 import { postgresVoucherStatus, readPostgresVoucherSnapshot, redeemPostgresVoucher } from "./_postgres_vouchers.mjs";
-import { createPostgresSetupCode, persistPostgresHeartbeat, persistPostgresMachine, postgresMachineStatus, readPostgresMachine } from "./_postgres_machines.mjs";
+import {
+  createPostgresSetupCode,
+  markPostgresMachinePaired,
+  persistPostgresHeartbeat,
+  persistPostgresMachine,
+  postgresMachineStatus,
+  readPostgresMachine,
+  readPostgresPairing,
+} from "./_postgres_machines.mjs";
 
 const json = (response, status = 200, headers = {}) => new Response(JSON.stringify(response), {
   status,
@@ -79,6 +87,17 @@ async function bestEffortRedis(operation, fallback = null) {
     if (!isUpstashMaxRequestsError(error)) throw error;
     return fallback;
   }
+}
+
+async function readSyncedSession(redis, boothCode, shareCode) {
+  const postgres = postgresSessionStatus();
+  if (postgres.primary) {
+    return await readPostgresSession(boothCode, shareCode)
+      || await bestEffortRedis(() => redis.get(syncedSessionKey(boothCode, shareCode)), null);
+  }
+  const cached = await bestEffortRedis(() => redis.get(syncedSessionKey(boothCode, shareCode)), null);
+  if (cached || !postgres.enabled) return cached;
+  return readPostgresSession(boothCode, shareCode);
 }
 
 export const boothControllerPathAllowed = value => {
@@ -232,7 +251,6 @@ async function storeSessionFileRecord(redis, record, boothCode, shareCode, file,
   };
   const ttl = sessionRemainingTtl(record);
   if (!ttl) throw new Error("Sesi upload sudah kedaluwarsa");
-  await redis.set(syncedSessionFileKey(boothCode, shareCode, file.fileId), { ...publicFile, ...storage }, { ex: ttl });
   record.files = [...(record.files || []).filter(item => item.id !== file.fileId && !(file.fileKind === "capture" && (item.kind || "capture") === "capture" && Number(item.slotIndex) === file.slotIndex)), publicFile]
     .sort((left, right) => Number(left.slotIndex || 0) - Number(right.slotIndex || 0));
   record.fileManifests = (record.fileManifests || []).filter(item => item.id !== file.fileId);
@@ -246,9 +264,27 @@ async function storeSessionFileRecord(redis, record, boothCode, shareCode, file,
     });
   }
   record.updatedAt = now();
-  await redis.set(syncedSessionKey(boothCode, shareCode), record, { ex: ttl });
-  await trackPublicSessionFileRetention(redis, record, { ...publicFile, ...storage });
-  if (postgresSessionStatus().enabled) await persistPostgresSession(record);
+  const postgres = postgresSessionStatus();
+  if (postgres.primary && storage.storageMode === "object-storage") {
+    const persisted = await persistPostgresSession(record);
+    if (!persisted.ok) throw new Error(persisted.reason || "Metadata file belum dapat disimpan ke PostgreSQL");
+  }
+  const fileRecord = { ...publicFile, ...storage };
+  const redisRequired = storage.storageMode === "legacy-redis";
+  const cacheWrite = async () => {
+    await redis.set(syncedSessionFileKey(boothCode, shareCode, file.fileId), fileRecord, { ex: ttl });
+    await redis.set(syncedSessionKey(boothCode, shareCode), record, { ex: ttl });
+    await trackPublicSessionFileRetention(redis, record, fileRecord);
+  };
+  if (redisRequired) {
+    await cacheWrite();
+  } else {
+    await bestEffortRedis(cacheWrite);
+  }
+  if (postgres.mode === "dual" || (postgres.primary && storage.storageMode !== "object-storage")) {
+    const persisted = await persistPostgresSession(record);
+    if (postgres.primary && !persisted.ok) throw new Error(persisted.reason || "Metadata file belum dapat disimpan ke PostgreSQL");
+  }
   return publicFile;
 }
 
@@ -260,7 +296,11 @@ async function syncSessionMetadata(redis, request, payload) {
   const shareCode = normalizedPublicSessionCode(session.shareCode);
   if (!shareCode) return json({ error: "Kode sesi tidak valid" }, 400);
   const key = syncedSessionKey(boothCode, shareCode);
-  const previous = await redis.get(key);
+  const postgres = postgresSessionStatus();
+  const previous = postgres.primary
+    ? await readPostgresSession(boothCode, shareCode) || await bestEffortRedis(() => redis.get(key), null) || {}
+    : await redis.get(key) || {};
+  const hadPrevious = Boolean(previous?.shareCode);
   const record = {
     ...previous,
     boothCode,
@@ -278,15 +318,42 @@ async function syncSessionMetadata(redis, request, payload) {
   };
   const ttl = sessionRemainingTtl(record);
   if (!ttl) return json({ error: "Sesi sudah kedaluwarsa" }, 404);
-  const postgres = postgresSessionStatus();
   if (postgres.primary) {
     const persisted = await persistPostgresSession(record);
     if (!persisted.ok) return json({ error: "Metadata sesi belum dapat disimpan ke cloud. Foto lokal tetap aman dan sinkronisasi akan dicoba lagi.", retryable: true }, 503);
   }
-  await redis.set(key, record, { ex: ttl });
-  await trackPublicSessionRetention(redis, record);
+  await bestEffortRedis(() => redis.set(key, record, { ex: ttl }));
+  await bestEffortRedis(() => trackPublicSessionRetention(redis, record));
   if (postgres.mode === "dual") await persistPostgresSession(record);
-  return json({ session: record, url: `/${boothCode}/sesi/${shareCode}` }, previous ? 200 : 201);
+  return json({ session: record, url: `/${boothCode}/sesi/${shareCode}` }, hadPrevious ? 200 : 201);
+}
+
+async function reconcileSessions(redis, request, payload) {
+  const machine = await authenticateAgent(redis, request, payload.machineId);
+  if (!machine?.paired) return json({ error: "Credential Agent tidak valid" }, 401);
+  const sessions = Array.isArray(payload.sessions) ? payload.sessions.slice(0, 500) : [];
+  let result;
+  try {
+    result = await reconcilePostgresSessions(persistentBoothCode(machine), machine.id, sessions);
+  } catch (error) {
+    return json({
+      error: error instanceof Error ? error.message : "Rekonsiliasi sesi tidak valid",
+      code: "SESSION_RECONCILIATION_INVALID",
+      retryable: false,
+    }, 400);
+  }
+  if (!result.ok || result.skipped) {
+    return json({
+      error: result.reason || "Rekonsiliasi sesi belum dapat disimpan ke PostgreSQL",
+      code: "POSTGRES_RECONCILIATION_FAILED",
+      retryable: true,
+    }, Number(result.status || 503));
+  }
+  return json({
+    updated: Number(result.updated || 0),
+    reconciledAt: result.reconciledAt || now(),
+    source: "postgres",
+  });
 }
 
 async function syncSessionFile(redis, request, payload) {
@@ -296,7 +363,7 @@ async function syncSessionFile(redis, request, payload) {
   const shareCode = normalizedPublicSessionCode(payload.shareCode);
   if (!shareCode) return json({ error: "Kode sesi tidak valid" }, 400);
   const file = normalizedSessionFile(payload);
-  const record = await redis.get(syncedSessionKey(boothCode, shareCode));
+  const record = await readSyncedSession(redis, boothCode, shareCode);
   if (!record || record.machineId !== machine.id || !sessionRemainingTtl(record)) return json({ error: "Metadata sesi belum tersinkron atau sudah kedaluwarsa" }, 409);
   if (!file.fileId) return json({ error: "ID file sesi tidak valid" }, 400);
   if (!SESSION_CONTENT_TYPES.has(file.contentType)) return json({ error: "Format foto tidak didukung" }, 415);
@@ -319,7 +386,7 @@ async function prepareSessionFile(redis, request, payload) {
   const boothCode = persistentBoothCode(machine);
   const shareCode = normalizedPublicSessionCode(payload.shareCode);
   if (!shareCode) return json({ error: "Kode sesi tidak valid" }, 400);
-  const record = await redis.get(syncedSessionKey(boothCode, shareCode));
+  const record = await readSyncedSession(redis, boothCode, shareCode);
   if (!record || record.machineId !== machine.id || !sessionRemainingTtl(record)) return json({ error: "Metadata sesi belum tersinkron atau sudah kedaluwarsa" }, 409);
   const file = normalizedSessionFile(payload);
   if (!file.fileId) return json({ error: "ID file sesi tidak valid" }, 400);
@@ -399,7 +466,7 @@ async function completeSessionFileMultipart(redis, request, payload) {
   if (parts.length !== intent.totalParts || partNumbers.size !== intent.totalParts || ![...partNumbers].every(number => number >= 1 && number <= intent.totalParts)) {
     return json({ error: "Checkpoint part multipart belum lengkap" }, 409);
   }
-  const record = await redis.get(syncedSessionKey(intent.boothCode, intent.shareCode));
+  const record = await readSyncedSession(redis, intent.boothCode, intent.shareCode);
   if (!record || record.machineId !== machine.id || !sessionRemainingTtl(record)) return json({ error: "Sesi upload tidak valid atau sudah kedaluwarsa" }, 409);
   const runtime = await storageRuntimeForMachine(redis, machine, intent.provider);
   const environment = runtime?.environment || process.env;
@@ -423,7 +490,7 @@ async function finalizeSessionFile(redis, request, payload) {
   const uploadId = String(payload.uploadId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 160);
   const intent = await redis.get(sessionUploadIntentKey(uploadId));
   if (!intent || intent.machineId !== machine.id) return json({ error: "Upload tidak ditemukan atau sudah kedaluwarsa" }, 404);
-  const record = await redis.get(syncedSessionKey(intent.boothCode, intent.shareCode));
+  const record = await readSyncedSession(redis, intent.boothCode, intent.shareCode);
   if (!record || record.machineId !== machine.id || !sessionRemainingTtl(record)) return json({ error: "Sesi upload tidak valid atau sudah kedaluwarsa" }, 409);
   const runtime = await storageRuntimeForMachine(redis, machine, intent.provider);
   const object = await inspectObject({ objectKey: intent.objectKey, environment: runtime?.environment || process.env });
@@ -442,7 +509,7 @@ async function createPairing(redis, payload) {
   const postgresStatus = postgresMachineStatus();
   const machineId = randomId("machine");
   const agentToken = payload.agentToken || randomId("agent");
-  const code = pairingCode();
+  const code = setupToken();
   const createdAt = now();
   const agentTokenHash = await sha256(agentToken);
   const machine = {
@@ -453,7 +520,7 @@ async function createPairing(redis, payload) {
     status: "waiting_pairing",
     paired: false,
     pairingCode: code,
-    boothCode: code.toLowerCase(),
+    boothCode: `pl-${machineId.replace(/^machine_/, "").slice(0, 8).toLowerCase()}`,
     pairingExpiresAt: new Date(Date.now() + 900_000).toISOString(),
     agentTokenHash,
     createdAt,
@@ -475,7 +542,15 @@ async function createPairing(redis, payload) {
     await redis.set(`photoslive:pairing:${code}`, machineId, { ex: 900 });
   });
   if (postgresStatus.mode === "dual") await persistPostgresMachine(machine);
-  return { machineId, agentToken, commandKey: machine.commandKey, pairingCode: code, expiresInSeconds: 900 };
+  return {
+    machineId,
+    agentToken,
+    commandKey: machine.commandKey,
+    setupToken: code,
+    // Temporary compatibility for Agent versions older than 0.10.
+    pairingCode: code,
+    expiresInSeconds: 900,
+  };
 }
 
 export async function claimPairing(redis, request, payload) {
@@ -484,9 +559,11 @@ export async function claimPairing(redis, request, payload) {
     return json({ error: "Login admin diperlukan untuk memasangkan mesin" }, 401);
   }
   const code = String(payload.code || "").trim().toUpperCase();
-  const machineId = await redis.get(`photoslive:pairing:${code}`);
+  const postgresStatus = postgresMachineStatus();
+  let machine = postgresStatus.primary ? await readPostgresPairing(code) : null;
+  const machineId = machine?.id || await bestEffortRedis(() => redis.get(`photoslive:pairing:${code}`), null);
   if (!machineId) return json({ error: "Kode pairing tidak ditemukan atau sudah kedaluwarsa" }, 404);
-  const machine = await redis.get(machineKey(machineId));
+  if (!machine) machine = await bestEffortRedis(() => redis.get(machineKey(machineId)), null);
   if (!machine) return json({ error: "Data mesin tidak ditemukan" }, 404);
   if (machine.pairingCode !== code) return json({ error: "Kode pairing bukan kode terbaru untuk mesin ini" }, 409);
   machine.paired = true;
@@ -496,9 +573,15 @@ export async function claimPairing(redis, request, payload) {
   machine.pairedAt = now();
   machine.boothCode = persistentBoothCode(machine, machine.boothCode || code);
   delete machine.pairingCode;
-  await redis.set(machineKey(machineId), machine);
-  await redis.set(boothKey(machine.boothCode), machineId);
-  await redis.del(`photoslive:pairing:${code}`);
+  if (postgresStatus.primary) {
+    const persisted = await markPostgresMachinePaired(code, machine, machine.boothCode);
+    if (!persisted.ok) return json({ error: persisted.reason || "Pairing belum dapat disimpan ke database", retryable: true }, Number(persisted.status || 503));
+    machine = persisted.machine || machine;
+  }
+  await bestEffortRedis(() => redis.set(machineKey(machineId), machine));
+  await bestEffortRedis(() => redis.set(boothKey(machine.boothCode), machineId));
+  await bestEffortRedis(() => redis.del(`photoslive:pairing:${code}`));
+  if (postgresStatus.mode === "dual") await markPostgresMachinePaired(code, machine, machine.boothCode).catch(() => null);
   return json({ machine: publicMachine(machine) });
 }
 
@@ -509,7 +592,7 @@ export async function createSetupCode(redis, request, payload) {
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
   const postgresStatus = postgresMachineStatus();
-  const code = pairingCode();
+  const code = setupToken();
   const previousCode = String(machine.pairingCode || "").trim().toUpperCase();
   if (previousCode) await bestEffortRedis(() => redis.del(`photoslive:pairing:${previousCode}`));
   machine.pairingCode = code;
@@ -528,7 +611,13 @@ export async function createSetupCode(redis, request, payload) {
   // photobox. The expiring pairing key still controls whether setup is valid.
   await bestEffortRedis(() => redis.set(boothKey(code), machine.id));
   if (postgresStatus.mode === "dual") await createPostgresSetupCode(machine, tokenHash, code);
-  return json({ pairingCode: code, boothCode: machine.boothCode, expiresInSeconds: 900 });
+  return json({
+    setupToken: code,
+    // Temporary compatibility for Agent versions older than 0.10.
+    pairingCode: code,
+    boothCode: machine.boothCode,
+    expiresInSeconds: 900,
+  });
 }
 
 async function heartbeat(redis, request, payload) {
@@ -658,7 +747,7 @@ async function syncVoucherRedemptions(redis, request, payload) {
     await redis.set(`photoslive:booth:${boothCode}:voucher:${code}`, record);
     updated += 1;
   }
-  if (updated) await redis.incr(`photoslive:booth:${boothCode}:voucher-version`);
+  if (updated) await bestEffortRedis(() => redis.incr(`photoslive:booth:${boothCode}:voucher-version`));
   return json({ updated });
 }
 
@@ -749,6 +838,7 @@ async function dispatch(request) {
     if (action === "voucher_snapshot" && request.method === "POST") return voucherSnapshot(redis, request, payload);
     if (action === "sync_voucher_redemptions" && request.method === "POST") return syncVoucherRedemptions(redis, request, payload);
     if (action === "sync_session_metadata" && request.method === "POST") return syncSessionMetadata(redis, request, payload);
+    if (action === "reconcile_sessions" && request.method === "POST") return reconcileSessions(redis, request, payload);
     if (action === "prepare_session_file" && request.method === "POST") return prepareSessionFile(redis, request, payload);
     if (action === "prepare_session_file_part" && request.method === "POST") return prepareSessionFilePart(redis, request, payload);
     if (action === "complete_session_file_multipart" && request.method === "POST") return completeSessionFileMultipart(redis, request, payload);

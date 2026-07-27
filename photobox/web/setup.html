@@ -8,7 +8,7 @@
   <link rel="icon" href="/icons/camera.svg">
   <link rel="manifest" href="/app.webmanifest">
   <link rel="stylesheet" href="/platform.css?v=2">
-    <link rel="stylesheet" href="/setup.css?v=17">
+    <link rel="stylesheet" href="/setup.css?v=19">
 </head>
 <body>
   <div class="platform-shell">
@@ -19,8 +19,8 @@
     <main class="auth-layout">
       <section class="auth-card">
         <header class="auth-head">
-          <h1 id="setup-title">Hubungkan photobox</h1>
-          <p id="setup-copy">Masukkan kode Agent.</p>
+          <h1 id="setup-title">Siapkan photobox</h1>
+          <p id="setup-copy">Photoslive memeriksa mesin secara otomatis. Tidak ada kode yang perlu diketik.</p>
         </header>
 
         <div class="mode-tabs" id="setup-modes">
@@ -29,14 +29,18 @@
         </div>
 
         <div class="wizard-progress" id="wizard-progress">
-          <div><span id="wizard-step-label">Langkah 1 dari 6</span><b id="wizard-step-name">Hubungkan mesin</b></div>
+          <div><span id="wizard-step-label">Langkah 1 dari 6</span><b id="wizard-step-name">Periksa Photoslive</b></div>
           <div class="progress-track" aria-hidden="true"><i id="wizard-progress-bar"></i></div>
         </div>
 
         <form id="setup-form" novalidate>
           <section class="setup-step" data-setup-step="1">
-            <label>Kode setup<input id="pairing-code" maxlength="9" autocomplete="one-time-code" placeholder="ABCD-1234" required></label>
-            <div class="form-actions"><button class="btn primary">Periksa kode <img src="/icons/arrow-right.svg" alt=""></button></div>
+            <input id="setup-token" type="hidden">
+            <div class="setup-auto-link" id="setup-auto-link">
+              <span class="setup-auto-icon"><img src="/icons/scan-line.svg" alt=""></span>
+              <div><b id="setup-auto-title">Siapkan Photoslive di mesin ini</b><p id="setup-auto-copy">Install Photoslive satu kali. Sesudah selesai, wizard ini terbuka dan mengenali mesin secara otomatis.</p></div>
+            </div>
+            <div class="form-actions"><button class="btn primary hidden" id="retry-setup-link">Coba lagi <img src="/icons/refresh-cw.svg" alt=""></button></div>
           </section>
 
           <section class="setup-step hidden" data-setup-step="2">
@@ -106,7 +110,7 @@
 
         <form id="login-form" class="hidden">
           <div class="form-grid">
-            <label class="full">Kode/nama photobox<input id="login-booth" placeholder="abcd-1234" required></label>
+            <label class="full">Alamat photobox<input id="login-booth" placeholder="contoh: booth-mall-1" required><small class="login-booth-help">Gunakan bagian setelah domain pada URL photobox. Ini bukan kode setup.</small></label>
           </div>
           <fieldset class="login-methods single-method">
             <legend>Pilih cara masuk</legend>
@@ -119,7 +123,7 @@
           </fieldset>
           <div class="login-method-panel hidden" data-method-panel="pin">
             <label>PIN admin<input id="login-pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Masukkan 6 angka"></label>
-            <label class="hidden" id="login-recovery-email-field">Email pemilik<input id="login-pin-email" type="email" autocomplete="email" placeholder="Email saat pertama daftar"><small>Hanya diperlukan sekali untuk menautkan kode setup lama.</small></label>
+            <label class="hidden" id="login-recovery-email-field">Email pemilik<input id="login-pin-email" type="email" autocomplete="email" placeholder="Email saat pertama daftar"><small>Hanya diperlukan sekali untuk memulihkan akses mesin lama.</small></label>
           </div>
           <div class="login-method-panel" data-method-panel="password">
             <div class="form-grid">
@@ -149,7 +153,7 @@
       <aside class="agent-recovery" id="agent-recovery">
           <div class="recovery-heading">
             <span class="recovery-icon"><img src="/icons/terminal.svg" alt=""></span>
-            <div><b>Belum punya kode setup?</b><p>Pilih perangkat yang akan menjalankan Photoslive.</p></div>
+            <div><b>Install Photoslive</b><p>Pilih perangkat utama. Operator tidak perlu membuat atau mengetik kode.</p></div>
           </div>
 
           <div class="agent-platform-switch" role="group" aria-label="Jenis perangkat">
@@ -159,7 +163,7 @@
 
           <div class="agent-platform-panel" data-agent-panel="computer">
             <ol class="install-steps">
-              <li><span>1</span><div><b>Download installer ringan</b><p>Ini memasang service Agent, lalu membuka Setup/Local Manager di browser.</p>
+              <li><span>1</span><div><b>Download installer ringan</b><p>Installer memasang service lokal dan membuka wizard ini kembali secara otomatis.</p>
                 <a class="primary-installer-download" id="primary-agent-download" href="/downloads/install-linux.sh" download="install-photoslive-linux.sh"><span id="primary-agent-icon" class="setup-icon linux" aria-hidden="true"></span><span id="primary-agent-label">Ambil installer Linux</span><span class="setup-icon download" aria-hidden="true"></span></a>
                 <details class="installer-alternatives"><summary>Pakai sistem operasi lain</summary><div class="installer-links" aria-label="Pilihan installer Photoslive Agent">
                   <button type="button" data-agent-os="windows"><span class="setup-icon windows" aria-hidden="true"></span>Windows</button>
@@ -167,7 +171,7 @@
                   <button type="button" data-agent-os="linux"><span class="setup-icon linux" aria-hidden="true"></span>Linux</button>
                 </div></details>
               </div></li>
-              <li><span>2</span><div><b>Jalankan installer</b><p>Versi awal masih berupa script/PowerShell kecil. Setelah selesai, GUI lokal tersedia di <code>127.0.0.1:8080/local-agent</code>.</p></div></li>
+              <li><span>2</span><div><b>Jalankan installer</b><p>Versi saat ini berupa script/PowerShell kecil. Setelah selesai, Local Manager tersedia di <code>127.0.0.1:8080/local-agent</code>.</p></div></li>
             </ol>
             <details class="existing-agent technician-install"><summary>Metode teknisi melalui Terminal</summary>
               <b class="command-label" id="install-command-label">Perintah instalasi Linux Terminal</b>
@@ -177,11 +181,11 @@
               </div>
             </details>
             <details class="existing-agent">
-              <summary>Agent sudah terpasang? Buat kode baru</summary>
+              <summary>Photoslive sudah terpasang? Buka wizard lagi</summary>
               <b class="command-label" id="setup-command-label">Perintah Linux Terminal</b>
               <div class="command-box">
-                <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code</code>
-                <button type="button" id="copy-setup-command" aria-label="Salin perintah kode baru"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
+                <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-link --open-setup</code>
+                <button type="button" id="copy-setup-command" aria-label="Salin perintah untuk membuka wizard setup"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
               </div>
             </details>
           </div>
@@ -193,7 +197,7 @@
             </div>
             <div class="tablet-limit">
               <img src="/icons/info.svg" alt="">
-              <p>Untuk printer USB, DSLR/mirrorless, monitoring storage, dan kode setup ini, hubungkan satu komputer Windows, macOS, atau Linux yang menjalankan Agent.</p>
+              <p>Untuk printer USB, DSLR/mirrorless, dan monitoring storage, hubungkan satu komputer Windows, macOS, atau Linux yang menjalankan Agent.</p>
             </div>
             <div class="tablet-standalone-controls">
               <label>Kamera tablet
@@ -241,6 +245,6 @@
       <div class="setup-dialog-actions"><button class="btn" value="cancel">Batal</button><button class="btn primary" id="save-setup-frame-design" value="default"><img src="/icons/save.svg" alt="">Gunakan desain</button></div>
     </form>
   </dialog>
-    <script src="/setup.js?v=21" defer></script>
+    <script src="/setup.js?v=23" defer></script>
 </body>
 </html>

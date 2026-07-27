@@ -211,7 +211,8 @@ manual, bukti yang harus disimpan, serta batas secret didokumentasikan di
 - Installation token lokal dan Local Manager lengkap untuk status service,
   cloud/pairing, perangkat, RAM/CPU/disk, antrean upload terperinci dengan
   progres/checkpoint dan retry per-job, pause/resume/restart, diagnosis, folder,
-  kode setup, serta view/export rotating log.
+  jalankan ulang wizard setup tanpa input kode operator, serta view/export
+  rotating log.
 - Local Manager juga menampilkan antrean cetak nyata, keberadaan file hasil,
   error printer, jumlah percobaan, dan retry satu job gagal secara idempotent.
 - Local Manager menampilkan metrik bounded maksimal 512 request: latency p95,

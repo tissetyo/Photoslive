@@ -5,7 +5,7 @@ const titles = {
   content: ["Tampilan photobox", "Pengaturan / Tampilan", "Atur logo, background, frame, teks, font, dan warna yang dilihat pelanggan."],
   access: ["Sesi & pembayaran", "Pengaturan / Sesi dan pembayaran", "Atur waktu sesi, harga, QRIS, dan voucher."],
   devices: ["Kamera & printer", "Mesin / Kamera dan printer", "Sambungkan, pilih, dan periksa perangkat yang akan digunakan."],
-  agent: ["Photoslive Agent", "Mesin / Photoslive Agent", "Download, pasangkan, dan monitor controller hardware lokal."],
+  agent: ["Mesin & koneksi", "Mesin / Mesin dan koneksi", "Periksa layanan lokal, perangkat, sinkronisasi, dan kondisi komputer photobox."],
   storage: ["Penyimpanan foto", "Mesin / Penyimpanan", "Atur penghapusan foto lokal dan tujuan upload cloud."],
   integrations: ["Integrasi", "Cloud / Integrasi", "Lihat layanan yang terhubung ke photobox dan periksa koneksinya."],
   finance: ["Finance", "Pembayaran / Finance", "Lihat saldo dan ledger photobox tanpa mengubah payout atau fee."],
@@ -54,6 +54,11 @@ const setPath = (object, path, value) => { const parts = path.split("."); const 
 const formatBytes = (value = 0) => { const units = ["B", "KB", "MB", "GB", "TB"]; let size = value; let index = 0; while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; } return `${size.toFixed(index > 1 ? 1 : 0)} ${units[index]}`; };
 const formatIDR = (value = 0) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(value);
 const formatUptime = (seconds = 0) => { const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.floor((seconds % 3600) / 60); return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`; };
+const formatSyncMoment = value => {
+  if (!value) return "Belum pernah";
+  const timestamp = typeof value === "number" ? value * 1000 : Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString("id-ID") : "Belum pernah";
+};
 const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const isLocalAdmin = () => ["127.0.0.1", "localhost"].includes(location.hostname);
 
@@ -66,7 +71,7 @@ function describePlatformError(error, featureLabel = "Fitur ini") {
       : `${featureLabel} belum diaktifkan untuk photobox ini. Hubungi superadmin jika fitur ini diperlukan.`;
   }
   if (status === 403 || /forbidden|tidak diizinkan|akses ditolak/i.test(raw)) return `Akun Anda tidak memiliki izin untuk ${featureLabel.toLowerCase()}.`;
-  if (/agent|controller|heartbeat|mesin belum terhubung/i.test(raw)) return `${featureLabel} memerlukan Photoslive Agent yang aktif pada komputer photobox.`;
+  if (/agent|controller|heartbeat|mesin belum terhubung/i.test(raw)) return `${featureLabel} memerlukan layanan lokal yang aktif pada komputer photobox.`;
   return raw || `${featureLabel} tidak dapat dimuat.`;
 }
 
@@ -205,11 +210,11 @@ async function cloudControllerApi(path, options = {}) {
     localStorage.setItem("photoslive.machineId", machineId);
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
   }
-  if (!machineId) throw new Error("Mesin belum terhubung. Buka Photoslive Agent dan masukkan kode pairing.");
+  if (!machineId) throw new Error("Mesin photobox belum terdaftar. Selesaikan setup dari komputer photobox.");
   let requestBody = null;
   let bodyBase64 = null;
   if (typeof options.body === "string" && options.body) {
-    try { requestBody = JSON.parse(options.body); } catch { throw new Error("Format data tidak dapat dikirim melalui Agent"); }
+    try { requestBody = JSON.parse(options.body); } catch { throw new Error("Format data tidak dapat dikirim ke layanan mesin"); }
   } else if (options.body instanceof Blob) {
     bodyBase64 = await blobToBase64(options.body);
   }
@@ -220,9 +225,9 @@ async function cloudControllerApi(path, options = {}) {
     await new Promise(resolve => setTimeout(resolve, 600));
     const status = await directBridge("job_status", { machineId, jobId: job.id }, "GET");
     if (status.job.status === "completed") return status.job.result || {};
-    if (status.job.status === "failed") throw new Error(status.job.error || "Perintah gagal dijalankan Agent");
+    if (status.job.status === "failed") throw new Error(status.job.error || "Perintah gagal dijalankan oleh mesin");
   }
-  throw new Error("Agent tidak merespons dalam 35 detik. Pastikan service Agent masih aktif.");
+  throw new Error("Mesin tidak merespons dalam 35 detik. Periksa komputer photobox dan koneksi internetnya.");
 }
 
 function blobToBase64(blob) {
@@ -258,7 +263,7 @@ async function uploadAssetFile(file, kind) {
 }
 
 function cloudBinaryUrl(result) {
-  if (!result?.bodyBase64) throw new Error("Agent tidak mengirim data file");
+  if (!result?.bodyBase64) throw new Error("Mesin tidak mengirim data file");
   const bytes = Uint8Array.from(atob(result.bodyBase64), character => character.charCodeAt(0));
   return URL.createObjectURL(new Blob([bytes], { type: result.contentType || "application/octet-stream" }));
 }
@@ -266,7 +271,7 @@ function cloudBinaryUrl(result) {
 function errorActionFor(message) {
   const text = String(message || "").toLowerCase();
   if (/kamera|printer|perangkat/.test(text)) return { label: "Periksa perangkat", view: "devices" };
-  if (/agent|heartbeat|mesin tidak|controller/.test(text)) return { label: "Periksa Agent", view: "agent" };
+  if (/agent|heartbeat|mesin tidak|controller|layanan lokal/.test(text)) return { label: "Periksa mesin", view: "agent" };
   if (/storage|penyimpanan|folder|disk|upload|object/.test(text)) return { label: "Periksa penyimpanan", view: "storage" };
   if (/qris|voucher|pembayaran|provider/.test(text)) return { label: "Periksa pembayaran", view: "access" };
   if (/akun|pengguna|password|pin|login|sesi admin/.test(text)) return { label: "Periksa pengguna", view: "users" };
@@ -526,7 +531,7 @@ function renderAdminAgentQueues(machine) {
     const container = $(selector);
     if (!container) return;
     if (!machine) {
-      container.innerHTML = '<p class="empty">Hubungkan Agent untuk melihat antrean.</p>';
+      container.innerHTML = '<p class="empty">Status mesin diperlukan untuk melihat antrean lokal.</p>';
       return;
     }
     if (!jobs.length) {
@@ -555,7 +560,7 @@ function renderSessionRecovery(machine) {
   const container = $("#admin-session-recovery-list");
   if (!container) return;
   const sessions = Array.isArray(machine?.sessionRecovery?.sessions) ? machine.sessionRecovery.sessions.slice(0, 10) : [];
-  if (!machine) { container.innerHTML = '<p class="empty">Hubungkan Agent untuk melihat sesi lokal.</p>'; return; }
+  if (!machine) { container.innerHTML = '<p class="empty">Status mesin diperlukan untuk melihat sesi lokal.</p>'; return; }
   if (!sessions.length) { container.innerHTML = '<p class="empty">Tidak ada sesi aktif atau kedaluwarsa dalam 24 jam terakhir.</p>'; return; }
   const online = Boolean(machine.online);
   container.innerHTML = sessions.map(session => {
@@ -576,21 +581,24 @@ async function bridgeApi(action, options = {}) {
 
 function renderAgentMachine(machine) {
   const empty = $("#agent-machine-empty"), content = $("#agent-machine-content");
+  const setupGuide = $("#agent-setup-guide");
   if (!machine) {
     empty.hidden = false; content.hidden = true;
-    $("#agent-overall-state").textContent = agentState.machineId ? "TIDAK DITEMUKAN" : "BELUM TERHUBUNG";
+    if (setupGuide) setupGuide.hidden = false;
+    $("#agent-overall-state").textContent = agentState.machineId ? "PERLU DIPERIKSA" : "PERLU SETUP";
     $("#agent-overall-state").className = "device-state attention";
     renderAdminAgentQueues(null);
     renderSessionRecovery(null);
     return;
   }
   empty.hidden = true; content.hidden = false;
+  if (setupGuide) setupGuide.hidden = true;
   const online = Boolean(machine.online);
-  $("#agent-overall-state").textContent = online ? "ONLINE" : "OFFLINE";
+  $("#agent-overall-state").textContent = online ? "SIAP" : "TIDAK TERSAMBUNG";
   $("#agent-overall-state").className = `device-state ${online ? "connected" : "attention"}`;
-  setText("#agent-status-value", online ? "Online" : "Offline");
-  setText("#agent-version-value", `Agent ${machine.agentVersion || "—"} · ${machine.name || "Mesin"}`);
-  setText("#agent-last-seen", machine.lastSeenAt ? `TERAKHIR ${new Date(machine.lastSeenAt).toLocaleString("id-ID")}` : "BELUM ADA HEARTBEAT");
+  setText("#agent-status-value", online ? "Siap" : "Offline");
+  setText("#agent-version-value", `Photoslive ${machine.agentVersion || "—"} · ${machine.name || "Mesin"}`);
+  setText("#agent-last-seen", machine.lastSeenAt ? `TERAKHIR ${new Date(machine.lastSeenAt).toLocaleString("id-ID")}` : "BELUM ADA STATUS");
   setText("#agent-platform-value", machine.platform || "Platform belum dilaporkan");
   const devices = Array.isArray(machine.devices) ? machine.devices : [];
   const camera = devices.find(device => device.kind === "camera" && device.status === "connected");
@@ -604,6 +612,16 @@ function renderAgentMachine(machine) {
   const pendingSync = Number(sync.pending || 0) + Number(sync.running || 0);
   setText("#agent-sync-value", sync.failed ? "Perlu diperiksa" : pendingSync ? `${pendingSync} menunggu` : "Siap");
   setText("#agent-sync-detail", sync.lastError || `${Number(sync.completed || 0)} selesai · ${Number(sync.failed || 0)} gagal`);
+  const syncSchedule = sync.schedule && typeof sync.schedule === "object" ? sync.schedule : {};
+  const reconcileHour = Math.max(0, Math.min(23, Number(syncSchedule.fullReconcileHour ?? 3)));
+  const reconcileMinute = Math.max(0, Math.min(59, Number(syncSchedule.fullReconcileMinute ?? 15)));
+  const remotePollSeconds = Math.max(300, Number(syncSchedule.remoteJobPollSeconds || 900));
+  setText("#agent-last-incremental-sync", formatSyncMoment(sync.lastIncrementalSyncAt || machine.lastOutboxCheckAt));
+  setText("#agent-last-full-reconcile", formatSyncMoment(sync.lastFullReconcileAt || machine.lastFullReconcileAt));
+  setText("#agent-full-reconcile-count", `${Number(sync.lastFullReconcileCount || 0)} sesi diperiksa`);
+  setText("#agent-sync-schedule", `${String(reconcileHour).padStart(2, "0")}.${String(reconcileMinute).padStart(2, "0")}`);
+  setText("#agent-remote-poll", remotePollSeconds % 60 === 0 ? `Setiap ${Math.round(remotePollSeconds / 60)} menit` : `Setiap ${remotePollSeconds} detik`);
+  setText("#agent-sync-mode", pendingSync || Number(sync.failed || 0) ? "MENYINKRONKAN" : "LOCAL-FIRST");
   const pendingPrints = Number(machine.queue?.pendingPrints || 0);
   setText("#agent-print-queue-value", pendingPrints ? `${pendingPrints} menunggu` : "Siap");
   setText("#agent-print-queue-detail", pendingPrints ? "Diproses berurutan oleh Controller" : "Tidak ada cetakan tertunda");
@@ -618,14 +636,14 @@ function renderAgentMachine(machine) {
   $$('[data-agent-job]:not(#agent-connection-control)').forEach(button => {
     button.disabled = !online;
     button.dataset.availability = online ? "ready" : "unavailable";
-    button.title = online ? "" : "Agent offline. Nyalakan mesin atau periksa koneksi Agent.";
+    button.title = online ? "" : "Mesin offline. Nyalakan komputer photobox atau periksa koneksinya.";
   });
   $("#agent-install-update").disabled = !online || updateState !== "ready";
   $("#agent-rollback-update").disabled = !online || update.rollbackAvailable !== true;
   if (!online) {
-    $("#agent-operation-status").textContent = "Agent offline. Simpan pengaturan cloud tetap tersedia, tetapi aksi perangkat menunggu Agent kembali online.";
+    $("#agent-operation-status").textContent = "Mesin offline. Pengaturan cloud tetap dapat disimpan; aksi perangkat menunggu mesin kembali online.";
   }
-  $("#agent-device-list").innerHTML = devices.length ? devices.map(device => `<article class="device-card"><span class="device-glyph"><img src="/icons/${device.kind === "printer" ? "printer" : "camera"}.svg" alt="" /></span><div><b>${escapeHtml(device.name)}</b><p>${escapeHtml(device.detail || device.id || "Perangkat lokal")}</p></div><span class="device-state ${device.status === "connected" ? "connected" : "attention"}">${escapeHtml(device.status || "unknown")}</span></article>`).join("") : '<p class="empty">Agent belum melaporkan kamera atau printer.</p>';
+  $("#agent-device-list").innerHTML = devices.length ? devices.map(device => `<article class="device-card"><span class="device-glyph"><img src="/icons/${device.kind === "printer" ? "printer" : "camera"}.svg" alt="" /></span><div><b>${escapeHtml(device.name)}</b><p>${escapeHtml(device.detail || device.id || "Perangkat lokal")}</p></div><span class="device-state ${device.status === "connected" ? "connected" : "attention"}">${escapeHtml(device.status || "unknown")}</span></article>`).join("") : '<p class="empty">Kamera atau printer belum dilaporkan oleh mesin.</p>';
   renderAdminAgentQueues(machine);
   renderSessionRecovery(machine);
 }
@@ -636,43 +654,25 @@ async function loadAgentStatus(showNotice = false) {
   try {
     const { machine } = await bridgeApi("machine_status", { query: { machineId: agentState.machineId } });
     renderAgentMachine(machine);
-    if (showNotice) toast("Status Agent diperbarui");
+    if (showNotice) toast("Status mesin diperbarui");
   } catch (error) {
     renderAgentMachine(null);
     $("#agent-pair-message").textContent = `Cloud belum siap: ${error.message}`;
     if (showNotice) toast(error.message, "error");
   }
-  if ($("#agent-view")?.classList.contains("active")) agentState.timer = setTimeout(loadAgentStatus, 15000);
-}
-
-async function claimAgent(event) {
-  event.preventDefault();
-  const button = $("#agent-pair-form button");
-  button.disabled = true;
-  $("#agent-pair-message").textContent = "Menghubungkan mesin…";
-  try {
-    const { machine } = await bridgeApi("claim_pairing", { method: "POST", body: JSON.stringify({ code: $("#agent-pair-code").value, name: $("#agent-machine-name").value, location: $("#agent-machine-location").value }) });
-    agentState.machineId = machine.id;
-    localStorage.setItem("photoslive.machineId", machine.id);
-    $("#agent-pair-message").textContent = `Berhasil terhubung ke ${machine.name}. Agent akan online dalam beberapa detik.`;
-    $("#agent-pair-code").value = "";
-    renderAgentMachine(machine);
-    await loadAgentStatus();
-  } catch (error) {
-    $("#agent-pair-message").textContent = error.message;
-  } finally { button.disabled = false; }
+  if ($("#agent-view")?.classList.contains("active")) agentState.timer = setTimeout(loadAgentStatus, 60000);
 }
 
 async function queueAgentJob(type, payload = {}, sourceButton = null) {
-  if (!agentState.machineId) return toast("Hubungkan mesin terlebih dahulu", "error");
+  if (!agentState.machineId) return toast("Mesin belum terdaftar. Jalankan setup dari komputer photobox.", "error");
   const button = sourceButton || $$('[data-agent-job]').find(candidate => candidate.dataset.agentJob === type && !candidate.disabled);
-  if (!button || button.dataset.availability === "unavailable") return toast("Agent offline. Aksi perangkat belum tersedia.", "error");
+  if (!button || button.dataset.availability === "unavailable") return toast("Mesin offline. Aksi perangkat belum tersedia.", "error");
   if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
   const status = $("#agent-operation-status");
   try {
     const { job } = await bridgeApi("enqueue_job", { method: "POST", body: JSON.stringify({ machineId: agentState.machineId, type, payload }) });
     button.dataset.jobState = "pending";
-    status.textContent = "Perintah dikirim. Menunggu Agent…";
+    status.textContent = "Perintah dikirim. Menunggu mesin…";
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 750));
       const result = await directBridge("job_status", { machineId: agentState.machineId, jobId: job.id }, "GET");
@@ -694,7 +694,7 @@ async function setAgentConnection() {
   const status = $("#agent-operation-status");
   try {
     const result = await platformApi("agent_connection", { method: "POST", body: JSON.stringify({ booth: adminBoothCode, paused: pause }) });
-    status.textContent = pause ? "Jeda koneksi akan diterapkan pada heartbeat berikutnya." : "Koneksi akan dilanjutkan pada heartbeat berikutnya.";
+    status.textContent = pause ? "Koneksi cloud akan dijeda pada pembaruan status berikutnya." : "Koneksi cloud akan dilanjutkan pada pembaruan status berikutnya.";
     button.dataset.paused = pause ? "true" : "false";
     button.querySelector("span").textContent = pause ? "Lanjutkan koneksi" : "Jeda koneksi";
     toast(result.applied ? "Status koneksi diperbarui" : "Perubahan dijadwalkan");
@@ -1460,7 +1460,7 @@ function renderDevices(devices) {
     missing.length ? "warning" : "ready",
     missing.length ? `${missing.join(" dan ")} belum tersambung` : "Kamera dan printer siap",
     missing.length ? "Tombol tes hanya aktif setelah perangkat benar-benar terdeteksi." : "Perangkat dapat diuji sebelum photobox digunakan.",
-    missing.length ? { view: "agent", label: "Periksa Agent" } : null,
+    missing.length ? { view: "agent", label: "Periksa mesin" } : null,
   );
   if (state.cameraPreviewEnabled && !devices.some(device => device.kind === "camera" && device.status === "connected")) stopCameraPreview("Kamera terputus. Sambungkan kamera lalu nyalakan preview kembali.");
 }
@@ -1650,7 +1650,7 @@ async function pickStorageFolder() {
     return;
   }
   button.disabled = true;
-  toast("Dialog folder dibuka di komputer Agent…");
+  toast("Dialog folder dibuka di komputer photobox…");
   try {
     const result = await api("/api/storage/pick-folder", { method: "POST", body: "{}", timeoutMs: 305_000 });
     const input = $("#storage-local-path");
@@ -1970,7 +1970,6 @@ function bindEvents() {
   $("#print-general-vouchers").addEventListener("click", () => printVouchers());
   $("#create-voucher-event").addEventListener("click", () => { $("#voucher-event-form").reset(); $("#voucher-event-print").checked = true; $("#voucher-event-dialog").showModal(); });
   $("#submit-voucher-event").addEventListener("click", event => { event.preventDefault(); createVoucherEvent(); });
-  $("#agent-pair-form").addEventListener("submit", claimAgent);
   $("#refresh-agent").addEventListener("click", () => loadAgentStatus(true));
   $("#refresh-agent-queues").addEventListener("click", () => loadAgentStatus(true));
   $("#refresh-session-recovery").addEventListener("click", () => loadAgentStatus(true));

@@ -137,3 +137,43 @@ export async function requestPostgresSessionDeletion(boothCodeInput, shareCodeIn
   const session = safeSession(result.payload);
   return session ? { ...result, session } : { ok: false, skipped: false, status: 503, reason: "Snapshot permintaan hapus PostgreSQL tidak valid" };
 }
+
+export async function reconcilePostgresSessions(boothCodeInput, machineIdInput, records = [], options = {}) {
+  const boothCode = clean(boothCodeInput, 64).toLowerCase();
+  const machineId = clean(machineIdInput, 160);
+  if (!boothPattern.test(boothCode) || machineId.length < 8) throw new Error("Identitas rekonsiliasi PostgreSQL tidak valid");
+  if (!Array.isArray(records) || records.length > 500) throw new Error("Batch rekonsiliasi PostgreSQL tidak valid");
+  const sessions = records.map(record => safeSession({
+    ...record,
+    boothCode,
+    machineId,
+    status: clean(record?.status || "active", 20),
+    createdAt: record?.createdAt,
+    expiresAt: record?.expiresAt,
+    updatedAt: record?.updatedAt || record?.completedAt || record?.createdAt,
+  })).filter(Boolean).map(record => ({
+    localSessionId: record.localSessionId,
+    shareCode: record.shareCode,
+    status: record.status,
+    frameId: record.frameId,
+    photoSlots: record.photoSlots,
+    files: record.files,
+    createdAt: record.createdAt,
+    completedAt: record.completedAt,
+    expiresAt: record.expiresAt,
+    updatedAt: record.updatedAt,
+  }));
+  if (sessions.length !== records.length) throw new Error("Satu atau lebih metadata rekonsiliasi tidak valid");
+  const result = await sessionRpc("photoslive_reconcile_photo_sessions", {
+    p_booth_code: boothCode,
+    p_machine_id: machineId,
+    p_sessions: sessions,
+  }, `${boothCode}:reconcile:${sessions.length}`, options);
+  if (!result.ok || result.skipped) return result;
+  const payload = result.payload && typeof result.payload === "object" ? result.payload : {};
+  return {
+    ...result,
+    updated: Math.max(0, Number(payload.updated || 0)),
+    reconciledAt: clean(payload.reconciledAt, 64) || null,
+  };
+}

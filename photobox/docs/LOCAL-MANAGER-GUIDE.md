@@ -5,7 +5,7 @@ hanya bind ke loopback dan tidak boleh dipublikasikan ke internet.
 
 ## Status
 
-Pastikan Controller, Agent, internet, pairing, kamera, printer, folder foto,
+Pastikan Controller, Agent, internet, status registrasi, kamera, printer, folder foto,
 disk, RAM, version, uptime, sync queue, dan print queue memiliki status nyata.
 **Siap** berarti health check lulus; **Perlu diperiksa** dan **Tidak
 tersambung** selalu disertai tindakan.
@@ -20,6 +20,8 @@ tersambung** selalu disertai tindakan.
   cadangan.
 - **Tes perangkat/Pilih folder** memanggil API lokal nyata.
 - **Diagnosis/Lihat log** menghasilkan laporan bounded yang menyensor secret.
+- **Jalankan ulang wizard** membuat identitas registrasi satu kali di belakang
+  layar dan langsung membuka setup; operator tidak menyalin atau mengetik kode.
 - **Hard stop** hanya ada di Advanced dan membutuhkan konfirmasi.
 
 Jika GUI ditutup, service tetap berjalan. Jika service mati, supervisor OS akan

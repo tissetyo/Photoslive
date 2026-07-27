@@ -32,17 +32,17 @@ test("technician installers supervise both Controller and Agent", async () => {
   assert.match(windows, /requirements-controller\.txt/);
 });
 
-test("all operator installers create a setup code and open prefilled setup", async () => {
+test("all operator installers create and open a secure setup link", async () => {
   const scripts = await Promise.all([
     download("install-linux.sh"),
     download("install-macos.sh"),
     download("install-windows.ps1"),
   ]);
   for (const script of scripts) {
-    assert.match(script, /--setup-code --open-setup/);
+    assert.match(script, /--setup-link --open-setup/);
     assert.ok(
-      script.indexOf("--setup-code --open-setup") < script.indexOf("--status"),
-      "status must be printed after setup-code so stale heartbeat errors do not hide a successful pairing code",
+      script.indexOf("--setup-link --open-setup") < script.indexOf("--status"),
+      "status must be printed after setup-link creation so stale heartbeat errors do not hide a successful onboarding link",
     );
   }
 });

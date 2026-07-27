@@ -18,8 +18,19 @@ test("public status exposes only bounded component states without backend detail
     }),
   });
   assert.equal(result.overall, "outage");
-  assert.deepEqual(result.components.map(component => component.id), ["cloud-api", "configuration", "customer-assets"]);
+  assert.deepEqual(result.components.map(component => component.id), ["cloud-api", "configuration", "customer-assets", "realtime-cache"]);
   assert.doesNotMatch(JSON.stringify(result), /private-provider|do-not-expose|latencyMs|database/);
+});
+
+test("public status treats exhausted cache as limited realtime when PostgreSQL is healthy", () => {
+  const projected = publicStatusProjection({
+    cache: { state: "error", message: "ERR max requests limit exceeded" },
+    database: { state: "ready", message: "Koneksi database berhasil" },
+    providers: [{ kind: "storage", label: "Object storage", state: "ready" }],
+  }, "2026-07-21T00:00:00.000Z");
+  assert.equal(projected.overall, "degraded");
+  assert.equal(projected.components.find(component => component.id === "configuration")?.state, "operational");
+  assert.equal(projected.components.find(component => component.id === "realtime-cache")?.state, "limited");
 });
 
 test("public status UI has real loading, success, error, timeout, disabled, and retry behavior", () => {

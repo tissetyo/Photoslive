@@ -2,6 +2,7 @@ const $ = selector => document.querySelector(selector);
 
 const onboarding = {
   step: 1,
+  setupToken: "",
   machine: null,
   booth: null,
   devices: [],
@@ -17,6 +18,7 @@ const onboarding = {
 let deferredTabletInstallPrompt = null;
 
 const SETUP_DRAFT_KEY = "photoslive.setupDraft.v2";
+const SETUP_SESSION_TOKEN_KEY = "photoslive.setupSessionToken";
 
 function readSetupDraft() {
   try {
@@ -33,7 +35,6 @@ function persistSetupDraft() {
   const draft = {
     version: 2,
     step: onboarding.step,
-    pairingCode: $("#pairing-code")?.value.trim() || "",
     boothName: $("#booth-name")?.value.trim() || "",
     boothLocation: $("#booth-location")?.value.trim() || "",
     ownerEmail: $("#owner-email")?.value.trim() || "",
@@ -64,7 +65,7 @@ function clearSetupDraft() {
 }
 
 const setupSteps = [
-  ["Hubungkan mesin", "Masukkan kode Agent."],
+  ["Periksa Photoslive", "Mesin dikenali otomatis. Tidak ada kode yang perlu diketik."],
   ["Identitas mesin", "Nama dan lokasi."],
   ["Akses admin", "Email dan PIN."],
   ["Perangkat", "Pilih dan tes."],
@@ -77,21 +78,30 @@ let localPinCapability = null;
 let selectedLoginMethod = "password";
 
 async function localAuthRequest(path, options = {}) {
-  const controllerOrigin = ["127.0.0.1", "localhost", "::1"].includes(location.hostname) ? location.origin : LOCAL_CONTROLLER_ORIGIN;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1_500);
-  try {
-    const response = await fetch(`${controllerOrigin}${path}`, {
-      cache: "no-store",
-      mode: "cors",
-      ...options,
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "Local Controller tidak merespons");
-    return result;
-  } finally { clearTimeout(timer); }
+  const origins = [...new Set([location.origin, LOCAL_CONTROLLER_ORIGIN, "http://localhost:8080"])];
+  let lastError = new Error("Local Controller tidak ditemukan");
+  for (const controllerOrigin of origins) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1_200);
+    try {
+      const response = await fetch(`${controllerOrigin}${path}`, {
+        cache: "no-store",
+        mode: "cors",
+        ...options,
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Local Controller tidak merespons");
+      localStorage.setItem("photoslive.controllerOrigin", controllerOrigin);
+      return result;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError;
 }
 
 async function detectLocalPinLogin() {
@@ -735,9 +745,9 @@ window.addEventListener("beforeinstallprompt", event => {
 });
 window.addEventListener("appinstalled", () => refreshTabletCapabilities("Photoslive berhasil di-install."));
 const setupCommands = {
-  windows: { label: 'Windows PowerShell', installCommand: 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', setupCommand: 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-windows.ps1', downloadName: 'install-photoslive-windows.ps1', downloadLabel: 'Ambil installer Windows', icon: 'windows' },
-  macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Ambil installer macOS', icon: 'apple' },
-  linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Ambil installer Linux', icon: 'linux' },
+  windows: { label: 'Windows PowerShell', installCommand: 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', setupCommand: 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-link --open-setup', downloadUrl: '/downloads/install-windows.ps1', downloadName: 'install-photoslive-windows.ps1', downloadLabel: 'Ambil installer Windows', icon: 'windows' },
+  macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-link --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Ambil installer macOS', icon: 'apple' },
+  linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-link --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Ambil installer Linux', icon: 'linux' },
 };
 function detectedOperatingSystem() {
   const platform = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
@@ -812,24 +822,50 @@ async function copyCommand(sourceSelector, buttonSelector, successMessage) {
   }
 }
 $("#copy-install-command").addEventListener("click", () => copyCommand("#install-command", "#copy-install-command", "Perintah instalasi berhasil disalin. Tempel dan jalankan di Terminal."));
-$("#copy-setup-command").addEventListener("click", () => copyCommand("#setup-code-command", "#copy-setup-command", "Perintah kode baru berhasil disalin."));
+$("#copy-setup-command").addEventListener("click", () => copyCommand("#setup-code-command", "#copy-setup-command", "Perintah untuk membuka wizard berhasil disalin."));
+
+function renderSetupLinkState(state, title, copy) {
+  const panel = $("#setup-auto-link");
+  panel.classList.toggle("is-loading", state === "loading");
+  panel.classList.toggle("is-success", state === "success");
+  panel.classList.toggle("is-error", state === "error");
+  $("#setup-auto-title").textContent = title;
+  $("#setup-auto-copy").textContent = copy;
+  $("#retry-setup-link").classList.toggle("hidden", state !== "error" || !onboarding.setupToken);
+}
+
+async function validateSetupLink(token, triggerButton = null) {
+  const normalized = String(token || "").trim().toUpperCase();
+  if (!normalized) {
+    renderSetupLinkState("idle", "Siapkan Photoslive di mesin ini", "Install Photoslive satu kali. Sesudah selesai, wizard ini terbuka dan mengenali mesin secara otomatis.");
+    return false;
+  }
+  onboarding.setupToken = normalized;
+  sessionStorage.setItem(SETUP_SESSION_TOKEN_KEY, normalized);
+  $("#setup-token").value = normalized;
+  setButtonBusy(triggerButton, true, "Menghubungkan…");
+  renderSetupLinkState("loading", "Memeriksa instalasi…", "Identitas instalasi diverifikasi satu kali tanpa polling berulang.");
+  try {
+    const result = await api("validate_setup", { method: "POST", body: JSON.stringify({ setupToken: normalized }) });
+    onboarding.machine = result.machine;
+    $("#booth-name").value = result.machine.name === "Photoslive Booth" ? "" : result.machine.name;
+    $("#booth-location").value = result.machine.location || "";
+    renderSetupLinkState("success", "Photoslive siap", "Lanjutkan dengan memberi nama photobox.");
+    setSetupStep(2);
+    return true;
+  } catch (error) {
+    renderSetupLinkState("error", "Tautan tidak dapat dipakai", error.message);
+    status(error.message);
+    return false;
+  } finally {
+    setButtonBusy(triggerButton, false);
+  }
+}
 
 $("#setup-form").addEventListener("submit", async event => {
   event.preventDefault();
   if (onboarding.step === 1) {
-    const input = $("#pairing-code");
-    if (!input.reportValidity()) return;
-    const submit = event.submitter;
-    setButtonBusy(submit, true, "Memeriksa…");
-    status("Memeriksa kode setup…");
-    try {
-      const result = await api("validate_setup", { method: "POST", body: JSON.stringify({ pairingCode: input.value }) });
-      onboarding.machine = result.machine;
-      $("#booth-name").value = result.machine.name === "Photoslive Booth" ? "" : result.machine.name;
-      $("#booth-location").value = result.machine.location || "";
-      setSetupStep(2);
-    } catch (error) { status(error.message); }
-    finally { setButtonBusy(submit, false); }
+    await validateSetupLink(onboarding.setupToken, event.submitter);
     return;
   }
   if (onboarding.step === 2) {
@@ -846,7 +882,7 @@ $("#setup-form").addEventListener("submit", async event => {
     status("Membuat photobox dan akun pemilik…");
     try {
       const body = {
-        pairingCode: $("#pairing-code").value,
+        setupToken: onboarding.setupToken,
         name: $("#booth-name").value,
         location: $("#booth-location").value,
         email: $("#owner-email").value,
@@ -856,9 +892,9 @@ $("#setup-form").addEventListener("submit", async event => {
       const result = await api("setup", { method: "POST", body: JSON.stringify(body) });
       onboarding.booth = result.booth;
       onboarding.machine = { ...onboarding.machine, id: result.booth.machineId };
+      sessionStorage.removeItem(SETUP_SESSION_TOKEN_KEY);
       localStorage.setItem("photoslive.machineId", result.booth.machineId);
       localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
-      localStorage.setItem(`photoslive.boothAlias.${$("#pairing-code").value.trim().toLowerCase()}`, result.booth.boothCode);
       setSetupStep(4);
       refreshOnboardingDevices();
     } catch (error) { status(error.message); }
@@ -1089,15 +1125,17 @@ $("#forgot-form").addEventListener("submit", async event => {
   } catch (error) { status(error.message); }
 });
 
-function restoreSetupDraft(preferredCode = "") {
+function restoreSetupDraft(preferredToken = "") {
   const draft = readSetupDraft();
   if (!draft || draft.version !== 2 || Date.now() - Number(draft.updatedAt || 0) > 7 * 86_400_000) {
     clearSetupDraft();
-    $("#pairing-code").value = preferredCode;
+    onboarding.setupToken = preferredToken;
+    $("#setup-token").value = preferredToken;
     setSetupStep(1);
     return false;
   }
-  $("#pairing-code").value = preferredCode || draft.pairingCode || "";
+  onboarding.setupToken = preferredToken;
+  $("#setup-token").value = preferredToken;
   $("#booth-name").value = draft.boothName || "";
   $("#booth-location").value = draft.boothLocation || "";
   $("#owner-email").value = draft.ownerEmail || "";
@@ -1106,6 +1144,7 @@ function restoreSetupDraft(preferredCode = "") {
   onboarding.selectedFrame = ["clean-white", "party-night"].includes(draft.selectedFrame) ? draft.selectedFrame : "clean-white";
   document.querySelectorAll("[data-frame-choice]").forEach(button => button.classList.toggle("active", button.dataset.frameChoice === onboarding.selectedFrame));
   let step = Math.max(1, Math.min(6, Number(draft.step || 1)));
+  if (step >= 2 && step <= 3 && !onboarding.setupToken) step = 1;
   if (step >= 4 && (!onboarding.machine?.id || !onboarding.booth?.boothCode)) step = 1;
   setSetupStep(step);
   if (step === 3) status("Setup dilanjutkan. Masukkan kembali PIN untuk keamanan.", true);
@@ -1120,7 +1159,13 @@ document.querySelectorAll("#setup-form input").forEach(input => {
 });
 
 const params = new URLSearchParams(location.search);
-const setupCodeFromUrl = String(params.get("code") || "").trim().toUpperCase();
+const setupTokenFromUrl = String(
+  params.get("setup")
+  || params.get("token")
+  || params.get("code")
+  || sessionStorage.getItem(SETUP_SESSION_TOKEN_KEY)
+  || "",
+).trim().toUpperCase();
 const rememberedBooth = localStorage.getItem("photoslive.boothCode") || "";
 if (params.get("booth") || rememberedBooth) $("#login-booth").value = params.get("booth") || rememberedBooth;
 loginMethod("password");
@@ -1129,7 +1174,11 @@ const requestedMode = params.get("mode") || "setup";
 if (requestedMode === "setup") {
   const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;
   if (previewStep >= 1 && previewStep <= 6) setSetupStep(previewStep);
-  else restoreSetupDraft(setupCodeFromUrl);
+  else {
+    const resumed = restoreSetupDraft(setupTokenFromUrl);
+    if (!resumed && setupTokenFromUrl) validateSetupLink(setupTokenFromUrl);
+    else if (!setupTokenFromUrl) renderSetupLinkState("idle", "Siapkan Photoslive di mesin ini", "Install Photoslive satu kali. Sesudah selesai, wizard ini terbuka dan mengenali mesin secara otomatis.");
+  }
   mode("setup");
 } else {
   onboarding.step = 1;

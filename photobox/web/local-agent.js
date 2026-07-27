@@ -33,8 +33,7 @@ function renderStatus(status) {
   const agentLabels = { online: "Siap", paused: "Dijeda", offline: "Tidak tersambung" };
   $("#agent-value").textContent = agentLabels[status.agentState] || status.agentState;
   const booth = status.config?.boothCode;
-  const pairing = status.config?.pairingCode;
-  $("#agent-detail").textContent = status.lastError || (booth ? `Booth ${booth}${pairing ? ` · pairing ${pairing}` : ""}` : "Belum dipasangkan");
+  $("#agent-detail").textContent = status.lastError || (booth ? `Booth ${booth}` : "Setup belum selesai");
   $("#cloud-value").textContent = status.cloud?.connected ? "Siap" : "Tidak tersambung";
   $("#cloud-detail").textContent = status.cloud?.lastHeartbeatAt ? `Heartbeat ${new Date(status.cloud.lastHeartbeatAt * 1000).toLocaleTimeString("id-ID")}` : "Belum ada heartbeat cloud";
   const pending = Number(status.sync?.pending || 0) + Number(status.sync?.running || 0);
@@ -418,7 +417,19 @@ $("#rollback-update").addEventListener("click", openRollback);
 $("#rollback-confirmation").addEventListener("input", event => { $("#confirm-rollback").disabled = event.target.value !== "ROLLBACK"; });
 $("#confirm-rollback").addEventListener("click", confirmRollback);
 $("#run-diagnosis").addEventListener("click", async () => { try { const result = await api("/api/local/agent/diagnose", { method: "POST", body: "{}" }); if (result.database?.healthy === false) { toast(`${result.database.message} ${result.database.action || ""}`.trim(), "error"); } else { const devices = Array.isArray(result.devices) ? result.devices : []; const camera = devices.filter(item => item.kind === "camera" && item.status === "connected").length; const printer = devices.filter(item => item.kind === "printer" && item.status === "connected").length; toast(`Diagnosis selesai: ${camera} kamera, ${printer} printer, ${result.sync?.pending || 0} sinkronisasi menunggu`); } await refreshLogs(); } catch (error) { toast(error.message, "error"); } });
-$("#create-setup-code").addEventListener("click", async () => { const button = $("#create-setup-code"); button.disabled = true; try { const result = await api("/api/local/agent/setup-code", { method: "POST", body: "{}" }); await navigator.clipboard?.writeText(result.code).catch(() => {}); toast(`Kode ${result.code} dibuat dan disalin. Buka halaman setup.`); } catch (error) { toast(error.message, "error"); } finally { button.disabled = false; } });
+$("#create-setup-code").addEventListener("click", async () => {
+  const button = $("#create-setup-code");
+  button.disabled = true;
+  try {
+    const result = await api("/api/local/agent/setup-code", { method: "POST", body: "{}" });
+    if (!result.setupUrl) throw new Error("Tautan setup tidak diterima dari Agent");
+    toast("Membuka wizard setup…");
+    location.assign(result.setupUrl);
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+  }
+});
 $("#create-companion-pairing").addEventListener("click", createCompanionPairing);
 $("#revoke-companion").addEventListener("click", revokeCompanionSession);
 $("#copy-companion-link").addEventListener("click", copyCompanionLink);

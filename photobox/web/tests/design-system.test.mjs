@@ -43,8 +43,8 @@ test("admin actions use semantic SVG icons and status combines text, icon or dot
   assert.match(adminHtml, /<img src="\/icons\/camera\.svg"/);
   assert.match(adminHtml, /<img src="\/icons\/printer\.svg"/);
   assert.match(adminHtml, /class="status-led"/);
-  assert.match(adminHtml, /id="agent-overall-state">BELUM TERHUBUNG/);
-  assert.match(adminJs, /agent-overall-state"\)\.textContent = online \? "ONLINE" : "OFFLINE"/);
+  assert.match(adminHtml, /id="agent-overall-state">PERLU SETUP/);
+  assert.match(adminJs, /agent-overall-state"\)\.textContent = online \? "SIAP" : "TIDAK TERSAMBUNG"/);
   assert.match(adminJs, /circle-check\.svg" : "\/icons\/triangle-alert\.svg/);
 });
 

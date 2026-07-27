@@ -11,10 +11,10 @@
 | `/{boothCode}/admin` | Dashboard admin tenant |
 | `/{boothCode}/sesi/{shareCode}` | Galeri publik satu sesi selama maksimal 24 jam |
 
-`boothCode` adalah identifier permanen. Kode pairing/setup tetap sekali pakai dan
-berlaku 15 menit; nilainya boleh menjadi `boothCode` pada setup pertama, tetapi
-setelah diklaim kode pairing dihapus. Karena itu `pairingCode: null` adalah status
-normal pada mesin yang sudah paired.
+`boothCode` adalah identifier permanen. Token setup internal tetap sekali pakai
+dan berlaku 15 menit, tetapi hanya dibawa oleh tautan HTTPS yang dibuka Agent;
+operator tidak melihat atau mengetiknya. Setelah diklaim token dihapus. Karena
+itu `pairingCode: null` adalah status normal pada mesin yang sudah onboarding.
 
 ## Upgrade dan recovery Agent
 
@@ -29,11 +29,11 @@ python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --status
 Untuk mesin lama yang sudah paired tetapi belum mempunyai onboarding akun:
 
 ```bash
-python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code
+python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-link --open-setup
 ```
 
-Perintah menghasilkan kode baru yang berlaku 15 menit tanpa menghapus machine ID,
-token Agent, atau konfigurasi controller.
+Perintah membuka tautan setup baru yang berlaku 15 menit tanpa menghapus machine
+ID, token Agent, atau konfigurasi controller.
 
 ## Model akses
 
@@ -78,8 +78,8 @@ Seluruh pencabutan tercatat sebagai `user.sessions_revoked` pada audit log booth
 
 ## Wizard onboarding mesin baru
 
-1. **Kode setup (wajib):** cloud memvalidasi kode dari Agent tanpa langsung
-   mengklaim atau menghapusnya.
+1. **Tautan setup otomatis (wajib):** cloud memvalidasi token internal dari
+   tautan Agent tanpa langsung mengklaim atau menghapusnya.
 2. **Identitas:** owner mengisi nama photobox; lokasi boleh dikosongkan.
 3. **Akses pemilik (wajib):** owner mengisi email, PIN enam angka, dan konfirmasi
    PIN. Pada tahap ini mesin diklaim dan session owner dibuat.
@@ -95,8 +95,8 @@ Seluruh pencabutan tercatat sebagai `user.sessions_revoked` pada audit log booth
 6. **Siap digunakan:** UI merangkum bagian yang sudah siap dan bagian yang masih
    perlu diselesaikan dari admin.
 
-Kode setup baru dihapus hanya setelah langkah akses pemilik berhasil. Refresh
-pada langkah sebelum klaim tidak boleh menghabiskan kode tersebut.
+Token setup dihapus hanya setelah langkah akses pemilik berhasil. Refresh pada
+langkah sebelum klaim tidak boleh menghabiskan token tersebut.
 
 Kartu wizard tetap di posisi yang sama pada semua langkah. Progres ditampilkan
 sebagai border di sekeliling kartu; hanya orb warna di background yang berpindah.
