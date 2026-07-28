@@ -56,6 +56,11 @@ Start-Sleep -Seconds 3
 Start-ScheduledTask -TaskName "Photoslive Agent"
 Start-Sleep -Seconds 3
 Write-Host "Photoslive Agent diperbarui. Windows akan menjalankannya saat login dan mengulang otomatis setelah gagal."
-& $RuntimePython "$SourceDir\agent.py" --setup-link --open-setup
+$AgentHelp = (& $RuntimePython "$SourceDir\agent.py" --help 2>&1 | Out-String)
+$SetupArgument = if ($AgentHelp -match "--setup-link") { "--setup-link" } else { "--setup-code" }
+if ($SetupArgument -eq "--setup-code") {
+  Write-Host "Paket Agent memakai opsi setup lama; installer akan melanjutkan secara kompatibel."
+}
+& $RuntimePython "$SourceDir\agent.py" $SetupArgument --open-setup
 Write-Host "Status lokal terakhir:"
 try { & $RuntimePython "$SourceDir\agent.py" --status } catch { Write-Warning $_.Exception.Message }

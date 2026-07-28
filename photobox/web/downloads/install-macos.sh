@@ -31,6 +31,11 @@ launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.controller.plis
 launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist"
 sleep 3
 echo "Photoslive Agent diperbarui dan service sudah direstart."
-"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-link --open-setup
+SETUP_ARGUMENT="--setup-link"
+if ! "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --help 2>&1 | grep -q -- "--setup-link"; then
+  SETUP_ARGUMENT="--setup-code"
+  echo "Paket Agent memakai opsi setup lama; installer akan melanjutkan secara kompatibel."
+fi
+"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" "${SETUP_ARGUMENT}" --open-setup
 echo "Status lokal terakhir:"
 "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --status || true
