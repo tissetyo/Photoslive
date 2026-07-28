@@ -5,23 +5,25 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const read = path => readFile(new URL(path, root), "utf8");
 
-test("operator installer opens an opaque 15 minute setup link without manual code entry", async () => {
-  const [setup, platform, bridge, agent] = await Promise.all([
+test("operator installer opens local setup without pairing code or cloud validation", async () => {
+  const [setup, bridge, agent] = await Promise.all([
     read("setup.js"),
-    read("api/platform.mjs"),
     read("api/bridge.mjs"),
     read("../agent.py"),
   ]);
+  assert.match(setup, /IS_LOCAL_SETUP/);
+  assert.match(setup, /\/api\/local\/setup\/bootstrap/);
+  assert.match(setup, /\/api\/local\/setup/);
+  assert.match(setup, /if \(IS_LOCAL_SETUP\) await bootstrapLocalSetup\(\)/);
   assert.match(setup, /params\.get\("setup"\)/);
-  assert.match(setup, /validateSetupLink\(setupTokenFromUrl\)/);
-  assert.match(setup, /sessionStorage\.setItem\(SETUP_SESSION_TOKEN_KEY/);
-  assert.match(setup, /sessionStorage\.removeItem\(SETUP_SESSION_TOKEN_KEY\)/);
   assert.doesNotMatch(setup, /localStorage\.setItem\([^)]*setupToken/);
-  assert.match(platform, /photoslive:pairing:\$\{code\}/);
-  assert.match(bridge, /\{ ex: 900 \}/);
-  assert.match(agent, /urlencode\(\{"setup": setup_token\}\)/);
-  assert.match(agent, /\/setup\?\{query\}/);
-  assert.match(agent, /is_new_registration[\s\S]*config\["setupToken"\]/);
+  assert.match(bridge, /const locallyReady = localSetup\.completed === true/);
+  assert.match(bridge, /const code = pairingCode\(\)/);
+  assert.match(agent, /\/setup\?local=1/);
+  assert.match(agent, /if arguments\.setup_link:[\s\S]*local_setup_url\(config\)/);
+  assert.match(agent, /if not bootstrap\.get\("completed"\):[\s\S]*cloudRegistrationPending/);
+  assert.doesNotMatch(agent, /--setup-code/);
+  assert.doesNotMatch(agent, /request_setup_code/);
 });
 
 test("computer setup exposes every required real onboarding control", async () => {
@@ -101,7 +103,7 @@ test("setup and booth register an API-safe offline PWA shell", async () => {
   assert.match(serviceWorker, /return "\/booth\.html"/);
 });
 
-test("Local Manager opens a secure setup link without exposing a manual code", async () => {
+test("Local Manager opens local setup without exposing or creating a pairing code", async () => {
   const [localManager, localManagerScript, controller] = await Promise.all([
     read("local-agent.html"),
     read("local-agent.js"),
@@ -111,7 +113,8 @@ test("Local Manager opens a secure setup link without exposing a manual code", a
   assert.doesNotMatch(localManager, /Buat kode setup|Kode pairing/);
   assert.match(localManagerScript, /location\.assign\(result\.setupUrl\)/);
   assert.doesNotMatch(localManagerScript, /navigator\.clipboard.*result\.code/);
-  assert.match(controller, /agent\.py"\), "--setup-link"/);
+  assert.match(controller, /setup_url_value = "\/setup\?local=1"/);
+  assert.doesNotMatch(controller, /command_output\(\[sys\.executable,[^\n]*"--setup-link"/);
   assert.match(controller, /"setupUrl": setup_url_value/);
 });
 

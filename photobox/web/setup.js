@@ -19,6 +19,9 @@ let deferredTabletInstallPrompt = null;
 
 const SETUP_DRAFT_KEY = "photoslive.setupDraft.v2";
 const SETUP_SESSION_TOKEN_KEY = "photoslive.setupSessionToken";
+const SETUP_QUERY = new URLSearchParams(location.search);
+const IS_LOCAL_SETUP = ["127.0.0.1", "localhost", "::1"].includes(location.hostname)
+  && (SETUP_QUERY.get("mode") || "setup") === "setup";
 
 function readSetupDraft() {
   try {
@@ -151,6 +154,17 @@ async function bridgeApi(action, payload = {}, method = "POST") {
 }
 
 async function setupCloudData(path, method = "GET", data = {}) {
+  if (IS_LOCAL_SETUP) {
+    const response = await fetch(path, {
+      method,
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: method === "GET" ? undefined : JSON.stringify(data),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Controller lokal gagal menyimpan (${response.status})`);
+    return result;
+  }
   const boothCode = onboarding.booth?.boothCode || localStorage.getItem("photoslive.boothCode") || "";
   if (!boothCode) throw new Error("Photobox belum selesai dibuat");
   const response = await fetch(`/api/platform?action=cloud_data&booth=${encodeURIComponent(boothCode)}&path=${encodeURIComponent(path)}`, {
@@ -164,6 +178,26 @@ async function setupCloudData(path, method = "GET", data = {}) {
 }
 
 async function controllerRequest(path, method = "GET", body = null, options = {}) {
+  if (IS_LOCAL_SETUP) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Number(options.timeoutMs || 35_000));
+    try {
+      const response = await fetch(path, {
+        method,
+        cache: "no-store",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        body: method === "GET" ? undefined : options.bodyBase64
+          ? Uint8Array.from(atob(options.bodyBase64), value => value.charCodeAt(0))
+          : JSON.stringify(body || {}),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `Controller lokal gagal (${response.status})`);
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   if (!onboarding.machine?.id) throw new Error("Mesin belum terhubung");
   const { job } = await bridgeApi("enqueue_job", {
     machineId: onboarding.machine.id,
@@ -369,9 +403,13 @@ async function refreshOnboardingDevices(requestBrowserPermission = false) {
   message.textContent = "Mencari perangkat…";
   const browserCameraPromise = browserCameras(requestBrowserPermission).catch(error => ({ error }));
   try {
-    const { machine } = await bridgeApi("machine_status", { machineId: onboarding.machine.id }, "GET");
-    onboarding.machine = { ...onboarding.machine, ...machine };
-    if (!machine?.online) throw new Error("Agent offline");
+    let machine = onboarding.machine || {};
+    if (!IS_LOCAL_SETUP) {
+      const result = await bridgeApi("machine_status", { machineId: onboarding.machine.id }, "GET");
+      machine = result.machine || machine;
+      onboarding.machine = { ...onboarding.machine, ...machine };
+      if (!machine?.online) throw new Error("Agent offline");
+    }
     const [refreshed, storage] = await Promise.all([
       controllerRequest("/api/devices/refresh", "POST"),
       controllerRequest("/api/storage/overview", "GET").catch(() => null),
@@ -394,6 +432,36 @@ async function refreshOnboardingDevices(requestBrowserPermission = false) {
     renderDevicePicker("camera", connectedDevices("camera"));
     renderDevicePicker("printer", []);
     message.textContent = connectedDevices("camera").length ? `Webcam browser terdeteksi. ${error.message}.` : `${error.message}. Periksa Agent atau izin kamera browser.`;
+  }
+}
+
+async function bootstrapLocalSetup() {
+  renderSetupLinkState("loading", "Membuka setup lokal…", "Controller menyiapkan data mesin. Tidak ada pairing code.");
+  try {
+    const result = await controllerRequest("/api/local/setup/bootstrap", "GET");
+    onboarding.machine = result.machine || null;
+    onboarding.booth = result.booth || null;
+    if (result.machine) {
+      $("#booth-name").value = result.booth?.name || result.machine.name || "";
+      $("#booth-location").value = result.booth?.location || result.machine.location || "";
+      renderMachineSummary(result.machine);
+    }
+    if (result.booth?.boothCode) {
+      localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
+      localStorage.setItem("photoslive.machineId", result.booth.machineId || result.machine?.id || "");
+    }
+    const draft = readSetupDraft();
+    if (draft?.ownerEmail) $("#owner-email").value = draft.ownerEmail;
+    renderSetupLinkState("success", "Controller lokal siap", result.completed
+      ? "Identitas photobox sudah tersimpan. Lanjutkan pemeriksaan perangkat."
+      : "Beri nama photobox untuk memulai.");
+    setSetupStep(result.completed ? Math.max(4, Math.min(6, Number(draft?.step || 4))) : 2);
+    if (onboarding.step === 4) refreshOnboardingDevices().catch(() => {});
+    return true;
+  } catch (error) {
+    renderSetupLinkState("error", "Controller lokal belum siap", `${error.message}. Pastikan Photoslive Controller aktif.`);
+    setSetupStep(1);
+    return false;
   }
 }
 
@@ -456,6 +524,19 @@ async function setupFileSha256(file) {
 }
 
 async function setupUploadAsset(file, kind, knownSettings = null) {
+  if (IS_LOCAL_SETUP) {
+    const response = await fetch(`/api/assets/${encodeURIComponent(kind)}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "X-Filename": file.name,
+      },
+      body: file,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Upload aset lokal gagal (${response.status})`);
+    return result;
+  }
   const settings = knownSettings || await setupCloudData("/api/settings", "GET");
   if (settings.capabilities?.cloudStorage?.available && settings.featureFlags?.direct_object_upload?.enabled !== false) {
     try {
@@ -600,7 +681,11 @@ async function saveStarterFrame() {
       }),
       setupCloudData("/api/settings/booth", "PATCH", { name: $("#booth-name").value.trim(), photoSlotsPerSession: design.slots }),
     ]);
-    message.textContent = onboarding.machine?.online ? "Frame siap dan akan disinkronkan ke Agent." : "Frame tersimpan di cloud dan akan disinkronkan saat Agent online.";
+    message.textContent = IS_LOCAL_SETUP
+      ? "Frame tersimpan di komputer ini. Sinkronisasi cloud berjalan terpisah."
+      : onboarding.machine?.online
+        ? "Frame siap dan akan disinkronkan ke Agent."
+        : "Frame tersimpan di cloud dan akan disinkronkan saat Agent online.";
     setSetupStep(6);
     renderReadyChecklist();
   } catch (error) {
@@ -613,7 +698,7 @@ function renderReadyChecklist() {
   const hasPrinter = connectedDevices("printer").length > 0;
   const items = [
     [true, "Akun pemilik", $("#owner-email").value],
-    [Boolean(onboarding.machine?.online), "Photoslive Agent", onboarding.machine?.online ? "Online" : "Perlu dinyalakan"],
+    [IS_LOCAL_SETUP || Boolean(onboarding.machine?.online), IS_LOCAL_SETUP ? "Controller lokal" : "Photoslive Agent", IS_LOCAL_SETUP ? "Siap" : onboarding.machine?.online ? "Online" : "Perlu dinyalakan"],
     [hasCamera, "Kamera", hasCamera ? "Terdeteksi" : "Atur nanti di admin"],
     [hasPrinter, "Printer", hasPrinter ? "Terdeteksi" : "Atur nanti di admin"],
     [true, "Frame awal", onboarding.frameFile ? onboarding.frameFile.name : onboarding.selectedFrame === "party-night" ? "Party night" : "Clean white"],
@@ -865,7 +950,8 @@ async function validateSetupLink(token, triggerButton = null) {
 $("#setup-form").addEventListener("submit", async event => {
   event.preventDefault();
   if (onboarding.step === 1) {
-    await validateSetupLink(onboarding.setupToken, event.submitter);
+    if (IS_LOCAL_SETUP) await bootstrapLocalSetup();
+    else await validateSetupLink(onboarding.setupToken, event.submitter);
     return;
   }
   if (onboarding.step === 2) {
@@ -882,18 +968,20 @@ $("#setup-form").addEventListener("submit", async event => {
     status("Membuat photobox dan akun pemilik…");
     try {
       const body = {
-        setupToken: onboarding.setupToken,
+        ...(IS_LOCAL_SETUP ? {} : { setupToken: onboarding.setupToken }),
         name: $("#booth-name").value,
         location: $("#booth-location").value,
         email: $("#owner-email").value,
         pin: $("#owner-pin").value,
         confirmPin: $("#owner-pin-confirm").value,
       };
-      const result = await api("setup", { method: "POST", body: JSON.stringify(body) });
+      const result = IS_LOCAL_SETUP
+        ? await controllerRequest("/api/local/setup", "POST", body)
+        : await api("setup", { method: "POST", body: JSON.stringify(body) });
       onboarding.booth = result.booth;
-      onboarding.machine = { ...onboarding.machine, id: result.booth.machineId };
+      onboarding.machine = { ...onboarding.machine, id: result.booth.machineId || onboarding.machine?.id };
       sessionStorage.removeItem(SETUP_SESSION_TOKEN_KEY);
-      localStorage.setItem("photoslive.machineId", result.booth.machineId);
+      localStorage.setItem("photoslive.machineId", result.booth.machineId || onboarding.machine?.id || "");
       localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
       setSetupStep(4);
       refreshOnboardingDevices();
@@ -937,9 +1025,11 @@ $("#save-device-onboarding").addEventListener("click", async () => {
       setupCloudData("/api/settings/devices", "PATCH", devices),
       setupCloudData("/api/settings/storage", "PATCH", { localPhotoPath }),
     ]);
-    $("#device-onboarding-status").textContent = onboarding.machine?.online
-      ? "Tersimpan. Agent akan menerapkan pilihan di background."
-      : "Tersimpan di cloud. Agent akan menerapkannya saat online.";
+    $("#device-onboarding-status").textContent = IS_LOCAL_SETUP
+      ? "Tersimpan di komputer ini."
+      : onboarding.machine?.online
+        ? "Tersimpan. Agent akan menerapkan pilihan di background."
+        : "Tersimpan di cloud. Agent akan menerapkannya saat online.";
     setSetupStep(5);
   } catch (error) {
     $("#device-onboarding-status").textContent = error.message;
@@ -1144,8 +1234,8 @@ function restoreSetupDraft(preferredToken = "") {
   onboarding.selectedFrame = ["clean-white", "party-night"].includes(draft.selectedFrame) ? draft.selectedFrame : "clean-white";
   document.querySelectorAll("[data-frame-choice]").forEach(button => button.classList.toggle("active", button.dataset.frameChoice === onboarding.selectedFrame));
   let step = Math.max(1, Math.min(6, Number(draft.step || 1)));
-  if (step >= 2 && step <= 3 && !onboarding.setupToken) step = 1;
-  if (step >= 4 && (!onboarding.machine?.id || !onboarding.booth?.boothCode)) step = 1;
+  if (!IS_LOCAL_SETUP && step >= 2 && step <= 3 && !onboarding.setupToken) step = 1;
+  if (!IS_LOCAL_SETUP && step >= 4 && (!onboarding.machine?.id || !onboarding.booth?.boothCode)) step = 1;
   setSetupStep(step);
   if (step === 3) status("Setup dilanjutkan. Masukkan kembali PIN untuk keamanan.", true);
   else if (step > 1) status("Setup dilanjutkan dari langkah terakhir.", true);
@@ -1173,13 +1263,14 @@ detectLocalPinLogin();
 const requestedMode = params.get("mode") || "setup";
 if (requestedMode === "setup") {
   const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;
+  mode("setup");
   if (previewStep >= 1 && previewStep <= 6) setSetupStep(previewStep);
+  else if (IS_LOCAL_SETUP) bootstrapLocalSetup();
   else {
     const resumed = restoreSetupDraft(setupTokenFromUrl);
     if (!resumed && setupTokenFromUrl) validateSetupLink(setupTokenFromUrl);
     else if (!setupTokenFromUrl) renderSetupLinkState("idle", "Siapkan Photoslive di mesin ini", "Install Photoslive satu kali. Sesudah selesai, wizard ini terbuka dan mengenali mesin secara otomatis.");
   }
-  mode("setup");
 } else {
   onboarding.step = 1;
   mode(requestedMode);

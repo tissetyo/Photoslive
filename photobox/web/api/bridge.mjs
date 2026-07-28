@@ -6,6 +6,7 @@ import {
   jobKey,
   machineKey,
   now,
+  pairingCode,
   setupToken,
   queueKey,
   randomId,
@@ -509,18 +510,31 @@ async function createPairing(redis, payload) {
   const postgresStatus = postgresMachineStatus();
   const machineId = randomId("machine");
   const agentToken = payload.agentToken || randomId("agent");
-  const code = setupToken();
+  const localSetup = payload.localSetup && typeof payload.localSetup === "object" ? payload.localSetup : {};
+  const locallyReady = localSetup.completed === true;
+  const preferredBoothCode = String(payload.boothCode || localSetup.boothCode || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 63);
+  // The machine registry still keeps a short recovery code for legacy Agents,
+  // but operator onboarding no longer depends on it. Keep the value compatible
+  // with the PostgreSQL 4-4 constraint so background registration cannot fail.
+  const code = pairingCode();
   const createdAt = now();
   const agentTokenHash = await sha256(agentToken);
   const machine = {
     id: machineId,
     name: String(payload.name || "Photoslive Booth").slice(0, 80),
+    location: String(payload.location || "").slice(0, 120),
     platform: String(payload.platform || "Unknown").slice(0, 120),
     agentVersion: String(payload.agentVersion || "dev").slice(0, 40),
-    status: "waiting_pairing",
-    paired: false,
+    status: locallyReady ? "offline" : "waiting_pairing",
+    paired: locallyReady,
     pairingCode: code,
-    boothCode: `pl-${machineId.replace(/^machine_/, "").slice(0, 8).toLowerCase()}`,
+    boothCode: /^[a-z0-9][a-z0-9-]{2,62}$/.test(preferredBoothCode)
+      ? preferredBoothCode
+      : `pl-${machineId.replace(/^machine_/, "").slice(0, 8).toLowerCase()}`,
     pairingExpiresAt: new Date(Date.now() + 900_000).toISOString(),
     agentTokenHash,
     createdAt,
@@ -532,6 +546,7 @@ async function createPairing(redis, payload) {
     desiredState: "running",
     update: { status: "idle" },
     commandKey: randomId("command"),
+    pairedAt: locallyReady ? createdAt : null,
   };
   if (postgresStatus.primary) {
     const persisted = await persistPostgresMachine(machine);
@@ -540,6 +555,7 @@ async function createPairing(redis, payload) {
   await bestEffortRedis(async () => {
     await redis.set(machineKey(machineId), machine);
     await redis.set(`photoslive:pairing:${code}`, machineId, { ex: 900 });
+    if (locallyReady) await redis.set(boothKey(machine.boothCode), machineId);
   });
   if (postgresStatus.mode === "dual") await persistPostgresMachine(machine);
   return {
@@ -550,6 +566,8 @@ async function createPairing(redis, payload) {
     // Temporary compatibility for Agent versions older than 0.10.
     pairingCode: code,
     expiresInSeconds: 900,
+    boothCode: machine.boothCode,
+    paired: machine.paired,
   };
 }
 

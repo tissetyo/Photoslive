@@ -467,6 +467,126 @@ def public_agent_config() -> dict[str, Any]:
     }
 
 
+def local_setup_identity() -> dict[str, Any]:
+    try:
+        value = get_local_state("booth_identity", {})
+    except (OSError, sqlite3.DatabaseError):
+        # Local Manager and recovery screens must stay readable even when the
+        # SQLite file needs repair.
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def local_setup_bootstrap() -> dict[str, Any]:
+    config = read_json_file(AGENT_CONFIG_PATH, {})
+    identity = local_setup_identity()
+    machine_id = str(config.get("machineId") or identity.get("machineId") or "").strip()
+    return {
+        "local": True,
+        "completed": bool(identity.get("completed")),
+        "machine": {
+            "id": machine_id or f"local-{installation_token()[:12]}",
+            "name": str(identity.get("name") or config.get("name") or socket.gethostname() or "Photoslive Booth")[:80],
+            "location": str(identity.get("location") or "")[:120],
+            "platform": platform.platform()[:160],
+            "agentVersion": str(read_json_file(AGENT_STATUS_PATH, {}).get("version") or "")[:40],
+            "online": bool(read_json_file(AGENT_STATUS_PATH, {}).get("updatedAt")),
+            "telemetry": {
+                "memory": memory_metrics(),
+                "disk": disk_metrics(),
+            },
+            "devices": [asdict(device) for device in detect_devices()],
+        },
+        "booth": {
+            "boothCode": str(identity.get("boothCode") or config.get("boothCode") or "").strip().lower() or None,
+            "machineId": machine_id or None,
+            "name": str(identity.get("name") or "")[:80] or None,
+            "location": str(identity.get("location") or "")[:120],
+        } if identity.get("completed") else None,
+        "cloud": {
+            "registered": bool(config.get("cloudRegistered") or (config.get("machineId") and config.get("agentToken"))),
+            "syncPending": bool(identity.get("completed") and not config.get("cloudRegistered")),
+        },
+    }
+
+
+def _local_booth_code(name: str, current: str = "") -> str:
+    existing = re.sub(r"[^a-z0-9-]", "", str(current or "").strip().lower())[:63]
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{2,62}", existing):
+        return existing
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:46] or "photoslive"
+    suffix = hashlib.sha256(installation_token().encode("utf-8")).hexdigest()[:8]
+    return f"{slug}-{suffix}"[:63]
+
+
+def _hash_local_pin(pin: str) -> dict[str, Any]:
+    salt = secrets.token_bytes(16)
+    iterations = 210_000
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt, iterations)
+    return {
+        "algorithm": "pbkdf2-sha256",
+        "iterations": iterations,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "digest": base64.b64encode(digest).decode("ascii"),
+    }
+
+
+def complete_local_setup(payload: dict[str, Any]) -> dict[str, Any]:
+    name = re.sub(r"\s+", " ", str(payload.get("name") or "").strip())[:80]
+    location = re.sub(r"\s+", " ", str(payload.get("location") or "").strip())[:120]
+    email = str(payload.get("email") or "").strip().lower()[:254]
+    pin = str(payload.get("pin") or "")
+    confirm_pin = str(payload.get("confirmPin") or "")
+    if len(name) < 2:
+        raise ValueError("Nama photobox minimal 2 karakter")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("Email pemilik tidak valid")
+    if not re.fullmatch(r"\d{6}", pin):
+        raise ValueError("PIN admin harus 6 angka")
+    if not hmac.compare_digest(pin, confirm_pin):
+        raise ValueError("Konfirmasi PIN belum sama")
+
+    config = read_json_file(AGENT_CONFIG_PATH, {})
+    machine_id = str(config.get("machineId") or "").strip()
+    booth_code = _local_booth_code(name, str(config.get("boothCode") or ""))
+    identity = {
+        "version": 1,
+        "completed": True,
+        "boothCode": booth_code,
+        "name": name,
+        "location": location,
+        "ownerEmail": email,
+        "pin": _hash_local_pin(pin),
+        "updatedAt": utc_now(),
+    }
+    if machine_id:
+        identity["machineId"] = machine_id
+    set_local_state("booth_identity", identity)
+    save_settings({"booth": {"name": name, "location": location}})
+    config.update({
+        "name": name,
+        "boothCode": booth_code,
+        "localSetupComplete": True,
+        "localSetupUpdatedAt": identity["updatedAt"],
+    })
+    write_json_file_atomic(AGENT_CONFIG_PATH, config)
+    try:
+        AGENT_CONFIG_PATH.chmod(0o600)
+    except OSError:
+        pass
+    add_event("setup", "Onboarding lokal selesai; sinkronisasi cloud berjalan terpisah")
+    return {
+        "local": True,
+        "cloudSyncPending": not bool(config.get("cloudRegistered")),
+        "booth": {
+            "boothCode": booth_code,
+            "machineId": machine_id or None,
+            "name": name,
+            "location": location,
+        },
+    }
+
+
 def companion_token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -1176,6 +1296,10 @@ def local_agent_status() -> dict[str, Any]:
         },
         "devices": devices,
         "storagePath": storage_path,
+        "localSetup": {
+            key: value for key, value in local_setup_identity().items()
+            if key in {"completed", "machineId", "boothCode", "name", "location", "updatedAt"}
+        },
         # Updater state belongs to the Controller. Agent heartbeat snapshots
         # must not overwrite an update or rollback currently in progress.
         "update": release_updater.update_status(DATA_ROOT, SERVICE_VERSION),
@@ -3995,15 +4119,9 @@ def start_update_task(action: str) -> dict[str, Any]:
 
 
 def create_agent_setup_code() -> dict[str, Any]:
-    ok, output = command_output([sys.executable, str(ROOT / "agent.py"), "--setup-link"], timeout=25)
-    if not ok:
-        raise ValueError(output or "Tautan setup gagal dibuat. Pastikan Agent terhubung ke internet.")
-    match = re.search(r"\bBuka\s+(https?://\S+/setup\?setup=[A-Z0-9]+)", output)
-    if not match:
-        raise ValueError("Agent tidak mengembalikan tautan setup")
-    setup_url_value = match.group(1)
-    add_event("agent", "Tautan setup aman dibuat dari Local Manager")
-    return {"expiresInSeconds": 900, "setupUrl": setup_url_value}
+    setup_url_value = "/setup?local=1"
+    add_event("agent", "Wizard setup lokal dibuka dari Local Manager")
+    return {"expiresInSeconds": None, "setupUrl": setup_url_value, "local": True}
 
 
 def system_status() -> dict[str, Any]:
@@ -4254,6 +4372,10 @@ class ApiHandler(SimpleHTTPRequestHandler):
             return self.send_json({"status": "ok", "time": utc_now(), "version": SERVICE_VERSION})
         if path == "/api/local/installation":
             return self.send_json({"token": installation_token()})
+        if path == "/api/local/setup/bootstrap":
+            if not self.loopback_request():
+                return self.send_json({"error": "Setup lokal hanya tersedia di komputer photobox"}, HTTPStatus.FORBIDDEN)
+            return self.send_json(local_setup_bootstrap())
         if path == "/api/local/auth/capability":
             headers = self.local_auth_headers()
             if not self.loopback_request() or headers is None:
@@ -4447,6 +4569,13 @@ class ApiHandler(SimpleHTTPRequestHandler):
             }, HTTPStatus.OK, {"Set-Cookie": f"photoslive_test_session={TEST_ADMIN_SESSION_TOKEN}; Path=/; HttpOnly; SameSite=Lax"})
         if path == "/api/platform" and query.get("action", [""])[0] == "logout":
             return self.send_json({"ok": True}, headers={"Set-Cookie": "photoslive_test_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"})
+        if path == "/api/local/setup":
+            if not self.loopback_request():
+                return self.send_json({"error": "Setup lokal hanya tersedia di komputer photobox"}, HTTPStatus.FORBIDDEN)
+            try:
+                return self.send_json(complete_local_setup(self.read_json()), HTTPStatus.CREATED)
+            except (ValueError, json.JSONDecodeError, OSError, sqlite3.DatabaseError) as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         if path == "/api/test/reset-sessions" and os.environ.get("PHOTOSLIVE_TEST_MODE") == "1" and self.loopback_request():
             return self.send_json(reset_e2e_sessions())
         if path == "/api/local/auth/assertion":

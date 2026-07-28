@@ -302,14 +302,101 @@ class LocalFirstTests(unittest.TestCase):
         with sqlite3.connect(server.DB_PATH) as db:
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], server.LOCAL_SCHEMA_VERSION)
 
-    def test_setup_url_is_prefilled_and_browser_open_is_best_effort(self):
-        url = agent.setup_url({"cloud": "https://photoslive.example/"}, "ABCD-1234")
-        self.assertEqual(url, "https://photoslive.example/setup?setup=ABCD-1234")
+    def test_local_setup_url_never_requires_cloud_or_pairing_code(self):
+        url = agent.local_setup_url({"controller": "http://127.0.0.1:8080/"})
+        self.assertEqual(url, "http://127.0.0.1:8080/setup?local=1")
         with mock.patch.object(agent.webbrowser, "open", return_value=True) as opener:
             self.assertTrue(agent.open_setup_page(url))
             opener.assert_called_once_with(url, new=2)
         with mock.patch.object(agent.webbrowser, "open", side_effect=RuntimeError("no browser")):
             self.assertFalse(agent.open_setup_page(url))
+
+    def test_setup_link_cli_opens_controller_without_any_cloud_request(self):
+        config = {
+            "cloud": "https://photoslive.example",
+            "controller": "http://127.0.0.1:8080",
+            "machineId": "machine-stale",
+            "agentToken": "stale-token",
+        }
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(sys, "argv", ["agent.py", "--setup-link", "--open-setup"]))
+            stack.enter_context(mock.patch.object(agent, "load_config", return_value=config))
+            open_page = stack.enter_context(mock.patch.object(agent, "open_setup_page", return_value=True))
+            cloud = stack.enter_context(mock.patch.object(agent, "request_json"))
+            self.assertEqual(agent.main(), 0)
+        open_page.assert_called_once_with("http://127.0.0.1:8080/setup?local=1")
+        cloud.assert_not_called()
+
+    def test_agent_waits_for_local_onboarding_before_background_registration(self):
+        config = {
+            "cloud": "https://photoslive.example",
+            "controller": "http://127.0.0.1:8080",
+            "name": "Mini PC",
+        }
+        with mock.patch.object(agent, "local_setup_bootstrap", return_value={"completed": False}), \
+                mock.patch.object(agent, "request_json") as cloud, \
+                mock.patch.object(agent, "save_config") as save:
+            result = agent.ensure_pairing(config)
+        self.assertTrue(result["cloudRegistrationPending"])
+        cloud.assert_not_called()
+        save.assert_not_called()
+
+    def test_agent_registers_completed_local_setup_without_operator_pairing_code(self):
+        config = {
+            "cloud": "https://photoslive.example",
+            "controller": "http://127.0.0.1:8080",
+            "name": "Mini PC",
+        }
+        bootstrap = {
+            "completed": True,
+            "booth": {"boothCode": "booth-lokal", "location": "Jakarta"},
+        }
+        response = {
+            "machineId": "machine-cloud",
+            "commandKey": "command-key",
+            "boothCode": "booth-lokal",
+            "paired": True,
+        }
+        with mock.patch.object(agent, "local_setup_bootstrap", return_value=bootstrap), \
+                mock.patch.object(agent, "request_json", return_value=response) as cloud, \
+                mock.patch.object(agent, "save_config") as save:
+            result = agent.ensure_pairing(config)
+        self.assertEqual(result["machineId"], "machine-cloud")
+        self.assertEqual(result["boothCode"], "booth-lokal")
+        self.assertTrue(result["cloudRegistered"])
+        payload = cloud.call_args.args[2]
+        self.assertEqual(payload["boothCode"], "booth-lokal")
+        self.assertEqual(payload["localSetup"], {"completed": True, "boothCode": "booth-lokal"})
+        self.assertNotIn("pairingCode", payload)
+        self.assertNotIn("setupToken", payload)
+        save.assert_called_once_with(result)
+
+    def test_local_setup_completion_is_persistent_and_cloud_independent(self):
+        config_path = Path(self.temp.name) / "agent.json"
+        config_path.write_text(json.dumps({
+            "cloud": "https://photoslive.example",
+            "controller": "http://127.0.0.1:8080",
+            "name": "debian-lite",
+        }), encoding="utf-8")
+        with mock.patch.object(server, "AGENT_CONFIG_PATH", config_path):
+            result = server.complete_local_setup({
+                "name": "Booth Jakarta",
+                "location": "Main Hall",
+                "email": "owner@example.com",
+                "pin": "123456",
+                "confirmPin": "123456",
+            })
+            bootstrap = server.local_setup_bootstrap()
+        self.assertTrue(result["local"])
+        self.assertTrue(result["cloudSyncPending"])
+        self.assertEqual(result["booth"]["boothCode"], bootstrap["booth"]["boothCode"])
+        self.assertTrue(bootstrap["completed"])
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertTrue(saved["localSetupComplete"])
+        self.assertEqual(saved["boothCode"], result["booth"]["boothCode"])
+        identity = server.local_setup_identity()
+        self.assertEqual(identity["ownerEmail"], "owner@example.com")
+        self.assertNotEqual(identity["pin"]["digest"], "123456")
 
     def test_local_pin_assertion_is_short_lived_machine_bound_and_signed(self):
         config_path = Path(self.temp.name) / "agent.json"

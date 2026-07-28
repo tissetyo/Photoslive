@@ -26,7 +26,7 @@ from typing import Any
 from redaction import redact_log_value, redact_text
 
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 PROTOCOL_VERSION = 2
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
@@ -115,9 +115,9 @@ def cloud_url(config: dict[str, Any], action: str) -> str:
     return f"{config['cloud'].rstrip('/')}/api/bridge?action={urllib.parse.quote(action)}"
 
 
-def setup_url(config: dict[str, Any], setup_token: str) -> str:
-    query = urllib.parse.urlencode({"setup": setup_token})
-    return f"{str(config['cloud']).rstrip('/')}/setup?{query}"
+def local_setup_url(config: dict[str, Any]) -> str:
+    """Return the Controller onboarding URL without contacting the cloud."""
+    return f"{str(config['controller']).rstrip('/')}/setup?local=1"
 
 
 def open_setup_page(url: str) -> bool:
@@ -179,32 +179,23 @@ def log_event(level: str, message: str, **details: Any) -> None:
         pass
 
 
-def request_setup_code(config: dict[str, Any], attempts: int = 4) -> dict[str, Any]:
-    last_error: CloudRequestError | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            return request_json(
-                cloud_url(config, "create_setup_code"),
-                "POST",
-                {"machineId": config["machineId"]},
-                config["agentToken"],
-                timeout=20,
-            )
-        except CloudRequestError as error:
-            last_error = error
-            retryable = error.status_code is None or error.status_code in {408, 425, 429, 500, 502, 503, 504}
-            if not retryable or attempt >= attempts:
-                raise
-            wait_seconds = max(3, min(30, int(error.retry_after or attempt * 5)))
-            print(f"Cloud belum stabil ({error}). Coba lagi {attempt + 1}/{attempts} dalam {wait_seconds} detik…", flush=True)
-            log_event("warning", "Setup code ditunda karena cloud belum stabil", attempt=attempt, attempts=attempts, error=str(error), code=error.code)
-            time.sleep(wait_seconds)
-    raise last_error or CloudRequestError("Tautan setup belum dapat dibuat")
+def local_setup_bootstrap(config: dict[str, Any]) -> dict[str, Any]:
+    """Read the durable local onboarding state without depending on cloud health."""
+    try:
+        return controller_request(config, "/api/local/setup/bootstrap")
+    except Exception as error:
+        log_event("warning", "Status onboarding lokal belum tersedia", error=str(error))
+        return {}
 
 
 def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
     if config.get("machineId") and config.get("agentToken"):
         return config
+    bootstrap = local_setup_bootstrap(config)
+    if not bootstrap.get("completed"):
+        config["cloudRegistrationPending"] = True
+        return config
+    booth = bootstrap.get("booth") if isinstance(bootstrap.get("booth"), dict) else {}
     token = f"agent_{uuid.uuid4().hex}{uuid.uuid4().hex}"
     response = request_json(
         cloud_url(config, "create_pairing"),
@@ -214,18 +205,35 @@ def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
             "platform": platform.platform(),
             "agentVersion": VERSION,
             "agentToken": token,
+            "boothCode": booth.get("boothCode") or config.get("boothCode"),
+            "location": booth.get("location"),
+            "localSetup": {
+                "completed": True,
+                "boothCode": booth.get("boothCode") or config.get("boothCode"),
+            },
         },
     )
-    setup_token = response.get("setupToken") or response["pairingCode"]
     config.update({
         "machineId": response["machineId"],
         "agentToken": token,
         "commandKey": response.get("commandKey"),
-        "setupToken": setup_token,
-        "boothCode": response.get("boothCode"),
+        "boothCode": response.get("boothCode") or booth.get("boothCode") or config.get("boothCode"),
+        "cloudRegistered": True,
+        "cloudRegisteredAt": time.time(),
     })
+    config.pop("cloudRegistrationPending", None)
+    config.pop("setupToken", None)
+    config.pop("pairingCode", None)
     save_config(config)
-    print("\nMesin berhasil didaftarkan. Setup akan dibuka otomatis oleh installer.\n", flush=True)
+    print("\nPhotobox lokal berhasil terdaftar ke cloud di background.\n", flush=True)
+    return config
+
+
+def clear_invalid_cloud_credentials(config: dict[str, Any]) -> dict[str, Any]:
+    for key in ("machineId", "agentToken", "commandKey", "setupToken", "pairingCode", "cloudRegistered", "cloudRegisteredAt"):
+        config.pop(key, None)
+    config["cloudRegistrationPending"] = True
+    save_config(config)
     return config
 
 
@@ -823,8 +831,8 @@ def main() -> int:
     parser.add_argument("--controller", default=os.environ.get("PHOTOSLIVE_CONTROLLER_URL", DEFAULT_CONTROLLER))
     parser.add_argument("--once", action="store_true", help="Jalankan satu heartbeat lalu berhenti")
     parser.add_argument("--status", action="store_true", help="Tampilkan konfigurasi/status lokal")
-    parser.add_argument("--setup-link", "--setup-code", dest="setup_code", action="store_true", help="Buat tautan setup aman dan buka onboarding")
-    parser.add_argument("--open-setup", action="store_true", help="Buka halaman setup setelah kode berhasil dibuat")
+    parser.add_argument("--setup-link", action="store_true", help="Buka onboarding lokal tanpa pairing code")
+    parser.add_argument("--open-setup", action="store_true", help="Buka halaman setup di browser")
     parser.add_argument("--pause", action="store_true", help="Jeda job cloud tanpa menghentikan heartbeat")
     parser.add_argument("--resume", action="store_true", help="Lanjutkan job cloud")
     arguments = parser.parse_args()
@@ -834,36 +842,9 @@ def main() -> int:
         CONTROL_PATH.write_text(json.dumps({"paused": arguments.pause, "updatedAt": time.time()}, indent=2), encoding="utf-8")
         print("Koneksi job Agent dijeda" if arguments.pause else "Koneksi job Agent dilanjutkan", flush=True)
         return 0
-    if arguments.setup_code:
-        is_new_registration = not (config.get("machineId") and config.get("agentToken"))
-        config = ensure_pairing(config)
-        response = (
-            {"setupToken": config["setupToken"], "boothCode": config.get("boothCode")}
-            if is_new_registration and config.get("setupToken")
-            else request_setup_code(config)
-        )
-        setup_token = response.get("setupToken") or response["pairingCode"]
-        config.update({"setupToken": setup_token, "boothCode": response.get("boothCode")})
-        config.pop("pairingCode", None)
-        save_config(config)
-        previous_status = {}
-        if STATUS_PATH.exists():
-            try:
-                previous_status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                previous_status = {}
-        save_status({
-            **previous_status,
-            "online": bool(previous_status.get("online", False)),
-            "version": VERSION,
-            "machineId": config.get("machineId"),
-            "boothCode": response.get("boothCode") or config.get("boothCode"),
-            "setupLinkCreatedAt": time.time(),
-            "updatedAt": time.time(),
-            "error": None,
-        })
-        url = setup_url(config, setup_token)
-        print(f"Tautan setup aman siap dan berlaku 15 menit.\nBuka {url}", flush=True)
+    if arguments.setup_link:
+        url = local_setup_url(config)
+        print(f"Onboarding lokal siap.\nBuka {url}", flush=True)
         if arguments.open_setup and not open_setup_page(url):
             print("Browser tidak dapat dibuka otomatis. Salin URL di atas.", flush=True)
         return 0
@@ -901,6 +882,23 @@ def main() -> int:
     while True:
         try:
             config = ensure_pairing(config)
+            if not (config.get("machineId") and config.get("agentToken")):
+                save_status({
+                    "online": False,
+                    "localReady": True,
+                    "cloudRegistrationPending": True,
+                    "version": VERSION,
+                    "machineId": None,
+                    "boothCode": config.get("boothCode"),
+                    "updatedAt": time.time(),
+                    "lastHeartbeatAt": heartbeat_at,
+                    "lastJobPollAt": job_poll_at,
+                    "error": None,
+                })
+                if arguments.once:
+                    return 0
+                time.sleep(2)
+                continue
             current = time.monotonic()
             paused = control_state()["paused"]
             worked = False
@@ -965,6 +963,14 @@ def main() -> int:
         except KeyboardInterrupt:
             return 0
         except Exception as error:
+            error_message = str(error).lower()
+            if isinstance(error, CloudRequestError) and (
+                error.status_code in {401, 403}
+                or "credential agent tidak valid" in error_message
+                or "invalid pairing code" in error_message
+            ):
+                config = clear_invalid_cloud_credentials(config)
+                log_event("warning", "Credential cloud lama dibuang; registrasi background akan dibuat ulang")
             save_status({"online": False, "version": VERSION, "machineId": config.get("machineId"), "updatedAt": time.time(), "lastHeartbeatAt": heartbeat_at, "lastJobPollAt": job_poll_at, "error": str(error)})
             cloud_retry = getattr(error, "retry_after", None)
             retry_seconds = min(MAX_CLOUD_RETRY_SECONDS, max(retry, int(cloud_retry or 0))) if cloud_retry else retry
