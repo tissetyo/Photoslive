@@ -27,6 +27,11 @@ test("technician installers supervise both Controller and Agent", async () => {
   assert.match(macos, /launchctl bootstrap/);
   assert.match(macos, /-m venv/);
   assert.match(macos, /requirements-controller\.txt/);
+  assert.match(macos, /Python bawaan macOS terlalu lama/);
+  assert.match(macos, /UV_UNMANAGED_INSTALL/);
+  assert.match(macos, /UV_MANAGED_PYTHON=1/);
+  assert.match(macos, /uv\/\$\{UV_VERSION\}\/install\.sh/);
+  assert.doesNotMatch(macos, /Photoslive memerlukan Python 3\.10/);
 
   assert.match(windows, /Register-ScheduledTask/);
   assert.match(windows, /RestartCount 999/);
