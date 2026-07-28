@@ -35,7 +35,7 @@ test("technician installers supervise both Controller and Agent", async () => {
   assert.match(windows, /requirements-controller\.txt/);
 });
 
-test("all operator installers create and open a secure setup link", async () => {
+test("all operator installers open local onboarding without legacy pairing", async () => {
   const scripts = await Promise.all([
     download("install-linux.sh"),
     download("install-macos.sh"),
@@ -43,13 +43,12 @@ test("all operator installers create and open a secure setup link", async () => 
   ]);
   for (const script of scripts) {
     assert.match(script, /--setup-link/);
-    assert.match(script, /--setup-code/);
-    assert.match(script, /--help/);
-    assert.match(script, /SetupArgument|SETUP_ARGUMENT/);
-    assert.match(script, /SetupArgument.*--open-setup|SETUP_ARGUMENT}" --open-setup/);
+    assert.doesNotMatch(script, /--setup-code/);
+    assert.doesNotMatch(script, /SetupArgument|SETUP_ARGUMENT/);
+    assert.match(script, /--setup-link"? --open-setup/);
     assert.ok(
       script.lastIndexOf("--open-setup") < script.indexOf("--status"),
-      "status must be printed after setup-link creation so stale heartbeat errors do not hide a successful onboarding link",
+      "status must be printed after local onboarding opens so stale heartbeat errors do not hide setup",
     );
   }
 });
@@ -65,7 +64,9 @@ test("downloadable Agent archive stays synchronized with the current Agent CLI",
     sourceAgent,
     "photoslive-agent.zip is stale; run photobox/scripts/build-agent-archive.sh before release",
   );
-  assert.match(archivedAgent, /parser\.add_argument\("--setup-link", "--setup-code"/);
+  assert.match(archivedAgent, /parser\.add_argument\("--setup-link", action="store_true"/);
+  assert.match(archivedAgent, /if arguments\.setup_link:[\s\S]*local_setup_url\(config\)/);
+  assert.doesNotMatch(archivedAgent, /parser\.add_argument\("--setup-link", "--setup-code"/);
 });
 
 test("operator installers retry unstable cloud downloads", async () => {
