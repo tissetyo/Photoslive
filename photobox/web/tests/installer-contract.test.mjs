@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const download = name => readFile(new URL(`../downloads/${name}`, import.meta.url), "utf8");
+const agentArchive = fileURLToPath(new URL("../downloads/photoslive-agent.zip", import.meta.url));
 
 test("technician installers supervise both Controller and Agent", async () => {
   const [linux, macos, windows] = await Promise.all([
@@ -39,12 +42,30 @@ test("all operator installers create and open a secure setup link", async () => 
     download("install-windows.ps1"),
   ]);
   for (const script of scripts) {
-    assert.match(script, /--setup-link --open-setup/);
+    assert.match(script, /--setup-link/);
+    assert.match(script, /--setup-code/);
+    assert.match(script, /--help/);
+    assert.match(script, /SetupArgument|SETUP_ARGUMENT/);
+    assert.match(script, /SetupArgument.*--open-setup|SETUP_ARGUMENT}" --open-setup/);
     assert.ok(
-      script.indexOf("--setup-link --open-setup") < script.indexOf("--status"),
+      script.lastIndexOf("--open-setup") < script.indexOf("--status"),
       "status must be printed after setup-link creation so stale heartbeat errors do not hide a successful onboarding link",
     );
   }
+});
+
+test("downloadable Agent archive stays synchronized with the current Agent CLI", async () => {
+  const [sourceAgent, archivedAgent] = await Promise.all([
+    readFile(new URL("../../agent.py", import.meta.url), "utf8"),
+    Promise.resolve(execFileSync("unzip", ["-p", agentArchive, "photobox/agent.py"], { encoding: "utf8" })),
+  ]);
+
+  assert.equal(
+    archivedAgent,
+    sourceAgent,
+    "photoslive-agent.zip is stale; run photobox/scripts/build-agent-archive.sh before release",
+  );
+  assert.match(archivedAgent, /parser\.add_argument\("--setup-link", "--setup-code"/);
 });
 
 test("operator installers retry unstable cloud downloads", async () => {
