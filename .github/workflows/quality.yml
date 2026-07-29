@@ -74,6 +74,31 @@ jobs:
       - run: python -m pip install --disable-pip-version-check --no-input -r photobox/requirements-controller.txt
       - run: python -m unittest photobox/tests/test_hardware_simulator.py
 
+  linux-installer-managed-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap without system Python or python3-venv
+        env:
+          HOME: ${{ runner.temp }}/photoslive-linux-home
+          PHOTOSLIVE_FORCE_MANAGED_PYTHON: "1"
+          PHOTOSLIVE_INSTALLER_RUNTIME_ONLY: "1"
+          PHOTOSLIVE_AGENT_ARCHIVE: ${{ github.workspace }}/photobox/web/downloads/photoslive-agent.zip
+        run: bash photobox/web/downloads/install-linux.sh
+
+  windows-installer-managed-runtime:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap without a preinstalled Python dependency
+        shell: pwsh
+        env:
+          LOCALAPPDATA: ${{ runner.temp }}/photoslive-windows-home
+          PHOTOSLIVE_FORCE_MANAGED_PYTHON: "1"
+          PHOTOSLIVE_INSTALLER_RUNTIME_ONLY: "1"
+          PHOTOSLIVE_AGENT_ARCHIVE: ${{ github.workspace }}\photobox\web\downloads\photoslive-agent.zip
+        run: ./photobox/web/downloads/install-windows.ps1
+
   booth-browser-e2e:
     runs-on: ubuntu-latest
     steps:

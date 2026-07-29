@@ -8,9 +8,10 @@ UV_INSTALLER="${TMPDIR:-/tmp}/photoslive-uv-installer.sh"
 UV_DIR="${INSTALL_DIR}/bootstrap"
 UV_BIN="${UV_DIR}/uv"
 MANAGED_PYTHON_DIR="${INSTALL_DIR}/python"
+LOG_DIR="${INSTALL_DIR}/logs"
 UV_VERSION="0.11.32"
 
-mkdir -p "${INSTALL_DIR}" "${LAUNCH_DIR}"
+mkdir -p "${INSTALL_DIR}" "${LAUNCH_DIR}" "${LOG_DIR}"
 command -v curl >/dev/null || { echo "curl wajib tersedia."; exit 1; }
 command -v unzip >/dev/null || { echo "unzip wajib tersedia."; exit 1; }
 curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://photoslive.vercel.app/downloads/photoslive-agent.zip" -o "${ARCHIVE}"
@@ -18,6 +19,7 @@ rm -rf "${INSTALL_DIR}/source"
 unzip -q "${ARCHIVE}" -d "${INSTALL_DIR}/source"
 SOURCE_DIR="${INSTALL_DIR}/source/photobox"
 test -f "${SOURCE_DIR}/agent.py" || { echo "Paket Photoslive Agent tidak valid."; exit 1; }
+test -f "${SOURCE_DIR}/updater.py" || { echo "Paket Photoslive tidak lengkap (updater.py tidak ditemukan)."; exit 1; }
 test -f "${SOURCE_DIR}/requirements-controller.txt" || { echo "Daftar dependency Controller tidak ditemukan."; exit 1; }
 
 PYTHON=""
@@ -51,16 +53,34 @@ else
 fi
 
 cat > "${LAUNCH_DIR}/app.photoslive.controller.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>app.photoslive.controller</string><key>ProgramArguments</key><array><string>${RUNTIME_PYTHON}</string><string>${SOURCE_DIR}/server.py</string></array><key>WorkingDirectory</key><string>${SOURCE_DIR}</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>app.photoslive.controller</string><key>ProgramArguments</key><array><string>${RUNTIME_PYTHON}</string><string>${SOURCE_DIR}/server.py</string></array><key>WorkingDirectory</key><string>${SOURCE_DIR}</string><key>StandardOutPath</key><string>${LOG_DIR}/controller.stdout.log</string><key>StandardErrorPath</key><string>${LOG_DIR}/controller.stderr.log</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>
 EOF
 cat > "${LAUNCH_DIR}/app.photoslive.agent.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>app.photoslive.agent</string><key>ProgramArguments</key><array><string>${RUNTIME_PYTHON}</string><string>${SOURCE_DIR}/agent.py</string></array><key>WorkingDirectory</key><string>${SOURCE_DIR}</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>app.photoslive.agent</string><key>ProgramArguments</key><array><string>${RUNTIME_PYTHON}</string><string>${SOURCE_DIR}/agent.py</string></array><key>WorkingDirectory</key><string>${SOURCE_DIR}</string><key>StandardOutPath</key><string>${LOG_DIR}/agent.stdout.log</string><key>StandardErrorPath</key><string>${LOG_DIR}/agent.stderr.log</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>
 EOF
 launchctl bootout "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.controller.plist" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.controller.plist"
 launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist"
-sleep 3
+
+CONTROLLER_READY=0
+for _ in $(seq 1 30); do
+  SETUP_PAGE=""
+  if curl --silent --fail --max-time 2 "http://127.0.0.1:8080/api/health" >/dev/null 2>&1 \
+    && SETUP_PAGE="$(curl --silent --fail --max-time 3 "http://127.0.0.1:8080/setup?local=1" 2>/dev/null)" \
+    && [[ "${SETUP_PAGE}" == *"<title>Setup Photoslive</title>"* ]]; then
+    CONTROLLER_READY=1
+    break
+  fi
+  sleep 1
+done
+if [ "${CONTROLLER_READY}" -ne 1 ]; then
+  echo "Photoslive Controller atau halaman setup lokal gagal dijalankan. Browser tidak akan dibuka." >&2
+  echo "Log error terakhir:" >&2
+  tail -n 30 "${LOG_DIR}/controller.stderr.log" 2>/dev/null >&2 || true
+  echo "Buka log lengkap: ${LOG_DIR}/controller.stderr.log" >&2
+  exit 1
+fi
 echo "Photoslive Agent diperbarui dan service sudah direstart."
 "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-link --open-setup
 echo "Status lokal terakhir:"

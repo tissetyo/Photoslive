@@ -1717,6 +1717,7 @@ function postgresCanServeActionWithoutRedis(action) {
     return machineStore.primary || (machineStore.enabled && machineStore.configured);
   }
   if (normalized === "setup") return postgresMachineStatus().primary && postgresDirectoryStatus().primary && postgresUsersStatus().primary;
+  if (normalized === "register") return postgresDirectoryStatus().primary && postgresUsersStatus().primary;
   if (["login", "me", "logout", "profile", "users", "revoke_sessions"].includes(normalized)) return postgresUsersStatus().primary && postgresDirectoryStatus().primary;
   if (["cloud_data", "qris_create"].includes(normalized)) return postgresDirectoryStatus().primary;
   return false;
@@ -1939,6 +1940,115 @@ export async function setupBooth(redis, payload) {
   } finally {
     if (await redisBestEffort(() => redis.get(claimKey)) === claimId) await redisBestEffort(() => redis.del(claimKey));
   }
+}
+
+export async function registerAccount(redis, payload) {
+  const email = normalizeEmail(payload.email);
+  const password = String(payload.password || "");
+  const confirmPassword = String(payload.confirmPassword || "");
+  if (!email || !email.includes("@")) return json({ error: "Masukkan alamat email yang valid" }, 400);
+  if (password.length < 8 || password.length > 128) return json({ error: "Password harus 8–128 karakter" }, 400);
+  if (password !== confirmPassword) return json({ error: "Konfirmasi password tidak sama" }, 400);
+
+  const directoryStore = postgresDirectoryStatus();
+  const userStore = postgresUsersStatus();
+  if (!directoryStore.primary || !directoryStore.configured || !userStore.primary || !userStore.configured) {
+    return json({
+      error: "Pendaftaran cloud belum tersedia. Aktifkan database user dan direktori PostgreSQL terlebih dahulu.",
+      actionRequired: "Set PHOTOSLIVE_POSTGRES_DIRECTORY=primary dan PHOTOSLIVE_POSTGRES_USERS=primary pada environment produksi.",
+    }, 503);
+  }
+
+  if (await readAdminUserByEmail(redis, email)) return json({ error: "Email sudah terdaftar. Gunakan halaman masuk." }, 409);
+
+  let boothCode = "";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = `pl-${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
+    if (!await readPostgresBoothDirectory(candidate)) {
+      boothCode = candidate;
+      break;
+    }
+  }
+  if (!boothCode) return json({ error: "Kode photobox belum dapat dibuat. Coba lagi." }, 503);
+
+  const machineId = `cloud_${crypto.randomUUID().replaceAll("-", "")}`;
+  const name = String(payload.name || `Photobox ${boothCode.slice(-4).toUpperCase()}`).trim().slice(0, 120);
+  const directoryInput = {
+    boothCode,
+    machineId,
+    organizationLegacyId: `organization-${boothCode}`,
+    organizationName: name,
+    name,
+    location: "",
+    accessEnabled: true,
+  };
+  const persistedDirectory = await persistPostgresBoothDirectory(directoryInput);
+  if (!persistedDirectory.ok) {
+    return json({
+      error: "Akun belum dibuat karena database photobox tidak dapat dihubungi. Coba lagi.",
+      retryable: true,
+    }, Number(persistedDirectory.status || 503));
+  }
+
+  const user = {
+    id: randomId("user"),
+    boothCode,
+    machineId,
+    email,
+    name: "Pemilik",
+    role: "owner",
+    passwordHash: await hashCredential(password),
+    // Cloud registration intentionally has no usable local PIN. The hardware
+    // onboarding flow can replace this random credential with an operator PIN.
+    pinHash: await hashCredential(crypto.randomUUID()),
+    createdAt: now(),
+    active: true,
+  };
+  const persistedUser = await persistAdminUser(redis, user);
+  if (!persistedUser.ok) {
+    return json({
+      error: "Akun owner belum dapat disimpan. Coba lagi atau hubungi support dengan email yang sama.",
+      retryable: true,
+    }, Number(persistedUser.status || 503));
+  }
+
+  const machine = {
+    id: machineId,
+    boothCode,
+    organizationId: `organization-${boothCode}`,
+    name,
+    location: "",
+    accessEnabled: true,
+    paired: false,
+    status: "not-installed",
+    agentState: "not-installed",
+    controllerState: "not-installed",
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  await redisBestEffort(async () => {
+    const transaction = typeof redis.multi === "function" ? redis.multi() : redis.pipeline();
+    transaction.set(machineKey(machineId), machine);
+    transaction.set(boothKey(boothCode), machineId);
+    transaction.sadd("photoslive:machines", machineId);
+    return transaction.exec();
+  });
+
+  const token = await createSession(redis, { userId: user.id, boothCode, machineId, role: user.role });
+  return json({
+    booth: {
+      boothCode,
+      machineId,
+      name,
+      location: "",
+      enabled: true,
+      online: false,
+      agentState: "not-installed",
+      controllerState: "not-installed",
+    },
+    user: { id: user.id, email, name: user.name, role: user.role },
+    hardwareConnected: false,
+  }, 201, { "set-cookie": sessionCookie(token) });
 }
 
 export async function login(redis, payload) {
@@ -3472,6 +3582,7 @@ async function dispatch(request, context) {
     if (action === "resolve_booth" && request.method === "GET") { const booth = await resolveBooth(redis, payload.booth); return booth ? json({ booth }) : json({ error: "Photobox tidak ditemukan" }, 404); }
     if (action === "validate_setup" && request.method === "POST") return validateSetupCode(redis, payload);
     if (action === "setup" && request.method === "POST") return setupBooth(redis, payload);
+    if (action === "register" && request.method === "POST") return registerAccount(redis, payload);
     if (action === "login" && request.method === "POST") return login(redis, payload);
     if (action === "superadmin_login" && request.method === "POST") return superadminLogin(redis, payload);
     if (action === "platform_staff_activate" && request.method === "POST") return activatePlatformStaff(redis, payload);

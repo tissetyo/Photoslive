@@ -26,6 +26,7 @@
         <div class="mode-tabs" id="setup-modes">
           <button type="button" class="active" data-mode="setup">Mesin baru</button>
           <button type="button" data-mode="login">Sudah punya akun</button>
+          <button type="button" data-mode="register">Daftar akun</button>
         </div>
 
         <div class="wizard-progress" id="wizard-progress">
@@ -134,6 +135,22 @@
           <div class="login-actions">
             <button type="button" class="text-button" id="open-forgot">Lupa password?</button>
             <button class="btn primary">Masuk admin</button>
+          </div>
+        </form>
+
+        <form id="register-form" class="hidden">
+          <div class="register-note">
+            <span class="setup-icon user" aria-hidden="true"></span>
+            <div><b>Mulai tanpa installer</b><p>Buat akun cloud sekarang. Kamera, printer, dan mode offline dapat dihubungkan nanti dari admin.</p></div>
+          </div>
+          <div class="form-grid">
+            <label class="full">Email<input id="register-email" type="email" autocomplete="email" placeholder="nama@email.com" required></label>
+            <label class="full">Password<input id="register-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="Minimal 8 karakter" required></label>
+            <label class="full">Konfirmasi password<input id="register-password-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="Ulangi password" required></label>
+          </div>
+          <div class="login-actions">
+            <button type="button" class="text-button" data-mode="login">Sudah punya akun?</button>
+            <button class="btn primary" id="register-submit">Buat akun</button>
           </div>
         </form>
 

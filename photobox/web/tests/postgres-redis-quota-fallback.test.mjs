@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { currentUser, login, setupBooth } from "../api/platform.mjs";
+import { currentUser, login, registerAccount, setupBooth } from "../api/platform.mjs";
 import { createPostgresSetupCode } from "../api/_postgres_machines.mjs";
 
 process.env.SESSION_SECRET ||= "photoslive-test-session-secret-32-characters";
@@ -120,6 +120,73 @@ test("setup and remote login survive exhausted Upstash when Supabase is primary"
     const me = await meResponse.json();
     assert.equal(me.user.email, "owner@photoslive.test");
     assert.equal(me.booth.boothCode, "quota-booth");
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+    Object.assign(process.env, previous);
+  }
+});
+
+test("regular email registration works without an installed Agent or Redis", async () => {
+  const previous = { ...process.env };
+  const previousFetch = globalThis.fetch;
+  Object.assign(process.env, environment);
+  let registeredDirectory = null;
+  let registeredOwner = null;
+  globalThis.fetch = async (url, options) => {
+    const endpoint = String(url);
+    const body = JSON.parse(options.body);
+    let payload = null;
+    if (endpoint.endsWith("/photoslive_admin_user_by_email")) {
+      payload = registeredOwner?.email === body.p_email ? registeredOwner : null;
+    } else if (endpoint.endsWith("/photoslive_booth_directory_snapshot")) {
+      payload = registeredDirectory?.boothCode === body.p_booth_code ? registeredDirectory : null;
+    } else if (endpoint.endsWith("/photoslive_persist_booth_directory")) {
+      registeredDirectory = {
+        boothCode: body.p_booth_code,
+        machineId: body.p_machine_id,
+        organizationId: "0ff602b7-1f2b-45b4-a987-d32d426263bd",
+        organizationLegacyId: body.p_organization_legacy_id,
+        name: body.p_name,
+        location: body.p_location,
+        accessEnabled: body.p_access_enabled,
+        updatedAt: new Date().toISOString(),
+      };
+      payload = registeredDirectory;
+    } else if (endpoint.endsWith("/photoslive_persist_admin_user")) {
+      registeredOwner = {
+        ...body.p_user,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      payload = registeredOwner;
+    } else if (endpoint.endsWith("/photoslive_admin_users_for_booth")) {
+      payload = registeredOwner?.boothCode === body.p_booth_code ? [registeredOwner] : [];
+    } else {
+      throw new Error(`Unhandled RPC ${url}`);
+    }
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const redis = new QuotaRedis();
+    const registration = await registerAccount(redis, {
+      email: "new-owner@photoslive.test",
+      password: "correct-password",
+      confirmPassword: "correct-password",
+    });
+    assert.equal(registration.status, 201);
+    const created = await registration.clone().json();
+    assert.match(created.booth.boothCode, /^pl-[a-f0-9]{8}$/);
+    assert.equal(created.hardwareConnected, false);
+    assert.equal(created.booth.agentState, "not-installed");
+    assert.match(registration.headers.get("set-cookie"), /__Host-photoslive_session=st\./);
+
+    const loginResponse = await login(redis, {
+      boothCode: created.booth.boothCode,
+      email: "new-owner@photoslive.test",
+      password: "correct-password",
+    });
+    assert.equal(loginResponse.status, 200);
   } finally {
     globalThis.fetch = previousFetch;
     for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];

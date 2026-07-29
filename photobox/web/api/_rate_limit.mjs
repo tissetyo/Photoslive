@@ -22,6 +22,7 @@ export const PLATFORM_RATE_LIMITS = Object.freeze({
   forgot_password: { limit: 5, windowSeconds: 600 },
   validate_setup: { limit: 20, windowSeconds: 300 },
   setup: { limit: 10, windowSeconds: 600 },
+  register: { limit: 5, windowSeconds: 600 },
   delete_public_session: { limit: 5, windowSeconds: 600 },
   qris_create: { limit: 8, windowSeconds: 60 },
 });

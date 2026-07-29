@@ -20,7 +20,10 @@ test("operator installer opens local setup without pairing code or cloud validat
   assert.match(bridge, /const locallyReady = localSetup\.completed === true/);
   assert.match(bridge, /const code = pairingCode\(\)/);
   assert.match(agent, /\/setup\?local=1/);
+  assert.match(agent, /def local_setup_page_ready\(/);
+  assert.match(agent, /<title>Setup Photoslive<\/title>/);
   assert.match(agent, /if arguments\.setup_link:[\s\S]*local_setup_url\(config\)/);
+  assert.match(agent, /if arguments\.setup_link:[\s\S]*local_setup_page_ready\(config\)/);
   assert.match(agent, /if not bootstrap\.get\("completed"\):[\s\S]*cloudRegistrationPending/);
   assert.doesNotMatch(agent, /--setup-code/);
   assert.doesNotMatch(agent, /request_setup_code/);
@@ -132,4 +135,22 @@ test("setup UI hides internal registration details and avoids a one-option selec
   assert.match(css, /\.setup-icon\s*\{[\s\S]*mask: var\(--setup-icon\)/);
   assert.match(setup, /methods\.classList\.remove\("single-method"\)/);
   assert.match(setup, /if \(!capability\.available \|\| !capability\.boothCode\) return/);
+});
+
+test("cloud account registration is real and does not require an installer", async () => {
+  const [html, setup, platform] = await Promise.all([
+    read("setup.html"),
+    read("setup.js"),
+    read("api/platform.mjs"),
+  ]);
+  assert.match(html, /data-mode="register">Daftar akun/);
+  assert.match(html, /id="register-email"/);
+  assert.match(html, /id="register-password"/);
+  assert.match(html, /id="register-password-confirm"/);
+  assert.match(html, /Mulai tanpa installer/);
+  assert.match(setup, /api\("register"/);
+  assert.match(setup, /hardware dapat dihubungkan nanti|Hubungkan perangkat nanti/i);
+  assert.match(platform, /export async function registerAccount/);
+  assert.match(platform, /action === "register"/);
+  assert.match(platform, /status: "not-installed"/);
 });

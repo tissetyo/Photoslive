@@ -321,11 +321,23 @@ class LocalFirstTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(mock.patch.object(sys, "argv", ["agent.py", "--setup-link", "--open-setup"]))
             stack.enter_context(mock.patch.object(agent, "load_config", return_value=config))
+            setup_ready = stack.enter_context(mock.patch.object(agent, "local_setup_page_ready", return_value=True))
             open_page = stack.enter_context(mock.patch.object(agent, "open_setup_page", return_value=True))
             cloud = stack.enter_context(mock.patch.object(agent, "request_json"))
             self.assertEqual(agent.main(), 0)
+        setup_ready.assert_called_once_with(config)
         open_page.assert_called_once_with("http://127.0.0.1:8080/setup?local=1")
         cloud.assert_not_called()
+
+    def test_setup_link_cli_refuses_to_open_an_empty_controller_page(self):
+        config = {"controller": "http://127.0.0.1:8080", "cloud": "https://photoslive.example"}
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(sys, "argv", ["agent.py", "--setup-link", "--open-setup"]))
+            stack.enter_context(mock.patch.object(agent, "load_config", return_value=config))
+            stack.enter_context(mock.patch.object(agent, "local_setup_page_ready", return_value=False))
+            open_page = stack.enter_context(mock.patch.object(agent, "open_setup_page"))
+            self.assertEqual(agent.main(), 1)
+        open_page.assert_not_called()
 
     def test_agent_waits_for_local_onboarding_before_background_registration(self):
         config = {

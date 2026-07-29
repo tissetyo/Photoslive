@@ -26,7 +26,7 @@ from typing import Any
 from redaction import redact_log_value, redact_text
 
 
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 PROTOCOL_VERSION = 2
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
@@ -118,6 +118,21 @@ def cloud_url(config: dict[str, Any], action: str) -> str:
 def local_setup_url(config: dict[str, Any]) -> str:
     """Return the Controller onboarding URL without contacting the cloud."""
     return f"{str(config['controller']).rstrip('/')}/setup?local=1"
+
+
+def local_setup_page_ready(config: dict[str, Any], timeout: int = 5) -> bool:
+    """Verify the actual onboarding document, not only Controller JSON health."""
+    request = urllib.request.Request(
+        local_setup_url(config),
+        headers={"Accept": "text/html", "User-Agent": f"Photoslive-Agent/{VERSION}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(256_000).decode("utf-8", errors="replace")
+            return response.status == 200 and "<title>Setup Photoslive</title>" in body
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
 
 
 def open_setup_page(url: str) -> bool:
@@ -844,6 +859,13 @@ def main() -> int:
         return 0
     if arguments.setup_link:
         url = local_setup_url(config)
+        if not local_setup_page_ready(config):
+            print(
+                "Halaman setup lokal belum siap. Periksa service Photoslive Controller lalu coba lagi.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
         print(f"Onboarding lokal siap.\nBuka {url}", flush=True)
         if arguments.open_setup and not open_setup_page(url):
             print("Browser tidak dapat dibuka otomatis. Salin URL di atas.", flush=True)

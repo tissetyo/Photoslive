@@ -106,7 +106,52 @@ python3 photobox/agent.py
 
 Installer production dapat diunduh dari halaman **Photoslive Agent** pada admin
 cloud atau langsung melalui `/downloads/install-linux.sh`,
-`/downloads/install-macos.sh`, dan `/downloads/install-windows.ps1`.
+`/downloads/install-macos.sh`, dan `/downloads/install-windows.ps1`. Installer
+akan memakai Python sistem bila kompatibel; jika Python tidak ada, terlalu lama,
+atau modul virtual environment tidak tersedia, installer menyiapkan runtime
+Python 3.12 khusus Photoslive tanpa mengubah PATH atau instalasi Python pengguna.
+
+Membuat akun cloud tidak memerlukan installer. Pilih **Daftar akun** pada
+`/setup`, masukkan email dan password, lalu hubungkan Photoslive Agent dari admin
+hanya bila photobox membutuhkan kamera/printer USB, penyimpanan lokal, silent
+print, atau operasi offline. Versi installer pilot saat ini masih berupa
+script/PowerShell yang memasang service Python dan membuka Local Manager di
+browser; paket aplikasi native signed belum tersedia.
+
+### Pause dan lanjutkan service lokal
+
+macOS:
+
+```bash
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/app.photoslive.agent.plist"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/app.photoslive.controller.plist"
+```
+
+Untuk menjalankannya kembali:
+
+```bash
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/app.photoslive.controller.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/app.photoslive.agent.plist"
+```
+
+Linux:
+
+```bash
+systemctl --user stop photoslive-agent.service photoslive-controller.service
+systemctl --user start photoslive-controller.service photoslive-agent.service
+```
+
+Windows PowerShell:
+
+```powershell
+Stop-ScheduledTask -TaskName "Photoslive Agent"
+Stop-ScheduledTask -TaskName "Photoslive Controller"
+Start-ScheduledTask -TaskName "Photoslive Controller"
+Start-ScheduledTask -TaskName "Photoslive Agent"
+```
+
+Pause tersebut tidak menghapus akun, config, atau foto. Installer mengaktifkan
+service kembali pada instalasi/update berikutnya.
 
 ## Redesign local-first
 

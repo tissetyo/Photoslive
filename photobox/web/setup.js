@@ -269,14 +269,16 @@ function setSetupStep(step) {
 }
 
 function mode(name) {
+  if (!["setup", "login", "register", "forgot"].includes(name)) name = "setup";
   document.querySelectorAll("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === name));
-  ["setup", "login", "forgot"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
+  ["setup", "login", "register", "forgot"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
   $("#wizard-progress").classList.toggle("hidden", name !== "setup");
   $("#setup-modes").classList.toggle("hidden", name === "forgot" || (name === "setup" && onboarding.step > 1));
   $(".auth-layout").dataset.mode = name;
   const labels = {
     setup: setupSteps[onboarding.step - 1],
     login: ["Masuk", "Pilih cara masuk ke admin photobox."],
+    register: ["Buat akun", "Daftar dengan email. Hubungkan perangkat nanti."],
     forgot: ["Bantuan password", "Kirim permintaan kepada superadmin."],
   };
   $("#setup-title").textContent = labels[name][0];
@@ -1204,6 +1206,30 @@ $("#login-form").addEventListener("submit", async event => {
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
     location.href = `/${result.booth.boothCode}/admin`;
   } catch (error) { status(error.message); }
+});
+
+$("#register-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const submit = $("#register-submit");
+  const email = $("#register-email").value.trim();
+  const password = $("#register-password").value;
+  const confirmPassword = $("#register-password-confirm").value;
+  setButtonBusy(submit, true, "Membuat akun…");
+  status("Membuat akun…");
+  try {
+    const result = await api("register", {
+      method: "POST",
+      body: JSON.stringify({ email, password, confirmPassword }),
+    });
+    localStorage.setItem("photoslive.machineId", result.booth.machineId);
+    localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
+    status("Akun berhasil dibuat. Membuka admin…", true);
+    location.href = `/${result.booth.boothCode}/admin?welcome=1`;
+  } catch (error) {
+    status(error.message);
+  } finally {
+    setButtonBusy(submit, false);
+  }
 });
 
 $("#forgot-form").addEventListener("submit", async event => {
