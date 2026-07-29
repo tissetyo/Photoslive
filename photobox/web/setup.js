@@ -13,6 +13,13 @@ const onboarding = {
   frameDesign: null,
   frameEditor: null,
   tabletCameraStream: null,
+  account: null,
+  organization: null,
+  pairingClaim: null,
+  pairingToken: "",
+  pairingCode: "",
+  pairingScannerStream: null,
+  pairingScannerTimer: null,
 };
 
 let deferredTabletInstallPrompt = null;
@@ -20,8 +27,23 @@ let deferredTabletInstallPrompt = null;
 const SETUP_DRAFT_KEY = "photoslive.setupDraft.v2";
 const SETUP_SESSION_TOKEN_KEY = "photoslive.setupSessionToken";
 const SETUP_QUERY = new URLSearchParams(location.search);
-const IS_LOCAL_SETUP = ["127.0.0.1", "localhost", "::1"].includes(location.hostname)
+const IS_LOOPBACK_HOST = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
+const IS_LOCAL_SETUP = IS_LOOPBACK_HOST
   && (SETUP_QUERY.get("mode") || "setup") === "setup";
+const CLOUD_PLATFORM_ORIGIN = "https://photoslive.vercel.app";
+
+function cloudRegistrationUrl() {
+  const target = new URL("/setup", CLOUD_PLATFORM_ORIGIN);
+  target.searchParams.set("mode", "register");
+  target.searchParams.set("source", "local");
+  return target.toString();
+}
+
+function continueRegistrationOnCloud() {
+  if (!IS_LOOPBACK_HOST) return false;
+  location.replace(cloudRegistrationUrl());
+  return true;
+}
 
 function readSetupDraft() {
   try {
@@ -236,14 +258,15 @@ function setButtonBusy(button, busy, label = "Memproses…") {
 function syncUrl(name) {
   const booth = $("#login-booth").value.trim();
   const query = new URLSearchParams();
-  if (name !== "setup") query.set("mode", name);
+  if (name !== "register") query.set("mode", name);
   if (name === "setup" && onboarding.step > 1) query.set("step", String(onboarding.step));
-  if (booth && name !== "setup") query.set("booth", booth);
+  if (booth && name === "login") query.set("booth", booth);
+  if (name === "pairing" && onboarding.pairingToken) query.set("pairToken", onboarding.pairingToken);
   history.replaceState(null, "", query.size ? `/setup?${query}` : "/setup");
 }
 
 function updateRecoveryVisibility(activeMode) {
-  const show = activeMode === "login" || (activeMode === "setup" && onboarding.step === 1);
+  const show = activeMode === "login" || activeMode === "register" || (activeMode === "setup" && onboarding.step === 1);
   $("#agent-recovery").classList.toggle("hidden", !show);
 }
 
@@ -269,23 +292,206 @@ function setSetupStep(step) {
 }
 
 function mode(name) {
-  if (!["setup", "login", "register", "forgot"].includes(name)) name = "setup";
+  if (!["setup", "login", "register", "forgot", "pairing", "ready"].includes(name)) name = "register";
   document.querySelectorAll("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === name));
-  ["setup", "login", "register", "forgot"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
+  ["setup", "login", "register", "forgot", "pairing", "ready"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
   $("#wizard-progress").classList.toggle("hidden", name !== "setup");
-  $("#setup-modes").classList.toggle("hidden", name === "forgot" || (name === "setup" && onboarding.step > 1));
+  $("#setup-modes").classList.toggle("hidden", ["forgot", "pairing", "ready"].includes(name) || (name === "setup" && onboarding.step > 1));
   $(".auth-layout").dataset.mode = name;
   const labels = {
-    setup: setupSteps[onboarding.step - 1],
-    login: ["Masuk", "Pilih cara masuk ke admin photobox."],
-    register: ["Buat akun", "Daftar dengan email. Hubungkan perangkat nanti."],
+    setup: ["Setup lama", "Gunakan hanya untuk memulihkan instalasi lama."],
+    login: ["Masuk", "Gunakan email dan password akun Photoslive."],
+    register: ["Buat akun Photoslive", "Daftar dengan email. Mesin dapat dihubungkan setelah akun siap."],
     forgot: ["Bantuan password", "Kirim permintaan kepada superadmin."],
+    pairing: ["Hubungkan photobox", "Scan QR atau masukkan kode dari Local Manager."],
+    ready: ["Photobox siap", "Pairing selesai dan tersimpan permanen."],
   };
   $("#setup-title").textContent = labels[name][0];
   $("#setup-copy").textContent = labels[name][1];
+  if (name !== "pairing") stopPairingScanner();
   updateRecoveryVisibility(name);
   syncUrl(name);
   status("");
+}
+
+function rememberAccount(result) {
+  onboarding.account = result?.user || onboarding.account;
+  onboarding.organization = result?.organization || onboarding.organization;
+  if (onboarding.account) sessionStorage.setItem("photoslive.setupAccount", JSON.stringify({
+    user: onboarding.account,
+    organization: onboarding.organization,
+  }));
+}
+
+function restoreRememberedAccount() {
+  try {
+    const remembered = JSON.parse(sessionStorage.getItem("photoslive.setupAccount") || "null");
+    if (!remembered?.user?.id) return false;
+    onboarding.account = remembered.user;
+    onboarding.organization = remembered.organization || null;
+    return true;
+  } catch {
+    sessionStorage.removeItem("photoslive.setupAccount");
+    return false;
+  }
+}
+
+async function ensureAccountSession() {
+  try {
+    const account = await api("me");
+    if (!account?.user?.id) return null;
+    rememberAccount(account);
+    return account;
+  } catch {
+    return null;
+  }
+}
+
+function normalizePairingCode(value) {
+  const raw = String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+  return raw.length > 4 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw;
+}
+
+function pairingIdentityFromValue(value) {
+  const text = String(value || "").trim();
+  if (!text) return { token: "", code: "" };
+  try {
+    const parsed = new URL(text, location.origin);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts[0] === "pair" && parts[1]) return { token: parts[1], code: "" };
+    if (parsed.searchParams.get("pairToken")) return { token: parsed.searchParams.get("pairToken"), code: "" };
+  } catch {
+    // Continue as a manually entered code.
+  }
+  return { token: "", code: normalizePairingCode(text) };
+}
+
+function pairingMethod(name) {
+  const selected = name === "scan" ? "scan" : "code";
+  document.querySelectorAll("[data-pairing-method]").forEach(button => {
+    const active = button.dataset.pairingMethod === selected;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  document.querySelectorAll("[data-pairing-panel]").forEach(panel => panel.classList.toggle("hidden", panel.dataset.pairingPanel !== selected));
+  if (selected !== "scan") stopPairingScanner();
+}
+
+function stopPairingScanner() {
+  if (onboarding.pairingScannerTimer) clearInterval(onboarding.pairingScannerTimer);
+  onboarding.pairingScannerTimer = null;
+  onboarding.pairingScannerStream?.getTracks().forEach(track => track.stop());
+  onboarding.pairingScannerStream = null;
+  const video = $("#pairing-scanner-video");
+  if (video) video.srcObject = null;
+}
+
+function renderPairingClaim(claim) {
+  onboarding.pairingClaim = claim;
+  const panel = $("#pairing-machine-preview");
+  panel.classList.toggle("hidden", !claim);
+  if (!claim) return;
+  $("#pairing-machine-name").textContent = claim.name || "Photoslive Machine";
+  $("#pairing-machine-code").textContent = claim.machineCode || claim.machineId || "Kode belum tersedia";
+  $("#pairing-machine-platform").textContent = claim.platform || "Belum dilaporkan";
+  $("#pairing-machine-version").textContent = [claim.agentVersion, claim.controllerVersion].filter(Boolean).join(" / ") || "Belum dilaporkan";
+  const devices = Array.isArray(claim.devices) ? claim.devices : [];
+  $("#pairing-machine-devices").textContent = devices.length
+    ? devices.slice(0, 3).map(device => device.name || device.kind || "Perangkat").join(", ")
+    : "Belum dilaporkan";
+  const expiry = Date.parse(claim.expiresAt || "");
+  $("#pairing-machine-expiry").textContent = Number.isFinite(expiry)
+    ? new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit" }).format(expiry)
+    : "15 menit";
+  $("#pairing-booth-name").value ||= claim.name || "Photoslive Booth";
+}
+
+async function inspectPairingIdentity(identity) {
+  if (!identity.token && !identity.code) throw new Error("Masukkan kode atau scan QR pairing");
+  status("Memeriksa mesin…");
+  const result = await bridgeApi("pairing_status", identity, "GET");
+  if (!result.claim || result.claim.status !== "pending") {
+    throw new Error(result.claim?.status === "claimed"
+      ? "Kode sudah digunakan. Buat kode baru dari Local Manager."
+      : "Kode sudah kedaluwarsa. Buat kode baru dari Local Manager.");
+  }
+  onboarding.pairingToken = identity.token || "";
+  onboarding.pairingCode = identity.code || "";
+  renderPairingClaim(result.claim);
+  syncUrl("pairing");
+  status("Mesin ditemukan. Periksa detail lalu hubungkan.", true);
+  return result.claim;
+}
+
+async function startPairingScanner() {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("Browser ini tidak mendukung pemindaian kamera. Gunakan input kode.");
+  if (!("BarcodeDetector" in window)) throw new Error("Pemindai QR belum didukung browser ini. Gunakan input kode.");
+  stopPairingScanner();
+  const video = $("#pairing-scanner-video");
+  onboarding.pairingScannerStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: "environment" }, width: { ideal: 960 }, height: { ideal: 720 } },
+    audio: false,
+  });
+  video.srcObject = onboarding.pairingScannerStream;
+  await video.play();
+  const detector = new BarcodeDetector({ formats: ["qr_code"] });
+  $("#pairing-scanner-status").textContent = "Arahkan kamera ke QR Local Manager.";
+  onboarding.pairingScannerTimer = setInterval(async () => {
+    if (video.readyState < 2) return;
+    try {
+      const codes = await detector.detect(video);
+      const identity = pairingIdentityFromValue(codes[0]?.rawValue || "");
+      if (!identity.token && !identity.code) return;
+      stopPairingScanner();
+      await inspectPairingIdentity(identity);
+    } catch (error) {
+      if (!onboarding.pairingScannerStream) return;
+      $("#pairing-scanner-status").textContent = error.message || "QR belum terbaca.";
+    }
+  }, 450);
+}
+
+async function claimPairingMachine(event) {
+  event.preventDefault();
+  const button = $("#claim-pairing-machine");
+  if (!onboarding.pairingClaim) return status("Periksa kode pairing terlebih dahulu.");
+  const name = $("#pairing-booth-name").value.trim();
+  if (!name) return status("Masukkan nama photobox.");
+  setButtonBusy(button, true, "Menghubungkan…");
+  status("Menyimpan ownership mesin…");
+  try {
+    let idempotencyKey = sessionStorage.getItem("photoslive.pairingIdempotency");
+    if (!idempotencyKey) {
+      idempotencyKey = crypto.randomUUID();
+      sessionStorage.setItem("photoslive.pairingIdempotency", idempotencyKey);
+    }
+    const result = await bridgeApi("claim_pairing", {
+      token: onboarding.pairingToken,
+      code: onboarding.pairingCode,
+      name,
+      location: $("#pairing-booth-location").value.trim(),
+      idempotencyKey,
+    });
+    sessionStorage.removeItem("photoslive.pairingIdempotency");
+    onboarding.machine = result.machine;
+    onboarding.booth = result.booth;
+    if (result.booth?.boothCode) {
+      localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
+      localStorage.setItem("photoslive.machineId", result.machine?.machineId || "");
+    }
+    $("#ready-admin-code").textContent = onboarding.account?.adminCode || "—";
+    $("#ready-machine-code").textContent = result.machine?.machineCode || result.machine?.machineId || "—";
+    $("#ready-booth-code").textContent = result.booth?.boothCode || "—";
+    $("#open-ready-admin").href = result.booth?.boothCode
+      ? `/${result.booth.boothCode}/admin?welcome=1`
+      : "/setup?mode=pairing";
+    status("Mesin berhasil dihubungkan.", true);
+    mode("ready");
+  } catch (error) {
+    status(error.message);
+  } finally {
+    setButtonBusy(button, false);
+  }
 }
 
 function loginMethod(name) {
@@ -298,6 +504,8 @@ function loginMethod(name) {
   });
   document.querySelectorAll("[data-method-panel]").forEach(panel => panel.classList.toggle("hidden", panel.dataset.methodPanel !== name));
   $("#login-form").classList.toggle("password-login", name === "password");
+  $("#login-booth-field").classList.toggle("hidden", name !== "pin");
+  $("#login-booth").required = name === "pin";
   $("#login-pin").required = name === "pin";
   $("#login-email").required = name === "password";
   $("#login-password").required = name === "password";
@@ -709,12 +917,56 @@ function renderReadyChecklist() {
 }
 
 document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => {
+  if (button.dataset.mode === "register" && continueRegistrationOnCloud()) return;
   if (button.dataset.mode === "setup") setSetupStep(1);
   mode(button.dataset.mode);
 }));
 $("#open-forgot").addEventListener("click", () => mode("forgot"));
 $("#forgot-back").addEventListener("click", () => mode("login"));
 document.querySelectorAll("[data-login-method]").forEach(button => button.addEventListener("click", () => loginMethod(button.dataset.loginMethod)));
+document.querySelectorAll("[data-pairing-method]").forEach(button => button.addEventListener("click", () => pairingMethod(button.dataset.pairingMethod)));
+$("#pairing-code").addEventListener("input", event => {
+  event.target.value = normalizePairingCode(event.target.value);
+  if (onboarding.pairingClaim) renderPairingClaim(null);
+});
+$("#inspect-pairing-code").addEventListener("click", async () => {
+  const button = $("#inspect-pairing-code");
+  setButtonBusy(button, true, "Memeriksa…");
+  try {
+    await inspectPairingIdentity(pairingIdentityFromValue($("#pairing-code").value));
+  } catch (error) {
+    renderPairingClaim(null);
+    status(error.message);
+  } finally {
+    setButtonBusy(button, false);
+  }
+});
+$("#start-pairing-scanner").addEventListener("click", async () => {
+  const button = $("#start-pairing-scanner");
+  setButtonBusy(button, true, "Menyalakan…");
+  try {
+    await startPairingScanner();
+    status("Kamera siap. Arahkan ke QR pairing.", true);
+  } catch (error) {
+    status(error.message);
+  } finally {
+    setButtonBusy(button, false);
+  }
+});
+$("#pairing-form").addEventListener("submit", claimPairingMachine);
+$("#prepare-machine-later").addEventListener("click", () => {
+  stopPairingScanner();
+  location.href = "/admin";
+});
+$("#pair-another-machine").addEventListener("click", () => {
+  onboarding.pairingClaim = null;
+  onboarding.pairingToken = "";
+  onboarding.pairingCode = "";
+  $("#pairing-code").value = "";
+  renderPairingClaim(null);
+  pairingMethod("code");
+  mode("pairing");
+});
 function agentPlatform(name) {
   if (name !== "tablet") stopTabletCameraTest();
   document.querySelectorAll("[data-agent-platform]").forEach(button => {
@@ -1173,9 +1425,15 @@ $("#finish-onboarding").addEventListener("click", () => {
 
 $("#login-form").addEventListener("submit", async event => {
   event.preventDefault();
+  const submit = event.submitter || $("#login-form button[type='submit']");
+  setButtonBusy(submit, true, "Masuk…");
   status("Memeriksa akun…");
   try {
-    const body = { boothCode: $("#login-booth").value, email: $("#login-email").value || $("#login-pin-email").value, password: $("#login-password").value, pin: $("#login-pin").value };
+    const body = {
+      email: $("#login-email").value || $("#login-pin-email").value,
+      password: $("#login-password").value,
+      pin: $("#login-pin").value,
+    };
     if (selectedLoginMethod === "pin") {
       status("Memverifikasi komputer lokal…");
       const proof = await localAuthRequest("/api/local/auth/assertion", { method: "POST", body: "{}" });
@@ -1189,9 +1447,13 @@ $("#login-form").addEventListener("submit", async event => {
     try {
       result = await api("login", { method: "POST", body: JSON.stringify(body) });
     } catch (error) {
-      const savedCode = localStorage.getItem(`photoslive.boothAlias.${body.boothCode.trim().toLowerCase()}`) || "";
-      const isMissing = error.data?.recoveryRequired || error.message.includes("Photobox tidak ditemukan");
-      if (isMissing && savedCode && savedCode.toLowerCase() !== body.boothCode.trim().toLowerCase()) {
+      const legacyCode = String(body.boothCode || "").trim().toLowerCase();
+      const savedCode = legacyCode
+        ? localStorage.getItem(`photoslive.boothAlias.${legacyCode}`) || ""
+        : "";
+      const isMissing = Boolean(legacyCode)
+        && (error.data?.recoveryRequired || error.message.includes("Photobox tidak ditemukan"));
+      if (isMissing && savedCode && savedCode.toLowerCase() !== legacyCode) {
         result = await api("login", { method: "POST", body: JSON.stringify({ ...body, boothCode: savedCode, aliasCode: body.boothCode }) });
         $("#login-booth").value = result.booth.boothCode;
       } else if (error.data?.recoveryRequired) {
@@ -1202,14 +1464,30 @@ $("#login-form").addEventListener("submit", async event => {
         return;
       } else throw error;
     }
-    localStorage.setItem("photoslive.machineId", result.booth.machineId);
-    localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
-    location.href = `/${result.booth.boothCode}/admin`;
-  } catch (error) { status(error.message); }
+    rememberAccount(result);
+    if (result.booth?.boothCode) {
+      localStorage.setItem("photoslive.machineId", result.booth.machineId || "");
+      localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
+      location.href = `/${result.booth.boothCode}/admin`;
+      return;
+    }
+    const booth = Array.isArray(result.booths) ? result.booths[0] : null;
+    if (booth?.boothCode) {
+      localStorage.setItem("photoslive.boothCode", booth.boothCode);
+      location.href = `/${booth.boothCode}/admin`;
+      return;
+    }
+    location.href = "/admin";
+  } catch (error) {
+    status(error.message);
+  } finally {
+    setButtonBusy(submit, false);
+  }
 });
 
 $("#register-form").addEventListener("submit", async event => {
   event.preventDefault();
+  if (continueRegistrationOnCloud()) return;
   const submit = $("#register-submit");
   const email = $("#register-email").value.trim();
   const password = $("#register-password").value;
@@ -1221,10 +1499,14 @@ $("#register-form").addEventListener("submit", async event => {
       method: "POST",
       body: JSON.stringify({ email, password, confirmPassword }),
     });
-    localStorage.setItem("photoslive.machineId", result.booth.machineId);
-    localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
-    status("Akun berhasil dibuat. Membuka admin…", true);
-    location.href = `/${result.booth.boothCode}/admin?welcome=1`;
+    if (result.emailConfirmationRequired) {
+      status("Akun dibuat. Periksa email untuk konfirmasi, lalu masuk.", true);
+      $("#login-email").value = email;
+      mode("login");
+      return;
+    }
+    rememberAccount(result);
+    location.href = "/admin";
   } catch (error) {
     status(error.message);
   } finally {
@@ -1286,8 +1568,13 @@ const rememberedBooth = localStorage.getItem("photoslive.boothCode") || "";
 if (params.get("booth") || rememberedBooth) $("#login-booth").value = params.get("booth") || rememberedBooth;
 loginMethod("password");
 detectLocalPinLogin();
-const requestedMode = params.get("mode") || "setup";
-if (requestedMode === "setup") {
+pairingMethod("code");
+restoreRememberedAccount();
+const requestedMode = params.get("mode")
+  || (params.get("legacy") === "1" ? "setup" : "register");
+if (requestedMode === "register" && continueRegistrationOnCloud()) {
+  // Registration and the resulting admin session must share the cloud origin.
+} else if (requestedMode === "setup") {
   const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;
   mode("setup");
   if (previewStep >= 1 && previewStep <= 6) setSetupStep(previewStep);
@@ -1300,4 +1587,28 @@ if (requestedMode === "setup") {
 } else {
   onboarding.step = 1;
   mode(requestedMode);
+  if (requestedMode === "pairing") {
+    ensureAccountSession().then(account => {
+      if (!account) {
+        status("Masuk atau buat akun terlebih dahulu.");
+        mode("login");
+        return;
+      }
+      const identity = pairingIdentityFromValue(params.get("pairToken") || params.get("code") || "");
+      if (identity.token || identity.code) {
+        if (identity.code) $("#pairing-code").value = identity.code;
+        inspectPairingIdentity(identity).catch(error => status(error.message));
+      }
+    });
+  } else if (requestedMode === "register" || requestedMode === "login") {
+    ensureAccountSession().then(account => {
+      if (!account) return;
+      const booth = Array.isArray(account.booths) ? account.booths[0] : null;
+      if (booth?.boothCode) {
+        location.replace(`/${booth.boothCode}/admin`);
+        return;
+      }
+      location.replace("/admin");
+    });
+  }
 }

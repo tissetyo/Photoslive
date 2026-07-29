@@ -34,6 +34,7 @@ const environment = {
   PHOTOSLIVE_POSTGRES_USERS: "primary",
   PHOTOSLIVE_POSTGRES_TIMEOUT_MS: "800",
   NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
   SUPABASE_SERVICE_ROLE_KEY: "server-service-role-secret",
 };
 
@@ -131,40 +132,35 @@ test("regular email registration works without an installed Agent or Redis", asy
   const previous = { ...process.env };
   const previousFetch = globalThis.fetch;
   Object.assign(process.env, environment);
-  let registeredDirectory = null;
-  let registeredOwner = null;
+  const authUser = {
+    id: "a49b1ba9-9f91-4ce0-ad58-151dc2c6f230",
+    email: "new-owner@photoslive.test",
+    user_metadata: {},
+  };
+  const account = {
+    userId: authUser.id,
+    email: authUser.email,
+    displayName: "Pemilik",
+    adminCode: "ADM-7A91CF22",
+    organizationId: "0ff602b7-1f2b-45b4-a987-d32d426263bd",
+    organizationCode: "ORG-D426263B",
+    organizationName: "Organization Photoslive",
+    role: "owner",
+    machines: [],
+    booths: [],
+  };
   globalThis.fetch = async (url, options) => {
     const endpoint = String(url);
-    const body = JSON.parse(options.body);
-    let payload = null;
-    if (endpoint.endsWith("/photoslive_admin_user_by_email")) {
-      payload = registeredOwner?.email === body.p_email ? registeredOwner : null;
-    } else if (endpoint.endsWith("/photoslive_booth_directory_snapshot")) {
-      payload = registeredDirectory?.boothCode === body.p_booth_code ? registeredDirectory : null;
-    } else if (endpoint.endsWith("/photoslive_persist_booth_directory")) {
-      registeredDirectory = {
-        boothCode: body.p_booth_code,
-        machineId: body.p_machine_id,
-        organizationId: "0ff602b7-1f2b-45b4-a987-d32d426263bd",
-        organizationLegacyId: body.p_organization_legacy_id,
-        name: body.p_name,
-        location: body.p_location,
-        accessEnabled: body.p_access_enabled,
-        updatedAt: new Date().toISOString(),
+    let payload;
+    if (endpoint.includes("/auth/v1/signup") || endpoint.includes("/auth/v1/token?grant_type=password")) {
+      payload = {
+        user: authUser,
+        access_token: "supabase-access-token",
+        refresh_token: "supabase-refresh-token",
+        expires_in: 3600,
       };
-      payload = registeredDirectory;
-    } else if (endpoint.endsWith("/photoslive_persist_admin_user")) {
-      registeredOwner = {
-        ...body.p_user,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      payload = registeredOwner;
-    } else if (endpoint.endsWith("/photoslive_admin_users_for_booth")) {
-      payload = registeredOwner?.boothCode === body.p_booth_code ? [registeredOwner] : [];
-    } else {
-      throw new Error(`Unhandled RPC ${url}`);
-    }
+    } else if (endpoint.endsWith("/photoslive_bootstrap_account")) payload = account;
+    else throw new Error(`Unhandled RPC ${url}`);
     return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
@@ -176,13 +172,14 @@ test("regular email registration works without an installed Agent or Redis", asy
     });
     assert.equal(registration.status, 201);
     const created = await registration.clone().json();
-    assert.match(created.booth.boothCode, /^pl-[a-f0-9]{8}$/);
+    assert.equal(created.user.adminCode, account.adminCode);
+    assert.deepEqual(created.machines, []);
+    assert.deepEqual(created.booths, []);
+    assert.equal(created.needsPairing, true);
     assert.equal(created.hardwareConnected, false);
-    assert.equal(created.booth.agentState, "not-installed");
     assert.match(registration.headers.get("set-cookie"), /__Host-photoslive_session=st\./);
 
     const loginResponse = await login(redis, {
-      boothCode: created.booth.boothCode,
       email: "new-owner@photoslive.test",
       password: "correct-password",
     });

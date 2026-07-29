@@ -29,5 +29,18 @@ test("rate-limit identity is tenant-scoped and stores no raw address or email", 
   assert.equal(other.allowed, true);
   const keys = [...redis.values.keys()];
   assert.ok(keys.every(key => !key.includes("198.51.100.24") && !key.includes("example.test")));
-  assert.deepEqual(Object.keys(PLATFORM_RATE_LIMITS).sort(), ["booth_ownership", "delete_public_session", "forgot_password", "login", "platform_staff_activate", "qris_create", "register", "setup", "superadmin_login", "validate_setup"]);
+  assert.deepEqual(Object.keys(PLATFORM_RATE_LIMITS).sort(), [
+    "booth_ownership",
+    "delete_public_session",
+    "forgot_password",
+    "login",
+    "platform_staff_activate",
+    "qris_create",
+    "register",
+    "setup",
+    "superadmin_login",
+    "superadmin_machine_reassign",
+    "superadmin_machine_revoke",
+    "validate_setup",
+  ]);
 });

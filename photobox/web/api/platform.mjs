@@ -31,6 +31,8 @@ import { expirePostgresSession, persistPostgresSession, postgresSessionStatus, r
 import { deletePostgresAsset, persistPostgresAsset, postgresAssetStatus, readPostgresAssets, requestPostgresAssetDeletion } from "./_postgres_assets.mjs";
 import { markPostgresMachinePaired, postgresMachineStatus, readPostgresPairing } from "./_postgres_machines.mjs";
 import { listPostgresAdminUsers, persistPostgresAdminUser, postgresUsersStatus, readPostgresAdminUserByEmail, readPostgresAdminUserById } from "./_postgres_users.mjs";
+import { bootstrapPostgresAccount, listPostgresFleet, listPostgresPairingHistory, postgresAccountsStatus, readPostgresAccount, reassignPostgresMachine, revokePostgresMachine } from "./_postgres_accounts.mjs";
+import { loginSupabaseUser, logoutSupabaseUser, refreshSupabaseSession, registerSupabaseUser, supabaseAuthStatus } from "./_supabase_auth.mjs";
 
 const encoder = new TextEncoder();
 const json = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), {
@@ -200,9 +202,17 @@ async function verifyPlatformReauthentication(redis, auth, password) {
 
 async function createSession(redis, data) {
   const id = randomId("login");
-  const record = { id, ...data, createdAt: now(), expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString() };
+  const ttlSeconds = data.authProvider === "supabase" ? 90 * 86_400 : 7 * 86_400;
+  const record = { id, ...data, createdAt: now(), expiresAt: new Date(Date.now() + ttlSeconds * 1_000).toISOString() };
+  // Supabase-backed sessions must not depend on Redis availability. The
+  // signed, HttpOnly record is intentionally self-contained and can later be
+  // revoked through Supabase Auth or the trusted-session registry.
+  if (data.authProvider === "supabase") {
+    const encoded = encodeSessionPayload(record);
+    return `st.${encoded}.${await signature(`stateless:${encoded}`)}`;
+  }
   try {
-    await redis.set(sessionKey(id), record, { ex: 7 * 86_400 });
+    await redis.set(sessionKey(id), record, { ex: ttlSeconds });
     if (record.userId) await redis.sadd(userSessionIndexKey(record.userId), id);
     return `${id}.${await signature(id)}`;
   } catch (error) {
@@ -251,6 +261,9 @@ async function authenticate(redis, request) {
 
 export async function logout(redis, request) {
   const auth = await authenticate(redis, request);
+  if (auth?.authProvider === "supabase" && auth.accessToken) {
+    await logoutSupabaseUser(auth.accessToken).catch(() => null);
+  }
   if (auth?.id) {
     await redisBestEffort(() => redis.del(sessionKey(auth.id)));
     if (auth.userId) await redisBestEffort(() => redis.srem(userSessionIndexKey(auth.userId), auth.id));
@@ -269,7 +282,7 @@ async function activeUserSessionIds(redis, userId) {
   return active;
 }
 
-export const sessionCookie = token => `__Host-photoslive_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`;
+export const sessionCookie = (token, maxAge = 90 * 86_400) => `__Host-photoslive_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 export const clearCookie = "__Host-photoslive_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
 const normalizeCode = code => String(code || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
 const normalizeEmail = email => String(email || "").trim().toLowerCase().slice(0, 160);
@@ -1942,7 +1955,7 @@ export async function setupBooth(redis, payload) {
   }
 }
 
-export async function registerAccount(redis, payload) {
+async function registerLegacyAccount(redis, payload) {
   const email = normalizeEmail(payload.email);
   const password = String(payload.password || "");
   const confirmPassword = String(payload.confirmPassword || "");
@@ -2051,9 +2064,125 @@ export async function registerAccount(redis, payload) {
   }, 201, { "set-cookie": sessionCookie(token) });
 }
 
+function accountResponse(account) {
+  const firstBooth = account?.booths?.[0] || null;
+  const firstMachine = account?.machines?.[0] || null;
+  return {
+    user: account ? {
+      id: account.userId,
+      email: account.email,
+      name: account.displayName,
+      role: account.role,
+      adminCode: account.adminCode,
+      organizationId: account.organizationId,
+      organizationCode: account.organizationCode,
+      organizationName: account.organizationName,
+      hasRemotePassword: true,
+    } : null,
+    organization: account ? {
+      id: account.organizationId,
+      code: account.organizationCode,
+      name: account.organizationName,
+    } : null,
+    machines: account?.machines || [],
+    booths: account?.booths || [],
+    booth: firstBooth ? {
+      boothCode: firstBooth.boothCode,
+      machineId: firstBooth.machineId || firstMachine?.machineId || "",
+      name: firstBooth.name,
+      location: firstBooth.location,
+      enabled: firstBooth.accessEnabled !== false,
+      online: false,
+    } : null,
+    needsPairing: !firstMachine,
+  };
+}
+
+async function createSupabaseApplicationSession(redis, authPayload, account) {
+  const token = await createSession(redis, {
+    userId: account.userId,
+    authUserId: account.userId,
+    organizationId: account.organizationId,
+    boothCode: account.booths?.[0]?.boothCode || "",
+    machineId: account.machines?.[0]?.machineId || "",
+    role: account.role,
+    authProvider: "supabase",
+    accessToken: authPayload?.access_token || "",
+    refreshToken: authPayload?.refresh_token || "",
+  });
+  return token;
+}
+
+export async function registerAccount(redis, payload) {
+  const email = normalizeEmail(payload.email);
+  const password = String(payload.password || "");
+  const confirmPassword = String(payload.confirmPassword || "");
+  if (!email || !email.includes("@")) return json({ error: "Masukkan alamat email yang valid" }, 400);
+  if (password.length < 8 || password.length > 128) return json({ error: "Password harus 8–128 karakter" }, 400);
+  if (password !== confirmPassword) return json({ error: "Konfirmasi password tidak sama" }, 400);
+  if (!supabaseAuthStatus().configured || !postgresAccountsStatus().primary) {
+    return json({
+      error: "Pendaftaran akun belum siap. Supabase Auth atau account store belum dikonfigurasi.",
+      actionRequired: "Konfigurasikan SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, dan SUPABASE_SERVICE_ROLE_KEY.",
+    }, 503);
+  }
+
+  const registration = await registerSupabaseUser(email, password);
+  if (!registration.ok) {
+    const duplicate = registration.status === 422 || /already|registered|exists/i.test(registration.error || "");
+    return json({ error: duplicate ? "Email sudah terdaftar. Gunakan halaman masuk." : registration.error }, duplicate ? 409 : registration.status);
+  }
+  const authUser = registration.payload?.user;
+  if (!authUser?.id) return json({ error: "Supabase tidak mengembalikan identitas akun" }, 503);
+  const bootstrapped = await bootstrapPostgresAccount(authUser, {
+    idempotencyKey: String(payload.idempotencyKey || `register:${authUser.id}`).slice(0, 160),
+  });
+  if (!bootstrapped.ok || !bootstrapped.account) {
+    return json({ error: bootstrapped.reason || "Organization Owner belum dapat dibuat", retryable: true }, Number(bootstrapped.status || 503));
+  }
+
+  const authSession = registration.payload?.session || registration.payload;
+  if (!authSession?.refresh_token) {
+    return json({
+      ...accountResponse(bootstrapped.account),
+      authenticated: false,
+      emailConfirmationRequired: true,
+      message: "Akun dibuat. Periksa email untuk mengonfirmasi akun, lalu masuk.",
+    }, 202);
+  }
+  const token = await createSupabaseApplicationSession(redis, authSession, bootstrapped.account);
+  return json({
+    ...accountResponse(bootstrapped.account),
+    authenticated: true,
+    hardwareConnected: false,
+  }, 201, { "set-cookie": sessionCookie(token) });
+}
+
 export async function login(redis, payload) {
   const lookupCode = normalizeCode(payload.boothCode);
   const pinLogin = Boolean(payload.pin);
+  // New account-first login. A booth code is deliberately not required:
+  // users must be able to enter Admin before purchasing or pairing hardware.
+  if (!lookupCode && !pinLogin) {
+    const email = normalizeEmail(payload.email);
+    const password = String(payload.password || "");
+    if (!email || !password) return json({ error: "Masukkan email dan password" }, 400);
+    if (!supabaseAuthStatus().configured || !postgresAccountsStatus().primary) {
+      return json({ error: "Login akun belum siap. Supabase Auth atau account store belum dikonfigurasi." }, 503);
+    }
+    const authenticated = await loginSupabaseUser(email, password);
+    if (!authenticated.ok) return json({ error: "Email atau password tidak benar" }, authenticated.status === 400 ? 401 : authenticated.status);
+    const authUser = authenticated.payload?.user;
+    const bootstrapped = await bootstrapPostgresAccount(authUser, { idempotencyKey: `login:${authUser?.id}` });
+    if (!bootstrapped.ok || !bootstrapped.account) {
+      return json({ error: bootstrapped.reason || "Data organization belum dapat dibaca", retryable: true }, Number(bootstrapped.status || 503));
+    }
+    const token = await createSupabaseApplicationSession(redis, authenticated.payload, bootstrapped.account);
+    return json({
+      ...accountResponse(bootstrapped.account),
+      authenticated: true,
+    }, 200, { "set-cookie": sessionCookie(token) });
+  }
   if (pinLogin && !payload.localAssertion) return json({ error: "PIN hanya tersedia pada komputer photobox. Gunakan email dan password untuk masuk jarak jauh." }, 403);
   let booth = await resolveBooth(redis, lookupCode);
   if (!booth) {
@@ -2125,8 +2254,23 @@ export async function currentUser(redis, request) {
   const auth = await authenticate(redis, request);
   if (!auth) return json({ user: null }, 401);
   if (auth.role === "superadmin") return json({ user: safePlatformIdentity(auth, await platformIdentityEmail(redis, auth)) });
+  if (auth.authProvider === "supabase" && auth.authUserId) {
+    const account = await readPostgresAccount(auth.authUserId);
+    return account ? json(accountResponse(account)) : json({ user: null, error: "Akun tidak ditemukan" }, 404);
+  }
   const user = await readAdminUserById(redis, auth.userId);
   return json({ user: user ? { id: user.id, email: user.email, name: user.name, role: user.role, boothCode: user.boothCode, hasRemotePassword: Boolean(user.passwordHash) } : null, booth: await resolveBooth(redis, auth.boothCode) });
+}
+
+export async function refreshAccountSession(redis, request) {
+  const auth = await authenticate(redis, request);
+  if (!auth?.authUserId || !auth.refreshToken) return json({ error: "Session tidak dapat diperbarui. Silakan masuk kembali." }, 401);
+  const refreshed = await refreshSupabaseSession(auth.refreshToken);
+  if (!refreshed.ok) return json({ error: "Session berakhir. Silakan masuk kembali." }, 401, { "set-cookie": clearCookie });
+  const account = await readPostgresAccount(auth.authUserId);
+  if (!account) return json({ error: "Akun tidak ditemukan" }, 404, { "set-cookie": clearCookie });
+  const token = await createSupabaseApplicationSession(redis, refreshed.payload, account);
+  return json({ ...accountResponse(account), authenticated: true }, 200, { "set-cookie": sessionCookie(token) });
 }
 
 async function listUsers(redis, request) {
@@ -2468,6 +2612,72 @@ async function superadminOverview(redis, request) {
   const requestIds = await redis.smembers("photoslive:reset-requests");
   const resets = (await Promise.all(requestIds.map(id => redis.get(`photoslive:reset:${id}`)))).filter(Boolean).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return json({ machines, resetRequests: resets });
+}
+
+async function postgresMachineFleetControl(redis, request) {
+  const auth = await authenticate(redis, request);
+  if (!hasPlatformPermission(auth, "platform.fleet.read")) return json({ error: "Akses superadmin fleet diperlukan" }, 403);
+  if (request.method !== "GET") return json({ error: "Daftar mesin hanya dapat dibaca" }, 405);
+  if (!postgresAccountsStatus().primary) {
+    return json({ error: "Machine registry PostgreSQL belum aktif", actionRequired: "Aktifkan account store Supabase/PostgreSQL." }, 503);
+  }
+  const result = await listPostgresFleet({ detailed: true });
+  if (!result.ok) return json({ error: result.reason || "Machine registry tidak dapat dibaca", retryable: true }, Number(result.status || 503));
+  return json({
+    machines: Array.isArray(result.payload) ? result.payload : [],
+    source: "postgres",
+    refreshedAt: now(),
+  });
+}
+
+async function postgresPairingHistoryControl(redis, request, payload) {
+  const auth = await authenticate(redis, request);
+  if (!hasPlatformPermission(auth, "platform.fleet.read")) return json({ error: "Akses histori pairing diperlukan" }, 403);
+  if (request.method !== "GET") return json({ error: "Histori pairing hanya dapat dibaca" }, 405);
+  if (!postgresAccountsStatus().primary) return json({ error: "Machine registry PostgreSQL belum aktif" }, 503);
+  const result = await listPostgresPairingHistory(payload.limit || 100, { detailed: true });
+  if (!result.ok) return json({ error: result.reason || "Histori pairing tidak dapat dibaca", retryable: true }, Number(result.status || 503));
+  return json({
+    history: Array.isArray(result.payload) ? result.payload : [],
+    source: "postgres",
+    refreshedAt: now(),
+  });
+}
+
+async function postgresMachinePairingMutation(redis, request, payload, operation, correlationId = "") {
+  const auth = await authenticate(redis, request);
+  if (!hasPlatformPermission(auth, "platform.ownership.write")) {
+    return json({ error: "Hanya Platform Owner yang dapat mengubah ownership mesin" }, 403);
+  }
+  if (request.method !== "POST") return json({ error: "Metode pairing mesin tidak didukung" }, 405);
+  if (!postgresAccountsStatus().primary) return json({ error: "Machine registry PostgreSQL belum aktif" }, 503);
+  const machineId = String(payload.machineId || "").trim().slice(0, 160);
+  const reason = String(payload.reason || "").trim().slice(0, 240);
+  const idempotencyKey = String(payload.idempotencyKey || "").trim().slice(0, 160);
+  if (!machineId) return json({ error: "Machine ID wajib diisi" }, 400);
+  if (idempotencyKey.length < 8) return json({ error: "Idempotency key wajib diisi" }, 400);
+  if (!await verifyPlatformReauthentication(redis, auth, payload.reauthPassword)) {
+    return json({ error: "Konfirmasi password superadmin tidak valid" }, 401);
+  }
+  const common = {
+    machineId,
+    actorId: auth.userId,
+    reason: reason || (operation === "reassign" ? "ownership reassigned" : "pairing revoked"),
+    idempotencyKey,
+    correlationId: correlationId || randomId("corr"),
+  };
+  const result = operation === "reassign"
+    ? await reassignPostgresMachine({ ...common, targetOrganizationId: payload.targetOrganizationId })
+    : await revokePostgresMachine(common);
+  if (!result.ok) {
+    const missing = /not found/i.test(result.reason || "");
+    return json({ error: result.reason || "Perubahan pairing gagal", retryable: !missing }, missing ? 404 : Number(result.status || 503));
+  }
+  return json({
+    result: result.payload,
+    source: "postgres",
+    message: operation === "reassign" ? "Mesin berhasil dipindahkan" : "Pairing mesin berhasil dicabut",
+  });
 }
 
 export async function platformFrameLibraryControl(redis, request, payload, correlationId = "") {
@@ -3583,7 +3793,9 @@ async function dispatch(request, context) {
     if (action === "validate_setup" && request.method === "POST") return validateSetupCode(redis, payload);
     if (action === "setup" && request.method === "POST") return setupBooth(redis, payload);
     if (action === "register" && request.method === "POST") return registerAccount(redis, payload);
+    if (action === "legacy_register" && request.method === "POST") return registerLegacyAccount(redis, payload);
     if (action === "login" && request.method === "POST") return login(redis, payload);
+    if (action === "refresh" && request.method === "POST") return refreshAccountSession(redis, request);
     if (action === "superadmin_login" && request.method === "POST") return superadminLogin(redis, payload);
     if (action === "platform_staff_activate" && request.method === "POST") return activatePlatformStaff(redis, payload);
     if (action === "superadmin_session" && request.method === "GET") return superadminSession(redis, request);
@@ -3616,6 +3828,10 @@ async function dispatch(request, context) {
     if (action === "logout" && request.method === "POST") return logout(redis, request);
     if (action === "forgot_password" && request.method === "POST") return forgotPassword(redis, payload);
     if (action === "superadmin_overview" && request.method === "GET") return superadminOverview(redis, request);
+    if (action === "superadmin_machines") return postgresMachineFleetControl(redis, request);
+    if (action === "superadmin_pairing_history") return postgresPairingHistoryControl(redis, request, payload);
+    if (action === "superadmin_machine_revoke") return postgresMachinePairingMutation(redis, request, payload, "revoke", context?.id || "");
+    if (action === "superadmin_machine_reassign") return postgresMachinePairingMutation(redis, request, payload, "reassign", context?.id || "");
     if (action === "platform_frame_library") return platformFrameLibraryControl(redis, request, payload, context?.id || "");
     if (action === "platform_frame_download" && request.method === "GET") return platformFrameDownload(redis, request, payload);
     if (action === "platform_staff") return platformStaffControl(redis, request, payload);

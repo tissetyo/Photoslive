@@ -19,6 +19,8 @@ export const PLATFORM_RATE_LIMITS = Object.freeze({
   superadmin_login: { limit: 5, windowSeconds: 60 },
   platform_staff_activate: { limit: 8, windowSeconds: 600 },
   booth_ownership: { limit: 5, windowSeconds: 600 },
+  superadmin_machine_revoke: { limit: 10, windowSeconds: 600 },
+  superadmin_machine_reassign: { limit: 10, windowSeconds: 600 },
   forgot_password: { limit: 5, windowSeconds: 600 },
   validate_setup: { limit: 20, windowSeconds: 300 },
   setup: { limit: 10, windowSeconds: 600 },

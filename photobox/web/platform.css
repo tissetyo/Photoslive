@@ -138,3 +138,29 @@ dialog{width:min(560px,calc(100% - 32px));padding:0;border:0;border-radius:8px;b
   .super-domain-nav button { padding-inline: 14px; }
   .super-domain-heading h2 { font-size: 24px; }
 }
+
+.pairing-machine-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap: 12px; }
+.pairing-machine-item { display: grid; gap: 14px; padding: 18px; border: 1px solid #e0e2e8; border-radius: 8px; background: #fff; }
+.pairing-machine-item header,.pairing-machine-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pairing-machine-item h3 { margin: 0; font-size: 17px; }
+.pairing-machine-item p { margin: 4px 0 0; color: #707580; font-size: 12px; line-height: 1.5; }
+.pairing-machine-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pairing-machine-meta div { min-width: 0; padding: 10px; border-radius: 6px; background: #f5f6f8; }
+.pairing-machine-meta small { display: block; color: #777c87; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.pairing-machine-meta strong { display: block; overflow: hidden; margin-top: 4px; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.pairing-machine-actions { justify-content: flex-end; }
+.pairing-machine-actions .btn { min-height: 48px; }
+.pairing-history-list { display: grid; gap: 8px; }
+.pairing-history-item { display: grid; grid-template-columns: minmax(150px,1fr) minmax(180px,1.5fr) minmax(150px,1fr); gap: 12px; padding: 13px 0; border-bottom: 1px solid #eceef2; font-size: 12px; }
+.pairing-history-item p { margin: 3px 0 0; color: #707580; }
+.pairing-history-item code { overflow-wrap: anywhere; }
+
+@media(max-width:680px) {
+  .pairing-machine-grid,.pairing-machine-meta { grid-template-columns: 1fr; }
+  .pairing-machine-actions { flex-direction: column; }
+  .pairing-machine-actions .btn { width: 100%; }
+  .pairing-history-item { grid-template-columns: 1fr; padding: 14px; border: 1px solid #e0e2e8; border-radius: 8px; }
+  #pairing-action-dialog { width: 100%; max-width: none; height: 100%; margin: 0; }
+  #pairing-action-dialog .auth-card { min-height: 100%; display: flex; flex-direction: column; }
+  #pairing-action-dialog .form-actions { margin-top: auto; }
+}

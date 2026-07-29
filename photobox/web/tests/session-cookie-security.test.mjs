@@ -15,7 +15,7 @@ test("admin session cookie uses host-only secure browser attributes", () => {
   assert.ok(parts.includes("HttpOnly"));
   assert.ok(parts.includes("Secure"));
   assert.ok(parts.includes("SameSite=Lax"));
-  assert.ok(parts.includes("Max-Age=604800"));
+  assert.ok(parts.includes("Max-Age=7776000"));
   assert.ok(!parts.some(part => /^Domain=/i.test(part)));
 });
 

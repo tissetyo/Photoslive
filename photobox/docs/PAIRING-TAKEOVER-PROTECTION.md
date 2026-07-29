@@ -1,31 +1,36 @@
-# Proteksi pengambilalihan onboarding
+# Proteksi pengambilalihan pairing
 
-Onboarding Photoslive memakai token acak satu kali yang diterbitkan Agent dan
-berlaku maksimal 15 menit. Token hanya berada di tautan yang dibuka otomatis,
-tidak ditampilkan sebagai kode untuk operator. Token bukan `boothCode`: setelah
-onboarding, URL booth memakai kode permanen yang berbeda.
+Pairing Photoslive memakai token acak satu kali yang diterbitkan Agent hanya
+setelah operator menekan **Hubungkan ke akun**. Token berlaku maksimal 15 menit,
+ditampilkan sebagai QR, dan memiliki fallback code `XXXX-XXXX`. Raw token dan
+fallback code tidak disimpan di PostgreSQL; server hanya menyimpan hash.
+Token bukan `boothCode` atau credential login.
 
 ## Kontrol yang aktif
 
-- Hanya token terbaru pada sebuah mesin yang dapat divalidasi atau diklaim.
-- Saat Agent membuat tautan pengganti, mapping token sebelumnya langsung dihapus.
-- Mesin yang sudah memiliki pemilik tidak dapat menjalankan onboarding pemilik
-  baru melalui tautan setup; pemilik harus login dan menambah user dari admin.
-- Klaim legacy dari halaman admin memerlukan session Owner, Admin, atau
-  Superadmin; endpoint tidak lagi menerima klaim anonim.
-- Setup memakai lock `NX` ber-TTL. Dua submit bersamaan hanya dapat menghasilkan
-  satu owner dan satu konsumsi kode.
-- Setelah sukses, mapping token setup dihapus.
-- Validasi dan setup tetap dilindungi rate limit dan pemeriksaan origin browser.
+- Hanya claim berstatus `pending` dan belum kedaluwarsa yang dapat diklaim.
+- Token dan fallback code hanya dapat digunakan sekali; replay ditolak.
+- Claim memakai transaction, unique constraint, dan idempotency key sehingga
+  klik ganda tidak membuat booth atau ownership kedua.
+- Satu mesin tidak dapat dimiliki dua organization.
+- Claim membutuhkan session Owner/Admin yang valid; pairing tidak menerima
+  ownership anonim.
+- Setelah sukses, status claim menjadi `claimed`, installation credential
+  dirotasi, mapping permanen disimpan di cloud dan SQLite lokal.
+- Revocation dan reassignment tidak menghapus histori. Reassignment meminta
+  re-authentication dan hanya tersedia untuk role platform yang berizin.
+- Redis hanya cache opsional; Auth, claim, ownership, dan audit memakai Supabase
+  Auth/PostgreSQL sebagai sumber utama.
 
 ## Recovery
 
-Jika tautan kedaluwarsa atau diganti, operator memilih **Jalankan ulang wizard** pada
-Local Manager. Mesin yang sudah terdaftar tidak boleh di-onboard ulang;
-gunakan login existing owner atau proses recovery yang diaudit.
+Jika QR/kode kedaluwarsa, operator memilih **Buat kode baru** pada Local Manager.
+Mesin yang sudah paired tidak membuat claim baru sampai pairing dicabut melalui
+Admin/Superadmin. Recovery dan pemindahan ownership selalu diaudit.
 
 ## Bukti otomatis
 
-`web/tests/pairing-takeover.test.mjs` memverifikasi penolakan kode lama,
-penolakan re-onboarding mesin berpemilik, klaim atomik concurrent, autentikasi
-endpoint legacy, dan invalidasi kode lama.
+`web/tests/setup-contract.test.mjs` memverifikasi bahwa claim hanya dibuat oleh
+tindakan operator, registrasi akun tidak membutuhkan installer, dan flow lama
+tidak kembali menjadi dependency. Test PostgreSQL/Redis memastikan registrasi
+dan login tetap berjalan saat cache Redis habis.

@@ -1,10 +1,10 @@
 const $ = selector => document.querySelector(selector);
 const requestedDomain = new URLSearchParams(location.search).get("section");
-const state = { machines: [], definitions: [], overrides: [], platformFrames: [], platformFrameLoading: false, providerDefinitions: [], providerConnections: [], providerVault: null, providerEconomics: [], providerEconomicsLoading: false, providerMigrations: [], providerMigrationsLoading: false, emailDeliveries: [], financePolicies: [], financeReviews: [], financeBalances: [], payouts: [], payoutAccounts: [], payoutPolicy: null, payoutLoading: false, payoutProofId: null, financeRisks: [], financeRiskSummary: {}, financeRiskLoading: false, platformRole: "", platformStaff: [], platformStaffLoading: false, platformStaffActionLoading: false, ownershipLoading: false, ledgerReconciliationRuns: [], health: null, telemetryHistory: null, alertDeliveries: [], backendHealth: null, webhookEvents: [], remoteJobs: [], audits: [], permissions: new Set(), activeDomain: ["overview", "fleet", "integrations", "finance", "access", "platform"].includes(requestedDomain) ? requestedDomain : "overview", loading: false, healthLoading: false, telemetryLoading: false, alertLoading: false, alertProcessing: false, backendHealthLoading: false, webhookEventsLoading: false, providerLoading: false, emailLoading: false, emailProcessing: false, financePolicyLoading: false, financeReviewLoading: false, financeBalancesLoading: false, financeRefundLoading: false, financeChargebackLoading: false, financeAdjustmentLoading: false, financeProviderFeeLoading: false, ledgerReconciliationLoading: false, remoteJobsLoading: false, remoteJobSending: false, auditLoading: false };
+const state = { machines: [], pairingMachines: [], pairingHistory: [], pairingLoading: false, pairingActionLoading: false, definitions: [], overrides: [], platformFrames: [], platformFrameLoading: false, providerDefinitions: [], providerConnections: [], providerVault: null, providerEconomics: [], providerEconomicsLoading: false, providerMigrations: [], providerMigrationsLoading: false, emailDeliveries: [], financePolicies: [], financeReviews: [], financeBalances: [], payouts: [], payoutAccounts: [], payoutPolicy: null, payoutLoading: false, payoutProofId: null, financeRisks: [], financeRiskSummary: {}, financeRiskLoading: false, platformRole: "", platformStaff: [], platformStaffLoading: false, platformStaffActionLoading: false, ownershipLoading: false, ledgerReconciliationRuns: [], health: null, telemetryHistory: null, alertDeliveries: [], backendHealth: null, webhookEvents: [], remoteJobs: [], audits: [], permissions: new Set(), activeDomain: ["overview", "fleet", "integrations", "finance", "access", "platform"].includes(requestedDomain) ? requestedDomain : "overview", loading: false, healthLoading: false, telemetryLoading: false, alertLoading: false, alertProcessing: false, backendHealthLoading: false, webhookEventsLoading: false, providerLoading: false, emailLoading: false, emailProcessing: false, financePolicyLoading: false, financeReviewLoading: false, financeBalancesLoading: false, financeRefundLoading: false, financeChargebackLoading: false, financeAdjustmentLoading: false, financeProviderFeeLoading: false, ledgerReconciliationLoading: false, remoteJobsLoading: false, remoteJobSending: false, auditLoading: false };
 
 const SUPERADMIN_DOMAINS = {
-  overview: { label: "Ringkasan", title: "Kondisi platform", copy: "Hal penting yang perlu diperiksa sekarang.", cards: ["machine-card", "fleet-health-card", "reset-card"] },
-  fleet: { label: "Fleet", title: "Mesin & operasional", copy: "Pantau perangkat, telemetry, alert, dan perintah hardware.", cards: ["fleet-health-card", "telemetry-history-card", "alert-routing-card", "remote-jobs-card", "machine-card"] },
+  overview: { label: "Ringkasan", title: "Kondisi platform", copy: "Hal penting yang perlu diperiksa sekarang.", cards: ["pairing-registry-card", "machine-card", "fleet-health-card", "reset-card"] },
+  fleet: { label: "Fleet", title: "Mesin & operasional", copy: "Pantau perangkat, ownership, telemetry, alert, dan perintah hardware.", cards: ["pairing-registry-card", "pairing-history-card", "fleet-health-card", "telemetry-history-card", "alert-routing-card", "remote-jobs-card", "machine-card"] },
   integrations: { label: "Integrasi", title: "Provider & pengiriman", copy: "Kelola frame global, koneksi provider, migrasi, webhook, dan email.", cards: ["platform-frame-card", "provider-connections-card", "provider-economics-card", "provider-migrations-card", "webhook-events-card", "email-delivery-card"] },
   finance: { label: "Finance", title: "Pembayaran & settlement", copy: "Tinjau fee, ledger, risiko, payout, refund, dan rekonsiliasi.", cards: ["finance-policy-card", "finance-review-card", "finance-balances-card", "finance-payout-card", "finance-risk-card", "finance-refund-card", "finance-chargeback-card", "finance-adjustment-card", "finance-provider-fee-card", "finance-ledger-reconciliation-card"] },
   access: { label: "Akses", title: "Pengguna & pemulihan", copy: "Kelola tim platform, pemilik photobox, dan permintaan pemulihan.", cards: ["platform-staff-card", "membership-card", "reset-card"] },
@@ -64,6 +64,8 @@ function applyPlatformIdentity(user) {
   $("#finance-payout-account-form").hidden = !can("platform.finance.write");
   $("#finance-payout-verify-form").hidden = !can("platform.finance.write") || state.platformRole !== "platform_owner";
   $("#alert-routing-process").hidden = !can("platform.fleet.write");
+  $("#pairing-registry-card").hidden = !can("platform.fleet.read");
+  $("#pairing-history-card").hidden = !can("platform.fleet.read");
   $("#platform-staff-card").hidden = !can("platform.staff.read");
   $("#platform-staff-invite-form").hidden = !can("platform.staff.write");
 }
@@ -83,6 +85,84 @@ function setStatus(selector, message = "", success = false) {
   const node = $(selector);
   node.textContent = message;
   node.classList.toggle("success", success);
+}
+
+function pairingState(status) {
+  const normalized = String(status || "unpaired").toLowerCase();
+  if (normalized === "paired") return { label: "PAIRED", className: "" };
+  if (normalized === "conflict") return { label: "CONFLICT", className: "off" };
+  if (normalized === "revoked") return { label: "REVOKED", className: "off" };
+  return { label: "UNPAIRED", className: "warn" };
+}
+
+function renderPairingRegistry(machineResult, historyResult) {
+  state.pairingMachines = Array.isArray(machineResult?.machines) ? machineResult.machines : [];
+  state.pairingHistory = Array.isArray(historyResult?.history) ? historyResult.history : [];
+  const canMutate = can("platform.ownership.write");
+  $("#pairing-machine-grid").innerHTML = state.pairingMachines.length ? state.pairingMachines.map(machine => {
+    const status = pairingState(machine.status);
+    const booth = machine.booth || {};
+    const owner = machine.owner || {};
+    const actions = canMutate ? `<div class="pairing-machine-actions">
+      <button class="btn" type="button" data-pairing-action="reassign" data-pairing-machine="${escapeHtml(machine.machineId)}">Pindahkan</button>
+      <button class="btn danger" type="button" data-pairing-action="revoke" data-pairing-machine="${escapeHtml(machine.machineId)}">Cabut pairing</button>
+    </div>` : "";
+    return `<article class="pairing-machine-item" data-pairing-machine-card="${escapeHtml(machine.machineId)}">
+      <header><div><h3>${escapeHtml(machine.name || machine.machineCode || machine.machineId)}</h3><p>${escapeHtml(machine.machineCode || "Kode belum tersedia")} · ${escapeHtml(machine.machineId)}</p></div><span class="pill ${status.className}">${status.label}</span></header>
+      <div class="pairing-machine-meta">
+        <div><small>OWNER</small><strong title="${escapeHtml(owner.email || "Belum ada")}">${escapeHtml(owner.email || "Belum ada")}</strong><p>${escapeHtml(owner.adminCode || "Admin code —")}</p></div>
+        <div><small>ORGANIZATION</small><strong title="${escapeHtml(machine.organizationId || "Belum dimiliki")}">${escapeHtml(machine.organizationName || "Belum dimiliki")}</strong><p>${escapeHtml(machine.organizationId || "—")}</p></div>
+        <div><small>PHOTOBOX</small><strong>${escapeHtml(booth.name || "Belum dibuat")}</strong><p>${escapeHtml(booth.boothCode || "—")} · ${escapeHtml(booth.location || "Lokasi belum diisi")}</p></div>
+        <div><small>PERANGKAT</small><strong>${escapeHtml(machine.platform || "Platform —")}</strong><p>Agent ${escapeHtml(machine.agentVersion || "—")} · ${escapeHtml(formatTime(machine.lastSeenAt))}</p></div>
+      </div>${actions}
+    </article>`;
+  }).join("") : '<p class="empty">Belum ada mesin pada registry PostgreSQL.</p>';
+  const actionLabels = { paired: "Dipasangkan", revoked: "Dicabut", reassigned: "Dipindahkan", migrated: "Dimigrasikan" };
+  $("#pairing-history-list").innerHTML = state.pairingHistory.length ? state.pairingHistory.map(record => `<article class="pairing-history-item">
+    <div><strong>${escapeHtml(actionLabels[record.action] || record.action || "Aktivitas pairing")}</strong><p>${escapeHtml(formatTime(record.createdAt))}</p></div>
+    <div><code>${escapeHtml(record.machineId || "—")}</code><p>${escapeHtml(record.reason || "Tanpa catatan")}</p></div>
+    <div><strong>${escapeHtml(record.toOrganizationId || "Tidak dimiliki")}</strong><p>Dari ${escapeHtml(record.fromOrganizationId || "tidak dimiliki")}</p></div>
+  </article>`).join("") : '<p class="empty">Belum ada histori pairing.</p>';
+  setStatus("#pairing-registry-status", `${state.pairingMachines.length} mesin · diperbarui ${new Date().toLocaleTimeString("id-ID")}`, true);
+}
+
+function renderPairingRegistryError(error) {
+  $("#pairing-machine-grid").innerHTML = '<div class="empty"><p>Ownership mesin belum dapat dimuat.</p><p>Pastikan migration PostgreSQL pairing sudah diterapkan.</p></div>';
+  $("#pairing-history-list").innerHTML = '<p class="empty">Histori pairing belum tersedia.</p>';
+  setStatus("#pairing-registry-status", error?.message || "Machine registry tidak tersedia.");
+}
+
+async function refreshPairingRegistry() {
+  if (state.pairingLoading || !can("platform.fleet.read")) return;
+  state.pairingLoading = true;
+  $("#pairing-registry-retry").disabled = true;
+  setStatus("#pairing-registry-status", "Memperbarui ownership mesin…");
+  try {
+    const [machines, history] = await Promise.all([api("superadmin_machines"), api("superadmin_pairing_history&limit=100")]);
+    renderPairingRegistry(machines, history);
+  } catch (error) {
+    renderPairingRegistryError(error);
+  } finally {
+    state.pairingLoading = false;
+    $("#pairing-registry-retry").disabled = false;
+  }
+}
+
+function openPairingAction(machineId, operation) {
+  const machine = state.pairingMachines.find(item => item.machineId === machineId);
+  if (!machine) return setStatus("#pairing-registry-status", "Mesin tidak ditemukan. Perbarui daftar lalu coba lagi.");
+  const reassign = operation === "reassign";
+  $("#pairing-action-machine-id").value = machineId;
+  $("#pairing-action-type").value = reassign ? "reassign" : "revoke";
+  $("#pairing-action-title").textContent = reassign ? "Pindahkan ownership mesin" : "Cabut pairing mesin";
+  $("#pairing-action-copy").textContent = `${machine.name || machine.machineCode || machineId} · ${machine.machineCode || machineId}. Aksi ini dicatat di audit log.`;
+  $("#pairing-target-organization-wrap").hidden = !reassign;
+  $("#pairing-target-organization").required = reassign;
+  $("#pairing-target-organization").value = "";
+  $("#pairing-action-reason").value = "";
+  $("#pairing-action-password").value = "";
+  setStatus("#pairing-action-status");
+  $("#pairing-action-dialog").showModal();
 }
 
 function formatTime(value) {
@@ -1219,15 +1299,22 @@ async function load() {
     const remoteJobsRequest = api("remote_jobs").then(data => ({ data }), error => ({ error }));
     const auditRequest = api("audit").then(data => ({ data }), error => ({ error }));
     const platformStaffRequest = can("platform.staff.read") ? api("platform_staff").then(data => ({ data }), error => ({ error })) : Promise.resolve({ data: { staff: [], permissions: { canManage: false } } });
-    const [{ machines, resetRequests }, flags, healthResult, alertRoutingResult, backendHealthResult, webhookEventsResult, providerResult, platformFrameResult, providerEconomicsResult, providerMigrationsResult, emailResult, financePolicyResult, financeReviewResult, financeBalancesResult, financePayoutResult, financeRiskResult, ledgerReconciliationResult, remoteJobsResult, auditResult, platformStaffResult] = await Promise.all([api("superadmin_overview"), api("feature_flags"), healthRequest, alertRoutingRequest, backendHealthRequest, webhookEventsRequest, providerRequest, platformFrameRequest, providerEconomicsRequest, providerMigrationsRequest, emailRequest, financePolicyRequest, financeReviewRequest, financeBalancesRequest, financePayoutRequest, financeRiskRequest, ledgerReconciliationRequest, remoteJobsRequest, auditRequest, platformStaffRequest]);
+    const overviewRequest = api("superadmin_overview").then(data => ({ data }), error => ({ error }));
+    const flagsRequest = api("feature_flags").then(data => ({ data }), error => ({ error }));
+    const pairingRegistryRequest = can("platform.fleet.read")
+      ? Promise.all([api("superadmin_machines"), api("superadmin_pairing_history&limit=100")]).then(([machines, history]) => ({ data: { machines, history } }), error => ({ error }))
+      : Promise.resolve({ data: { machines: { machines: [] }, history: { history: [] } } });
+    const [overviewResult, flagsResult, healthResult, alertRoutingResult, backendHealthResult, webhookEventsResult, providerResult, platformFrameResult, providerEconomicsResult, providerMigrationsResult, emailResult, financePolicyResult, financeReviewResult, financeBalancesResult, financePayoutResult, financeRiskResult, ledgerReconciliationResult, remoteJobsResult, auditResult, platformStaffResult, pairingRegistryResult] = await Promise.all([overviewRequest, flagsRequest, healthRequest, alertRoutingRequest, backendHealthRequest, webhookEventsRequest, providerRequest, platformFrameRequest, providerEconomicsRequest, providerMigrationsRequest, emailRequest, financePolicyRequest, financeReviewRequest, financeBalancesRequest, financePayoutRequest, financeRiskRequest, ledgerReconciliationRequest, remoteJobsRequest, auditRequest, platformStaffRequest, pairingRegistryRequest]);
     $("#super-login-view").classList.add("hidden");
     $("#super-dashboard").classList.remove("hidden");
     $("#super-logout").hidden = false;
     showSuperDomain(state.activeDomain, { updateUrl: false });
-    renderOverview(machines, resetRequests);
+    const overview = overviewResult.data || { machines: [], resetRequests: [] };
+    renderOverview(overview.machines || [], overview.resetRequests || []);
     queueMicrotask(() => refreshTelemetryHistory());
-    state.definitions = flags.definitions;
-    state.overrides = flags.overrides;
+    const flags = flagsResult.data || { definitions: [], overrides: [] };
+    state.definitions = Array.isArray(flags.definitions) ? flags.definitions : [];
+    state.overrides = Array.isArray(flags.overrides) ? flags.overrides : [];
     renderFlags();
     if (healthResult.data) renderFleetHealth(healthResult.data); else renderFleetHealthError(healthResult.error);
     if (alertRoutingResult.data) renderAlertRouting(alertRoutingResult.data); else renderAlertRoutingError(alertRoutingResult.error);
@@ -1250,8 +1337,19 @@ async function load() {
     if (remoteJobsResult.data) renderRemoteJobs(remoteJobsResult.data); else renderRemoteJobsError(remoteJobsResult.error);
     if (auditResult.data) renderAudit(auditResult.data.records || []); else renderAuditError(auditResult.error);
     if (platformStaffResult.data) renderPlatformStaff(platformStaffResult.data); else renderPlatformStaffError(platformStaffResult.error);
-    $("#flags-retry").hidden = true;
-    setStatus("#super-status", `Diperbarui ${new Date().toLocaleTimeString("id-ID")}`, true);
+    if (pairingRegistryResult.data) renderPairingRegistry(pairingRegistryResult.data.machines, pairingRegistryResult.data.history); else renderPairingRegistryError(pairingRegistryResult.error);
+    $("#flags-retry").hidden = Boolean(flagsResult.data);
+    const limitedServices = [
+      overviewResult.error ? "telemetry lama" : "",
+      flagsResult.error ? "feature flags" : "",
+    ].filter(Boolean);
+    setStatus(
+      "#super-status",
+      limitedServices.length
+        ? `Ownership PostgreSQL siap. ${limitedServices.join(" dan ")} sementara terbatas.`
+        : `Diperbarui ${new Date().toLocaleTimeString("id-ID")}`,
+      limitedServices.length === 0,
+    );
     if (alertRoutingResult.data?.summary?.queued && can("platform.fleet.write")) queueMicrotask(() => processAlertRouting());
   } catch (error) {
     setStatus("#super-status", error.message);
@@ -1395,6 +1493,43 @@ $("#machine-rows").addEventListener("click", async event => {
   button.disabled = true;
   try { await api("toggle_machine", { method: "POST", body: JSON.stringify({ machineId: button.dataset.machine, enabled: button.dataset.enabled === "true" }) }); await load(); }
   catch (error) { setStatus("#super-status", error.message); button.disabled = false; }
+});
+
+$("#pairing-registry-retry").addEventListener("click", refreshPairingRegistry);
+$("#pairing-machine-grid").addEventListener("click", event => {
+  const button = event.target.closest("[data-pairing-action]");
+  if (!button || !can("platform.ownership.write")) return;
+  openPairingAction(button.dataset.pairingMachine, button.dataset.pairingAction);
+});
+$("#pairing-action-cancel").addEventListener("click", () => $("#pairing-action-dialog").close());
+$("#pairing-action-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  if (state.pairingActionLoading || !can("platform.ownership.write")) return;
+  const operation = $("#pairing-action-type").value;
+  const machineId = $("#pairing-action-machine-id").value;
+  state.pairingActionLoading = true;
+  $("#pairing-action-submit").disabled = true;
+  setStatus("#pairing-action-status", operation === "reassign" ? "Memindahkan ownership…" : "Mencabut pairing…");
+  try {
+    const result = await api(operation === "reassign" ? "superadmin_machine_reassign" : "superadmin_machine_revoke", {
+      method: "POST",
+      body: JSON.stringify({
+        machineId,
+        targetOrganizationId: operation === "reassign" ? $("#pairing-target-organization").value.trim() : undefined,
+        reason: $("#pairing-action-reason").value.trim(),
+        reauthPassword: $("#pairing-action-password").value,
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    });
+    $("#pairing-action-dialog").close();
+    await Promise.all([refreshPairingRegistry(), refreshAudit()]);
+    setStatus("#pairing-registry-status", result.message || "Ownership mesin diperbarui.", true);
+  } catch (error) {
+    setStatus("#pairing-action-status", error.message);
+  } finally {
+    state.pairingActionLoading = false;
+    $("#pairing-action-submit").disabled = false;
+  }
 });
 
 $("#reset-rows").addEventListener("click", async event => {

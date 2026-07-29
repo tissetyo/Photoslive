@@ -5,7 +5,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const read = path => readFile(new URL(path, root), "utf8");
 
-test("operator installer opens local setup without pairing code or cloud validation", async () => {
+test("operator installer opens local setup while account pairing remains an explicit action", async () => {
   const [setup, bridge, agent] = await Promise.all([
     read("setup.js"),
     read("api/bridge.mjs"),
@@ -17,14 +17,15 @@ test("operator installer opens local setup without pairing code or cloud validat
   assert.match(setup, /if \(IS_LOCAL_SETUP\) await bootstrapLocalSetup\(\)/);
   assert.match(setup, /params\.get\("setup"\)/);
   assert.doesNotMatch(setup, /localStorage\.setItem\([^)]*setupToken/);
-  assert.match(bridge, /const locallyReady = localSetup\.completed === true/);
-  assert.match(bridge, /const code = pairingCode\(\)/);
+  assert.match(bridge, /export async function createSetupCode/);
+  assert.match(bridge, /createPostgresSetupCode/);
   assert.match(agent, /\/setup\?local=1/);
   assert.match(agent, /def local_setup_page_ready\(/);
   assert.match(agent, /<title>Setup Photoslive<\/title>/);
   assert.match(agent, /if arguments\.setup_link:[\s\S]*local_setup_url\(config\)/);
   assert.match(agent, /if arguments\.setup_link:[\s\S]*local_setup_page_ready\(config\)/);
-  assert.match(agent, /if not bootstrap\.get\("completed"\):[\s\S]*cloudRegistrationPending/);
+  assert.match(agent, /if arguments\.pairing_link:/);
+  assert.match(agent, /request_machine_pairing\(config, force=True/);
   assert.doesNotMatch(agent, /--setup-code/);
   assert.doesNotMatch(agent, /request_setup_code/);
 });
@@ -106,19 +107,20 @@ test("setup and booth register an API-safe offline PWA shell", async () => {
   assert.match(serviceWorker, /return "\/booth\.html"/);
 });
 
-test("Local Manager opens local setup without exposing or creating a pairing code", async () => {
+test("Local Manager creates a pairing claim only after an explicit operator action", async () => {
   const [localManager, localManagerScript, controller] = await Promise.all([
     read("local-agent.html"),
     read("local-agent.js"),
     read("../server.py"),
   ]);
-  assert.match(localManager, /<b>Jalankan ulang wizard<\/b>/);
-  assert.doesNotMatch(localManager, /Buat kode setup|Kode pairing/);
-  assert.match(localManagerScript, /location\.assign\(result\.setupUrl\)/);
-  assert.doesNotMatch(localManagerScript, /navigator\.clipboard.*result\.code/);
-  assert.match(controller, /setup_url_value = "\/setup\?local=1"/);
-  assert.doesNotMatch(controller, /command_output\(\[sys\.executable,[^\n]*"--setup-link"/);
-  assert.match(controller, /"setupUrl": setup_url_value/);
+  assert.match(localManager, /<b>Hubungkan ke akun<\/b>/);
+  assert.match(localManager, /id="create-machine-pairing"/);
+  assert.match(localManager, /id="machine-pairing-qr"/);
+  assert.match(localManager, /id="copy-machine-pairing"/);
+  assert.match(localManagerScript, /\/api\/local\/agent\/setup-code/);
+  assert.match(localManagerScript, /navigator\.clipboard\.writeText\(state\.machinePairingCode\)/);
+  assert.match(controller, /"--pairing-link", "--json"/);
+  assert.match(controller, /pairing_url = str\(payload\.get\("pairingUrl"\) or ""\)/);
 });
 
 test("setup UI hides internal registration details and avoids a one-option selector", async () => {
@@ -143,13 +145,17 @@ test("cloud account registration is real and does not require an installer", asy
     read("setup.js"),
     read("api/platform.mjs"),
   ]);
-  assert.match(html, /data-mode="register">Daftar akun/);
+  assert.match(html, /data-mode="register">Buat akun/);
   assert.match(html, /id="register-email"/);
   assert.match(html, /id="register-password"/);
   assert.match(html, /id="register-password-confirm"/);
   assert.match(html, /Mulai tanpa installer/);
   assert.match(setup, /api\("register"/);
-  assert.match(setup, /hardware dapat dihubungkan nanti|Hubungkan perangkat nanti/i);
+  assert.match(setup, /const IS_LOOPBACK_HOST = \["127\.0\.0\.1", "localhost", "::1"\]/);
+  assert.match(setup, /const CLOUD_PLATFORM_ORIGIN = "https:\/\/photoslive\.vercel\.app"/);
+  assert.match(setup, /location\.replace\(cloudRegistrationUrl\(\)\)/);
+  assert.match(setup, /requestedMode === "register" && continueRegistrationOnCloud\(\)/);
+  assert.match(setup, /pairing: \["Hubungkan photobox", "Scan QR atau masukkan kode dari Local Manager\."\]/);
   assert.match(platform, /export async function registerAccount/);
   assert.match(platform, /action === "register"/);
   assert.match(platform, /status: "not-installed"/);

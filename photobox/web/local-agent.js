@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-const state = { token: "", status: null, restoreBackup: "", companionUrl: "" };
+const state = { token: "", status: null, restoreBackup: "", companionUrl: "", machinePairingUrl: "", machinePairingCode: "" };
 const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
 
 const formatBytes = value => {
@@ -77,9 +77,81 @@ function renderStatus(status) {
     const cloudOrigin = String(status.config?.cloud || "https://photoslive.vercel.app").replace(/\/$/, "");
     $("#open-admin").href = `${cloudOrigin}/${encodeURIComponent(booth)}/admin`;
   }
+  renderMachinePairing(status.config || {});
 }
 
 async function refreshStatus() { renderStatus(await api("/api/local/agent/status")); }
+
+function renderMachinePairing(config) {
+  const paired = Boolean(config.paired);
+  const expiry = Number(config.pairingExpiresAt || 0);
+  const active = !paired && Boolean(config.pairingUrl) && expiry > Date.now() / 1000;
+  const badge = $("#machine-pairing-state");
+  badge.className = `companion-state ${paired ? "connected" : active ? "waiting" : ""}`;
+  badge.querySelector("b").textContent = paired ? "Terhubung" : active ? "Menunggu akun" : "Belum terhubung";
+  $("#machine-pairing-title").textContent = paired
+    ? `Terhubung ke booth ${config.boothCode || ""}`.trim()
+    : active ? "QR siap dipindai" : "Belum terhubung ke akun";
+  $("#machine-pairing-detail").textContent = paired
+    ? "Ownership tersimpan permanen. Pairing tidak perlu diulang saat komputer menyala kembali."
+    : active ? "Scan QR dari ponsel yang sudah login, atau masukkan kode di Admin."
+      : "Buat satu QR ketika siap menghubungkan mesin ke akun Photoslive.";
+  $("#create-machine-pairing").disabled = paired;
+  $("#create-machine-pairing").innerHTML = paired
+    ? '<img src="/icons/shield-check.svg" alt="">Sudah terhubung'
+    : '<img src="/icons/scan-line.svg" alt="">Buat QR & kode';
+  if (active) {
+    state.machinePairingUrl = config.pairingUrl;
+    state.machinePairingCode = config.pairingCode || "";
+    $("#machine-pairing-code").textContent = config.pairingCode || "Gunakan QR";
+    $("#machine-pairing-expiry").textContent = `Berlaku sampai ${new Date(expiry * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`;
+    $("#open-machine-pairing").disabled = false;
+  } else if (!paired) {
+    $("#machine-pairing-claim").hidden = true;
+    $("#open-machine-pairing").disabled = true;
+  }
+}
+
+async function createMachinePairing() {
+  const button = $("#create-machine-pairing");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    const result = await api("/api/local/agent/setup-code", { method: "POST", body: "{}" });
+    if (result.paired) {
+      toast("Mesin sudah terhubung permanen");
+      await refreshStatus();
+      return;
+    }
+    if (!result.pairingUrl) throw new Error("Agent tidak mengembalikan tautan pairing");
+    state.machinePairingUrl = result.pairingUrl;
+    state.machinePairingCode = result.pairingCode || "";
+    $("#machine-pairing-claim").hidden = false;
+    $("#machine-pairing-qr").hidden = !result.qrImage;
+    if (result.qrImage) $("#machine-pairing-qr").src = result.qrImage;
+    $("#machine-pairing-code").textContent = result.pairingCode || "Gunakan QR";
+    const expiry = Number(result.pairingExpiresAt || (Date.now() / 1000 + Number(result.expiresInSeconds || 900)));
+    $("#machine-pairing-expiry").textContent = `Berlaku sampai ${new Date(expiry * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`;
+    $("#open-machine-pairing").disabled = false;
+    renderMachinePairing({ ...state.status?.config, ...result, pairingExpiresAt: expiry });
+    toast("QR dan kode pairing siap");
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+  } finally {
+    button.removeAttribute("aria-busy");
+  }
+}
+
+async function copyMachinePairingCode() {
+  if (!state.machinePairingCode) return toast("Buat kode pairing terlebih dahulu", "error");
+  try {
+    await navigator.clipboard.writeText(state.machinePairingCode);
+    toast("Kode pairing disalin");
+  } catch {
+    toast("Clipboard tidak diizinkan. Salin kode secara manual.", "error");
+  }
+}
 
 function renderCompanion(result) {
   const value = result.status || {};
@@ -418,17 +490,12 @@ $("#rollback-confirmation").addEventListener("input", event => { $("#confirm-rol
 $("#confirm-rollback").addEventListener("click", confirmRollback);
 $("#run-diagnosis").addEventListener("click", async () => { try { const result = await api("/api/local/agent/diagnose", { method: "POST", body: "{}" }); if (result.database?.healthy === false) { toast(`${result.database.message} ${result.database.action || ""}`.trim(), "error"); } else { const devices = Array.isArray(result.devices) ? result.devices : []; const camera = devices.filter(item => item.kind === "camera" && item.status === "connected").length; const printer = devices.filter(item => item.kind === "printer" && item.status === "connected").length; toast(`Diagnosis selesai: ${camera} kamera, ${printer} printer, ${result.sync?.pending || 0} sinkronisasi menunggu`); } await refreshLogs(); } catch (error) { toast(error.message, "error"); } });
 $("#create-setup-code").addEventListener("click", async () => {
-  const button = $("#create-setup-code");
-  button.disabled = true;
-  try {
-    const result = await api("/api/local/agent/setup-code", { method: "POST", body: "{}" });
-    if (!result.setupUrl) throw new Error("Tautan setup tidak diterima dari Agent");
-    toast("Membuka wizard setup…");
-    location.assign(result.setupUrl);
-  } catch (error) {
-    toast(error.message, "error");
-    button.disabled = false;
-  }
+  $("#machine-pairing").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("#create-machine-pairing").addEventListener("click", createMachinePairing);
+$("#copy-machine-pairing").addEventListener("click", copyMachinePairingCode);
+$("#open-machine-pairing").addEventListener("click", () => {
+  if (state.machinePairingUrl) window.open(state.machinePairingUrl, "_blank", "noopener");
 });
 $("#create-companion-pairing").addEventListener("click", createCompanionPairing);
 $("#revoke-companion").addEventListener("click", revokeCompanionSession);

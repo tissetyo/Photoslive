@@ -22,6 +22,26 @@ provider, finance, fleet, remote job, email, telemetry, backup, dan audit.
 Hardware action selalu masuk remote queue terpisah; save config/voucher tidak
 boleh memanggil Agent dalam request yang sama.
 
+Auth dan pairing akun-first:
+
+- `POST /api/platform?action=register` — Supabase Auth register dan
+  bootstrap organization Owner tanpa membutuhkan Agent atau Redis.
+- `POST /api/platform?action=login` — login email/password tanpa booth code.
+- `POST /api/platform?action=refresh` — silent renewal session Supabase.
+- `POST /api/platform?action=logout` — revoke provider session dan hapus cookie.
+- `GET /api/platform?action=me` — akun, organization, booth, dan mesin.
+- `GET /api/platform?action=superadmin_machines` — registry ownership PostgreSQL.
+- `GET /api/platform?action=superadmin_pairing_history` — histori claim,
+  revocation, reassignment, dan conflict.
+- `POST /api/platform?action=superadmin_machine_revoke` — revoke idempotent
+  dengan re-authentication.
+- `POST /api/platform?action=superadmin_machine_reassign` — transfer ownership
+  transactional dan teraudit.
+
+Local Manager membuat pairing claim melalui bridge hanya setelah tindakan
+operator. QR memakai URL `/pair/{opaque-token}` dan fallback code berlaku 15
+menit. PostgreSQL menyimpan hash token/code, bukan raw credential.
+
 Settings cloud:
 
 - `GET /api/platform?action=cloud_data&path=/api/settings` — snapshot config

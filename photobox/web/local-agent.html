@@ -36,6 +36,33 @@
       <article class="status-card"><span><img src="/icons/download.svg" alt=""></span><div><small>UPDATE</small><strong id="update-value">Memeriksa</strong><p id="update-detail">Status belum dibaca</p></div></article>
     </section>
 
+    <section class="panel machine-pairing-panel" id="machine-pairing">
+      <header>
+        <div><h2>Hubungkan ke akun</h2><p>Pairing dilakukan satu kali. Setelah berhasil, mesin tetap terhubung setelah reboot dan reconnect.</p></div>
+        <span class="companion-state" id="machine-pairing-state"><i></i><b>Memeriksa</b></span>
+      </header>
+      <div class="machine-pairing-content">
+        <div>
+          <span class="companion-icon"><img src="/icons/ticket-check.svg" alt=""></span>
+          <strong id="machine-pairing-title">Memeriksa status pairing</strong>
+          <p id="machine-pairing-detail">Kode hanya dibuat ketika Anda memintanya dan berlaku 15 menit.</p>
+          <div class="panel-actions">
+            <button class="button primary" id="create-machine-pairing"><img src="/icons/scan-line.svg" alt="">Buat QR & kode</button>
+            <button class="button secondary" id="open-machine-pairing" disabled>Buka halaman</button>
+          </div>
+        </div>
+        <div class="machine-pairing-claim" id="machine-pairing-claim" hidden>
+          <img id="machine-pairing-qr" alt="QR pairing akun Photoslive">
+          <div>
+            <small>KODE CADANGAN</small>
+            <strong id="machine-pairing-code">—</strong>
+            <p id="machine-pairing-expiry">Belum dibuat</p>
+            <button class="button secondary" id="copy-machine-pairing">Salin kode</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="panel metrics-panel">
       <header><div><h2>Kesehatan lokal</h2><p>Ringkasan ringan sejak Controller hidup. Maksimal 512 request terakhir disimpan di RAM.</p></div><button class="icon-button" id="refresh-metrics" aria-label="Muat ulang kesehatan lokal"><img src="/icons/refresh-cw.svg" alt=""></button></header>
       <div class="metrics-grid" aria-live="polite">
@@ -70,7 +97,7 @@
           <button id="install-update" disabled><span><img src="/icons/download.svg" alt=""></span><div><b>Pasang update</b><small id="install-update-help">Periksa versi baru terlebih dahulu</small></div><img src="/icons/chevron-right.svg" alt=""></button>
           <button id="rollback-update" disabled><span><img src="/icons/rotate-cw.svg" alt=""></span><div><b>Rollback versi</b><small id="rollback-update-help">Backup versi sebelumnya belum tersedia</small></div><img src="/icons/chevron-right.svg" alt=""></button>
           <button id="run-diagnosis"><span><img src="/icons/wrench.svg" alt=""></span><div><b>Diagnosis</b><small>Periksa service, perangkat, storage, dan antrean</small></div><img src="/icons/chevron-right.svg" alt=""></button>
-          <button id="create-setup-code"><span><img src="/icons/ticket-check.svg" alt=""></span><div><b>Jalankan ulang wizard</b><small>Identitas aman dibuat di belakang layar dan wizard langsung dibuka</small></div><img src="/icons/chevron-right.svg" alt=""></button>
+          <button id="create-setup-code"><span><img src="/icons/ticket-check.svg" alt=""></span><div><b>Hubungkan ke akun</b><small>Buat QR atau kode sekali pakai jika mesin belum dimiliki akun</small></div><img src="/icons/chevron-right.svg" alt=""></button>
         </div>
         <details class="advanced-agent-controls">
           <summary>Advanced</summary>

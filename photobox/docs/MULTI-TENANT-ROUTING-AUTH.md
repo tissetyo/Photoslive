@@ -5,16 +5,17 @@
 | URL | Fungsi |
 | --- | --- |
 | `/` | Landing page Photoslive |
-| `/setup` | Wizard onboarding Agent, identitas mesin, akun pemilik, perangkat, dan frame |
+| `/setup` | Registrasi/login akun, lalu pilihan untuk menghubungkan mesin |
+| `/admin` | Admin organization; tetap tersedia sebelum ada mesin |
 | `/superadmin` | Control center semua mesin dan request pemulihan |
 | `/{boothCode}` | Layar pelanggan untuk satu photobox |
 | `/{boothCode}/admin` | Dashboard admin tenant |
 | `/{boothCode}/sesi/{shareCode}` | Galeri publik satu sesi selama maksimal 24 jam |
 
-`boothCode` adalah identifier permanen. Token setup internal tetap sekali pakai
-dan berlaku 15 menit, tetapi hanya dibawa oleh tautan HTTPS yang dibuka Agent;
-operator tidak melihat atau mengetiknya. Setelah diklaim token dihapus. Karena
-itu `pairingCode: null` adalah status normal pada mesin yang sudah onboarding.
+`boothCode` adalah identifier permanen. Token pairing tetap sekali pakai dan
+berlaku 15 menit. Operator dapat memindai QR atau memasukkan fallback code.
+Setelah claim, ownership mesin berlaku sampai dicabut dan tidak terpengaruh
+logout browser, reboot, atau reconnect internet.
 
 ## Upgrade dan recovery Agent
 
@@ -26,14 +27,13 @@ Linux installer menggunakan `systemctl --user restart`, bukan hanya
 python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --status
 ```
 
-Untuk mesin lama yang sudah paired tetapi belum mempunyai onboarding akun:
+Untuk membuat QR/kode pairing baru pada mesin yang belum paired:
 
 ```bash
-python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-link --open-setup
+python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --pairing-link
 ```
 
-Perintah membuka tautan setup baru yang berlaku 15 menit tanpa menghapus machine
-ID, token Agent, atau konfigurasi controller.
+Perintah ini jalur teknisi. Flow operator memakai tombol Local Manager.
 
 ## Model akses
 
@@ -42,11 +42,10 @@ ID, token Agent, atau konfigurasi controller.
 - `admin`: dapat mengelola konfigurasi dan menambahkan operator.
 - `operator`: akses operasional mesin.
 
-Owner pertama dibuat dengan email dan PIN enam angka; password tidak diwajibkan
-pada onboarding. Password dapat ditambahkan kemudian dari halaman pengguna
-admin. Password dan PIN yang tersedia di-hash menggunakan PBKDF2-SHA256 dengan salt individual.
-Session browser ditandatangani HMAC dan disimpan pada cookie `HttpOnly`, `Secure`,
-`SameSite=Lax` selama tujuh hari.
+Owner pertama dibuat melalui Supabase Auth menggunakan email dan password.
+Registrasi tidak memerlukan mesin. Session aplikasi memakai cookie host-only
+`HttpOnly`, `Secure`, `SameSite=Lax` dengan silent renewal sampai 90 hari dan
+tetap dapat dicabut. PIN bersifat opsional dan hanya untuk login lokal.
 
 ### Login remote dan PIN lokal
 
@@ -76,30 +75,19 @@ operator; admin tidak dapat mencabut session owner. Pencabutan diri sendiri
 menghapus cookie saat ini dan mengarahkan pengguna kembali ke halaman login.
 Seluruh pencabutan tercatat sebagai `user.sessions_revoked` pada audit log booth.
 
-## Wizard onboarding mesin baru
+## Setup akun dan mesin
 
-1. **Tautan setup otomatis (wajib):** cloud memvalidasi token internal dari
-   tautan Agent tanpa langsung mengklaim atau menghapusnya.
-2. **Identitas:** owner mengisi nama photobox; lokasi boleh dikosongkan.
-3. **Akses pemilik (wajib):** owner mengisi email, PIN enam angka, dan konfirmasi
-   PIN. Pada tahap ini mesin diklaim dan session owner dibuat.
-4. **Perangkat dan penyimpanan (boleh dilewati):** UI membaca heartbeat Agent,
-   menampilkan hostname/platform/RAM/disk, dan menunjukkan kamera serta printer
-   nyata yang terdeteksi. Webcam browser ditambahkan lewat `MediaDevices` setelah
-   tindakan pengguna memberi izin. Owner juga dapat menentukan path absolut
-   folder foto lokal pada komputer Agent.
-5. **Frame pertama (boleh dilewati):** owner memilih frame bawaan dengan preview
-   area foto yang nyata, atau mengunggah frame melalui Agent ketika mesin online.
-   Upload membuka editor yang sama modelnya dengan admin: jumlah slot, posisi,
-   ukuran, rotasi, opacity, logo/stiker, dan urutan layer disimpan bersama frame.
-6. **Siap digunakan:** UI merangkum bagian yang sudah siap dan bagian yang masih
-   perlu diselesaikan dari admin.
+1. **Akun:** registrasi/login email dan password. User langsung masuk `/admin`.
+2. **Pairing:** pilih Scan QR, Masukkan kode, atau Siapkan nanti. Claim
+   menampilkan konfirmasi machine code, OS, organization, owner, booth/lokasi,
+   versi, dan perangkat.
+3. **Siap:** ownership permanen disimpan di PostgreSQL dan SQLite lokal.
+   Konfigurasi kamera, printer, folder, frame, QRIS, dan tes sesi dilanjutkan
+   dari readiness checklist Admin dan tidak memblokir pairing.
 
-Token setup dihapus hanya setelah langkah akses pemilik berhasil. Refresh pada
-langkah sebelum klaim tidak boleh menghabiskan token tersebut.
-
-Kartu wizard tetap di posisi yang sama pada semua langkah. Progres ditampilkan
-sebagai border di sekeliling kartu; hanya orb warna di background yang berpindah.
+Kartu setup tetap pada posisi yang sama. Background saat ini dipertahankan,
+animasi menghormati `prefers-reduced-motion`, dan Admin memakai drawer/bottom
+navigation serta card list pada layar kecil.
 
 Environment production wajib berisi `SESSION_SECRET` minimal 32 karakter,
 `SUPERADMIN_EMAIL`, dan `SUPERADMIN_PASSWORD_HASH`.

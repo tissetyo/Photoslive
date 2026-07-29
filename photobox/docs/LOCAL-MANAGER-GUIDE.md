@@ -20,8 +20,14 @@ tersambung** selalu disertai tindakan.
   cadangan.
 - **Tes perangkat/Pilih folder** memanggil API lokal nyata.
 - **Diagnosis/Lihat log** menghasilkan laporan bounded yang menyensor secret.
-- **Jalankan ulang wizard** membuat identitas registrasi satu kali di belakang
-  layar dan langsung membuka setup; operator tidak menyalin atau mengetik kode.
+- **Hubungkan ke akun** membuat QR dan fallback code satu kali hanya ketika
+  ditekan. Kode berlaku 15 menit dan Local Manager menampilkan status menunggu,
+  berhasil, kedaluwarsa, atau gagal.
+- **Buat kode baru/Salin kode/Buka pairing** tersedia selama mesin belum paired.
+  Setelah berhasil, mapping booth disimpan lokal dan service tidak meminta
+  pairing ulang setelah reboot.
+- **Cabut pairing** bukan tindakan Local Manager biasa. Owner/Superadmin
+  melakukannya dari cloud dengan re-authentication dan audit log.
 - **Hard stop** hanya ada di Advanced dan membutuhkan konfirmasi.
 
 Jika GUI ditutup, service tetap berjalan. Jika service mati, supervisor OS akan

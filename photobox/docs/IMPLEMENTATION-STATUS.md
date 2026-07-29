@@ -1,6 +1,6 @@
 # Status implementasi menuju mature product
 
-Terakhir diverifikasi: 22 Juli 2026. Dokumen ini sengaja memisahkan fondasi
+Terakhir diverifikasi: 29 Juli 2026. Dokumen ini sengaja memisahkan fondasi
 yang sudah ada dari gate produksi yang masih terbuka. Checklist produk lengkap
 ada di `MATURE-PRODUCT-TRACKER.md`.
 
@@ -16,6 +16,18 @@ manual, bukti yang harus disimpan, serta batas secret didokumentasikan di
 `MANUAL-SETUP-ACTIONS.md`.
 
 ## Code-complete dan teruji otomatis
+
+- Setup akun-first tiga langkah telah diimplementasikan di working tree:
+  registrasi/login Supabase Auth tidak membutuhkan Agent atau Redis, user dapat
+  membuka Admin organization sebelum mempunyai mesin, Local Manager hanya
+  membuat QR/kode pairing setelah tindakan operator, dan mapping paired disimpan
+  permanen. Registry ownership/histori serta revoke/reassign Superadmin memakai
+  PostgreSQL, re-authentication, idempotency, dan audit. Seluruh 385 automated
+  test lulus dan audit interaction menemukan 455 kontrol wired, satu capability
+  sengaja unavailable, serta nol kontrol unknown. Migration
+  `20260729120000_account_machine_pairing_v2.sql` masih harus diterapkan dan
+  diuji pada staging/live; installer GUI, acceptance hardware, mobile visual
+  regression nyata, dan E2E terhadap Supabase production belum diklaim selesai.
 
 - Metadata aset booth kini memiliki adapter PostgreSQL service-role-only dan
   mode `off|dual|primary`. Mode primary membaca database sebelum cache,

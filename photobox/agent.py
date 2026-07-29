@@ -203,28 +203,39 @@ def local_setup_bootstrap(config: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
-def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
-    if config.get("machineId") and config.get("agentToken"):
+def request_machine_pairing(config: dict[str, Any], *, force: bool = False, announce: bool = True) -> dict[str, Any]:
+    """Create a short-lived claim without changing the installation identity.
+
+    Pairing claims are created only during the initial installation or after an
+    explicit Local Manager action. A paired installation never creates a fresh
+    claim merely because the browser, computer, or internet connection restarts.
+    """
+    if config.get("paired") and force:
+        raise RuntimeError("Mesin sudah terhubung permanen. Cabut pairing dari Admin atau Superadmin sebelum memindahkannya.")
+    expiry = float(config.get("pairingExpiresAt") or 0)
+    if not force and config.get("pairingUrl") and expiry > time.time() + 15:
         return config
     bootstrap = local_setup_bootstrap(config)
-    if not bootstrap.get("completed"):
-        config["cloudRegistrationPending"] = True
-        return config
     booth = bootstrap.get("booth") if isinstance(bootstrap.get("booth"), dict) else {}
-    token = f"agent_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    config.setdefault("machineId", f"machine_{uuid.uuid4().hex}")
+    save_config(config)
+    token = str(config.get("agentToken") or f"agent_{uuid.uuid4().hex}{uuid.uuid4().hex}")
     response = request_json(
         cloud_url(config, "create_pairing"),
         "POST",
         {
             "name": config.get("name"),
+            "machineId": config["machineId"],
             "platform": platform.platform(),
             "agentVersion": VERSION,
             "agentToken": token,
             "boothCode": booth.get("boothCode") or config.get("boothCode"),
             "location": booth.get("location"),
             "localSetup": {
-                "completed": True,
+                "completed": bool(bootstrap.get("completed")),
                 "boothCode": booth.get("boothCode") or config.get("boothCode"),
+                "controllerVersion": bootstrap.get("controllerVersion"),
+                "devices": bootstrap.get("devices") if isinstance(bootstrap.get("devices"), list) else [],
             },
         },
     )
@@ -235,17 +246,35 @@ def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
         "boothCode": response.get("boothCode") or booth.get("boothCode") or config.get("boothCode"),
         "cloudRegistered": True,
         "cloudRegisteredAt": time.time(),
+        "pairingToken": response.get("pairingToken"),
+        "pairingCode": response.get("pairingCode") or response.get("setupToken"),
+        "pairingUrl": response.get("pairingUrl"),
+        "pairingExpiresAt": time.time() + int(response.get("expiresInSeconds") or 900),
+        "paired": False,
     })
     config.pop("cloudRegistrationPending", None)
     config.pop("setupToken", None)
-    config.pop("pairingCode", None)
     save_config(config)
-    print("\nPhotobox lokal berhasil terdaftar ke cloud di background.\n", flush=True)
+    if announce:
+        print(
+            "\nPhotoslive siap dihubungkan ke akun.\n"
+            f"Buka {response.get('pairingUrl') or local_setup_url(config)}\n"
+            f"Kode cadangan: {config.get('pairingCode') or '-'}\n",
+            flush=True,
+        )
     return config
 
 
+def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
+    if config.get("machineId") and config.get("agentToken"):
+        return config
+    # The installation identity is local and durable. It must not change merely
+    # because the cloud is unavailable or the operator retries onboarding.
+    return request_machine_pairing(config)
+
+
 def clear_invalid_cloud_credentials(config: dict[str, Any]) -> dict[str, Any]:
-    for key in ("machineId", "agentToken", "commandKey", "setupToken", "pairingCode", "cloudRegistered", "cloudRegisteredAt"):
+    for key in ("agentToken", "commandKey", "setupToken", "pairingToken", "pairingCode", "pairingUrl", "pairingExpiresAt", "cloudRegistered", "cloudRegisteredAt", "paired"):
         config.pop(key, None)
     config["cloudRegistrationPending"] = True
     save_config(config)
@@ -507,19 +536,30 @@ def execute_job(config: dict[str, Any], job: dict[str, Any]) -> None:
 
 def heartbeat_once(config: dict[str, Any]) -> dict[str, Any]:
     heartbeat = request_json(cloud_url(config, "heartbeat"), "POST", snapshot(config), config["agentToken"])
+    changed = False
     if heartbeat.get("commandKey") and config.get("commandKey") != heartbeat["commandKey"]:
         config["commandKey"] = heartbeat["commandKey"]
-        save_config(config)
+        changed = True
     if heartbeat.get("boothCode") and config.get("boothCode") != heartbeat["boothCode"]:
         config["boothCode"] = heartbeat["boothCode"]
-        save_config(config)
+        changed = True
     if heartbeat.get("paired"):
-        setup_secret_removed = bool(config.pop("pairingCode", None))
-        setup_secret_removed = bool(config.pop("setupToken", None)) or setup_secret_removed
-        if setup_secret_removed:
-            save_config(config)
+        was_paired = bool(config.get("paired"))
+        if not was_paired:
+            config["paired"] = True
+            changed = True
+        for key in ("pairingCode", "setupToken", "pairingToken", "pairingUrl", "pairingExpiresAt"):
+            if key in config:
+                config.pop(key, None)
+                changed = True
+        if not was_paired:
             print("Mesin berhasil dipasangkan dengan Photoslive Cloud.", flush=True)
             log_event("info", "Mesin berhasil dipasangkan", boothCode=config.get("boothCode"))
+    elif heartbeat.get("paired") is False and config.get("paired") is not False:
+        config["paired"] = False
+        changed = True
+    if changed:
+        save_config(config)
     return heartbeat
 
 
@@ -847,6 +887,8 @@ def main() -> int:
     parser.add_argument("--once", action="store_true", help="Jalankan satu heartbeat lalu berhenti")
     parser.add_argument("--status", action="store_true", help="Tampilkan konfigurasi/status lokal")
     parser.add_argument("--setup-link", action="store_true", help="Buka onboarding lokal tanpa pairing code")
+    parser.add_argument("--pairing-link", action="store_true", help="Buat QR dan kode pairing akun yang berlaku 15 menit")
+    parser.add_argument("--json", action="store_true", help="Keluarkan hasil perintah sebagai JSON")
     parser.add_argument("--open-setup", action="store_true", help="Buka halaman setup di browser")
     parser.add_argument("--pause", action="store_true", help="Jeda job cloud tanpa menghentikan heartbeat")
     parser.add_argument("--resume", action="store_true", help="Lanjutkan job cloud")
@@ -870,9 +912,45 @@ def main() -> int:
         if arguments.open_setup and not open_setup_page(url):
             print("Browser tidak dapat dibuka otomatis. Salin URL di atas.", flush=True)
         return 0
+    if arguments.pairing_link:
+        if config.get("paired"):
+            payload = {
+                "paired": True,
+                "machineId": config.get("machineId"),
+                "boothCode": config.get("boothCode"),
+                "message": "Mesin sudah terhubung permanen.",
+            }
+        else:
+            try:
+                config = request_machine_pairing(config, force=True, announce=not arguments.json)
+                payload = {
+                    "paired": False,
+                    "machineId": config.get("machineId"),
+                    "pairingCode": config.get("pairingCode"),
+                    "pairingUrl": config.get("pairingUrl"),
+                    "pairingExpiresAt": config.get("pairingExpiresAt"),
+                    "expiresInSeconds": max(0, int(float(config.get("pairingExpiresAt") or 0) - time.time())),
+                }
+            except Exception as error:
+                if arguments.json:
+                    print(json.dumps({"error": str(error)}, ensure_ascii=False))
+                else:
+                    print(str(error), file=sys.stderr, flush=True)
+                return 1
+        if arguments.json:
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            print(payload.get("message") or (
+                f"Hubungkan mesin:\n{payload.get('pairingUrl')}\n"
+                f"Kode cadangan: {payload.get('pairingCode')}\n"
+                "Berlaku 15 menit dan hanya dapat digunakan sekali."
+            ), flush=True)
+        if arguments.open_setup and payload.get("pairingUrl") and not open_setup_page(str(payload["pairingUrl"])):
+            print("Browser tidak dapat dibuka otomatis. Salin URL di atas.", flush=True)
+        return 0
     if arguments.status:
         safe_config = {**config}
-        for secret in ("agentToken", "installationToken", "commandKey", "setupToken", "pairingCode"):
+        for secret in ("agentToken", "installationToken", "commandKey", "setupToken", "pairingToken", "pairingCode"):
             if safe_config.get(secret):
                 safe_config[secret] = "***"
         print(json.dumps({"config": safe_config, "status": json.loads(STATUS_PATH.read_text()) if STATUS_PATH.exists() else {}}, indent=2))

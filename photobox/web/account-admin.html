@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f7f9">
+  <title>Admin Photoslive</title>
+  <link rel="icon" href="/icons/camera.svg">
+  <link rel="stylesheet" href="/platform.css?v=3">
+  <link rel="stylesheet" href="/account-admin.css?v=1">
+</head>
+<body>
+  <div class="account-shell">
+    <header class="account-topbar">
+      <a class="platform-brand" href="/admin"><span class="platform-mark"><img src="/icons/camera.svg" alt=""></span>Photoslive</a>
+      <div class="account-top-actions">
+        <button class="btn" id="refresh-account" type="button"><img src="/icons/refresh-cw.svg" alt="">Perbarui</button>
+        <button class="btn" id="account-logout" type="button">Keluar</button>
+      </div>
+    </header>
+
+    <main class="account-main">
+      <section class="account-heading">
+        <div>
+          <p class="eyebrow">ADMIN PHOTOSLIVE</p>
+          <h1>Photobox Anda</h1>
+          <p>Hubungkan mesin baru atau buka pengaturan photobox yang sudah aktif.</p>
+        </div>
+        <a class="btn primary account-add-primary" href="/setup?mode=pairing"><img src="/icons/plus.svg" alt="">Tambah photobox</a>
+      </section>
+
+      <p class="account-alert" id="account-status" role="status" aria-live="polite"></p>
+
+      <section class="account-identity" id="account-identity" aria-label="Identitas akun">
+        <article><span>ADMIN</span><strong id="account-admin-code">—</strong><small id="account-email">Memuat…</small></article>
+        <article><span>ORGANISASI</span><strong id="account-organization">—</strong><small id="account-role">—</small></article>
+        <article><span>MESIN</span><strong id="account-machine-count">—</strong><small>Terhubung permanen</small></article>
+      </section>
+
+      <section class="account-list-section">
+        <div class="account-section-head">
+          <div><h2>Daftar photobox</h2><p id="account-summary">Memuat data akun…</p></div>
+        </div>
+        <div class="account-loading" id="account-loading">
+          <span></span><p>Memuat photobox…</p>
+        </div>
+        <div class="account-empty" id="account-empty" hidden>
+          <span class="account-empty-icon"><img src="/icons/monitor.svg" alt=""></span>
+          <h2>Belum ada photobox</h2>
+          <p>Akun Admin sudah siap. Hubungkan mesin saat Anda siap—registrasi akun tidak bergantung pada Agent.</p>
+          <a class="btn primary" href="/setup?mode=pairing"><img src="/icons/plus.svg" alt="">Hubungkan photobox</a>
+        </div>
+        <div class="account-machine-grid" id="account-machine-grid" hidden></div>
+      </section>
+    </main>
+
+    <nav class="account-mobile-nav" aria-label="Navigasi admin">
+      <a class="active" href="/admin"><img src="/icons/monitor.svg" alt=""><span>Photobox</span></a>
+      <a href="/setup?mode=pairing"><img src="/icons/plus.svg" alt=""><span>Tambah</span></a>
+    </nav>
+  </div>
+  <script type="module" src="/account-admin.js?v=1"></script>
+</body>
+</html>

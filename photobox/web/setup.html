@@ -19,14 +19,13 @@
     <main class="auth-layout">
       <section class="auth-card">
         <header class="auth-head">
-          <h1 id="setup-title">Siapkan photobox</h1>
-          <p id="setup-copy">Photoslive memeriksa mesin secara otomatis. Tidak ada kode yang perlu diketik.</p>
+          <h1 id="setup-title">Buat akun Photoslive</h1>
+          <p id="setup-copy">Daftar dengan email. Mesin dapat dihubungkan setelah akun siap.</p>
         </header>
 
         <div class="mode-tabs" id="setup-modes">
-          <button type="button" class="active" data-mode="setup">Mesin baru</button>
-          <button type="button" data-mode="login">Sudah punya akun</button>
-          <button type="button" data-mode="register">Daftar akun</button>
+          <button type="button" class="active" data-mode="register">Buat akun</button>
+          <button type="button" data-mode="login">Masuk</button>
         </div>
 
         <div class="wizard-progress" id="wizard-progress">
@@ -34,7 +33,7 @@
           <div class="progress-track" aria-hidden="true"><i id="wizard-progress-bar"></i></div>
         </div>
 
-        <form id="setup-form" novalidate>
+        <form id="setup-form" class="hidden" novalidate>
           <section class="setup-step" data-setup-step="1">
             <input id="setup-token" type="hidden">
             <div class="setup-auto-link" id="setup-auto-link">
@@ -110,8 +109,8 @@
         </form>
 
         <form id="login-form" class="hidden">
-          <div class="form-grid">
-            <label class="full">Alamat photobox<input id="login-booth" placeholder="contoh: booth-mall-1" required><small class="login-booth-help">Gunakan bagian setelah domain pada URL photobox. Ini bukan kode setup.</small></label>
+          <div class="form-grid hidden" id="login-booth-field">
+            <label class="full">Alamat photobox<input id="login-booth" placeholder="contoh: booth-mall-1"><small class="login-booth-help">Hanya diperlukan untuk PIN lokal pada instalasi lama.</small></label>
           </div>
           <fieldset class="login-methods single-method">
             <legend>Pilih cara masuk</legend>
@@ -153,6 +152,71 @@
             <button class="btn primary" id="register-submit">Buat akun</button>
           </div>
         </form>
+
+        <form id="pairing-form" class="hidden">
+          <div class="setup-stage-heading">
+            <span class="setup-stage-number">2</span>
+            <div><b>Hubungkan mesin</b><p>Gunakan QR atau kode yang tampil di Local Manager.</p></div>
+          </div>
+          <div class="pairing-methods" role="group" aria-label="Cara menghubungkan mesin">
+            <button type="button" class="pairing-method active" data-pairing-method="code" aria-pressed="true"><img src="/icons/scan-line.svg" alt="">Masukkan kode</button>
+            <button type="button" class="pairing-method" data-pairing-method="scan" aria-pressed="false"><img src="/icons/camera.svg" alt="">Scan QR</button>
+          </div>
+          <section class="pairing-panel" data-pairing-panel="code">
+            <label>Kode pairing
+              <span class="pairing-code-control"><input id="pairing-code" inputmode="text" maxlength="9" autocomplete="one-time-code" placeholder="XXXX-XXXX"><button type="button" class="btn" id="inspect-pairing-code">Periksa</button></span>
+            </label>
+          </section>
+          <section class="pairing-panel hidden" data-pairing-panel="scan">
+            <div class="pairing-scanner">
+              <video id="pairing-scanner-video" autoplay muted playsinline></video>
+              <div class="pairing-scanner-guide" aria-hidden="true"></div>
+              <p id="pairing-scanner-status">Izinkan kamera, lalu arahkan ke QR Local Manager.</p>
+            </div>
+            <button type="button" class="btn" id="start-pairing-scanner"><img src="/icons/camera.svg" alt="">Nyalakan kamera</button>
+          </section>
+          <section class="pairing-machine-preview hidden" id="pairing-machine-preview" aria-live="polite">
+            <header><span><img src="/icons/monitor.svg" alt=""></span><div><b id="pairing-machine-name">Mesin</b><small id="pairing-machine-code">—</small></div></header>
+            <dl>
+              <div><dt>Sistem</dt><dd id="pairing-machine-platform">—</dd></div>
+              <div><dt>Versi</dt><dd id="pairing-machine-version">—</dd></div>
+              <div><dt>Perangkat</dt><dd id="pairing-machine-devices">Belum dilaporkan</dd></div>
+              <div><dt>Berlaku</dt><dd id="pairing-machine-expiry">—</dd></div>
+            </dl>
+            <div class="form-grid">
+              <label class="full">Nama photobox<input id="pairing-booth-name" maxlength="80" placeholder="Contoh: Booth Main Hall" required></label>
+              <label class="full">Lokasi <small>Opsional</small><input id="pairing-booth-location" maxlength="120" placeholder="Contoh: Lantai 1"></label>
+            </div>
+            <div class="pairing-confirmation">
+              <img src="/icons/info.svg" alt="">
+              <p>Mesin ini akan menjadi milik organization akun Anda sampai pairing dicabut.</p>
+            </div>
+            <button class="btn primary wide-action" id="claim-pairing-machine">Hubungkan mesin</button>
+          </section>
+          <div class="login-actions">
+            <button type="button" class="text-button" id="prepare-machine-later">Siapkan nanti</button>
+          </div>
+        </form>
+
+        <section id="ready-form" class="hidden setup-ready-state">
+          <div class="ready-mark"><img src="/icons/circle-check.svg" alt=""></div>
+          <div class="ready-copy"><h2>Photobox terhubung</h2><p>Pairing tersimpan permanen. Lanjutkan konfigurasi dari Admin.</p></div>
+          <dl class="ready-identities">
+            <div><dt>Admin</dt><dd id="ready-admin-code">—</dd></div>
+            <div><dt>Mesin</dt><dd id="ready-machine-code">—</dd></div>
+            <div><dt>Photobox</dt><dd id="ready-booth-code">—</dd></div>
+          </dl>
+          <div class="readiness-next">
+            <b>Checklist berikutnya</b>
+            <ul>
+              <li><img src="/icons/camera.svg" alt="">Pilih dan tes kamera</li>
+              <li><img src="/icons/printer.svg" alt="">Pilih dan tes printer</li>
+              <li><img src="/icons/image-plus.svg" alt="">Tambahkan frame</li>
+            </ul>
+          </div>
+          <a class="btn primary wide-action" id="open-ready-admin" href="/setup?mode=pairing">Buka Admin</a>
+          <button type="button" class="text-button" id="pair-another-machine">Tambah mesin lain</button>
+        </section>
 
         <form id="forgot-form" class="hidden forgot-page">
           <button type="button" class="back-link" id="forgot-back"><img src="/icons/chevron-left.svg" alt="">Kembali ke halaman masuk</button>

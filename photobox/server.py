@@ -462,7 +462,10 @@ def public_agent_config() -> dict[str, Any]:
         "name": config.get("name"),
         "machineId": config.get("machineId"),
         "boothCode": config.get("boothCode"),
+        "paired": bool(config.get("paired")),
         "pairingCode": config.get("pairingCode"),
+        "pairingUrl": config.get("pairingUrl"),
+        "pairingExpiresAt": config.get("pairingExpiresAt"),
         "configured": bool(config.get("machineId") and config.get("agentToken")),
     }
 
@@ -4119,9 +4122,28 @@ def start_update_task(action: str) -> dict[str, Any]:
 
 
 def create_agent_setup_code() -> dict[str, Any]:
-    setup_url_value = "/setup?local=1"
-    add_event("agent", "Wizard setup lokal dibuka dari Local Manager")
-    return {"expiresInSeconds": None, "setupUrl": setup_url_value, "local": True}
+    config = public_agent_config()
+    if config.get("paired"):
+        return {
+            "paired": True,
+            "machineId": config.get("machineId"),
+            "boothCode": config.get("boothCode"),
+            "message": "Mesin sudah terhubung permanen.",
+        }
+    command = [sys.executable, str(ROOT / "agent.py"), "--pairing-link", "--json"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=35, check=False)
+    output_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    try:
+        payload = json.loads(output_lines[-1]) if output_lines else {}
+    except (json.JSONDecodeError, IndexError):
+        payload = {}
+    if result.returncode != 0 or payload.get("error"):
+        message = payload.get("error") or result.stderr.strip() or "Agent belum dapat membuat pairing"
+        raise ValueError(redact_text(message, 300))
+    pairing_url = str(payload.get("pairingUrl") or "")
+    payload["qrImage"] = qr_data_uri(pairing_url) if pairing_url else None
+    add_event("agent", "QR pairing akun dibuat dari Local Manager")
+    return payload
 
 
 def system_status() -> dict[str, Any]:
@@ -4510,6 +4532,8 @@ class ApiHandler(SimpleHTTPRequestHandler):
             self.path = "/booth.html"
         elif path in {"/booth", "/kiosk"}:
             self.path = "/booth.html"
+        elif path == "/admin":
+            self.path = "/account-admin.html"
         elif path == "/setup":
             self.path = "/setup.html"
         elif path == "/local-agent":
@@ -5013,7 +5037,12 @@ class CompanionApiHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, max-age=0")
-        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self'; script-src 'self'")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+            "connect-src 'self' http://127.0.0.1:8080 http://localhost:8080; "
+            "style-src 'self'; script-src 'self'",
+        )
         self.send_header("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")

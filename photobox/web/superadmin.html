@@ -298,6 +298,15 @@
         <div class="card-head"><div><h2>Perangkat terpasang</h2><p>Status terakhir dari Agent.</p></div></div>
         <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>STATUS</th><th>CONTROLLER</th><th>TERAKHIR TERLIHAT</th><th>SISTEM</th><th>BACKUP</th><th>AGENT</th><th>AKSES</th><th>BUKA</th></tr></thead><tbody id="machine-rows"></tbody></table></div>
       </section>
+      <section class="dashboard-card" id="pairing-registry-card">
+        <div class="card-head"><div><h2>Ownership mesin</h2><p>Identitas permanen mesin, owner, dan photobox dari PostgreSQL.</p></div><button class="btn" id="pairing-registry-retry" type="button">Perbarui</button></div>
+        <p class="status" id="pairing-registry-status" role="status" aria-live="polite"></p>
+        <div class="pairing-machine-grid" id="pairing-machine-grid"><p class="empty">Memuat ownership mesin…</p></div>
+      </section>
+      <section class="dashboard-card" id="pairing-history-card">
+        <div class="card-head"><div><h2>Histori pairing</h2><p>Pair, revoke, dan pemindahan ownership tidak dapat dihapus.</p></div></div>
+        <div class="pairing-history-list" id="pairing-history-list"><p class="empty">Memuat histori pairing…</p></div>
+      </section>
       <section class="dashboard-card" id="platform-staff-card">
         <div class="card-head"><div><h2>Tim platform</h2><p>Kelola akses control plane dengan role terpisah. Password dan token tidak pernah ditampilkan.</p></div><button class="btn" id="platform-staff-retry" type="button">Perbarui</button></div>
         <form id="platform-staff-invite-form" class="provider-form">
@@ -339,6 +348,18 @@
       </section>
     </main>
   </div>
+  <dialog id="pairing-action-dialog">
+    <form id="pairing-action-form" method="dialog" class="auth-card">
+      <header class="auth-head"><p class="eyebrow">AKSI SENSITIF</p><h2 id="pairing-action-title">Kelola ownership mesin</h2><p id="pairing-action-copy">Konfirmasi tindakan sebelum melanjutkan.</p></header>
+      <input id="pairing-action-machine-id" type="hidden">
+      <input id="pairing-action-type" type="hidden">
+      <label id="pairing-target-organization-wrap" hidden>Organization ID tujuan<input id="pairing-target-organization" type="text" autocomplete="off"></label>
+      <label>Alasan<input id="pairing-action-reason" type="text" maxlength="240" autocomplete="off" required></label>
+      <label>Konfirmasi password Anda<input id="pairing-action-password" type="password" autocomplete="current-password" required></label>
+      <p class="status" id="pairing-action-status" role="status" aria-live="polite"></p>
+      <div class="form-actions"><button class="btn" id="pairing-action-cancel" type="button">Batal</button><button class="btn primary" id="pairing-action-submit" type="submit">Lanjutkan</button></div>
+    </form>
+  </dialog>
   <dialog id="finance-review-dialog">
     <form id="finance-review-form" method="dialog" class="auth-card">
       <header class="auth-head"><p class="eyebrow">FINANCE REVIEW</p><h2 id="finance-review-title">Review pembayaran</h2><p>Catat alasan keputusan agar audit dapat ditelusuri.</p></header>
