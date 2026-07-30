@@ -1282,6 +1282,9 @@ def local_agent_status() -> dict[str, Any]:
         "lastHeartbeatAt": status.get("lastHeartbeatAt"),
         "lastJobPollAt": status.get("lastJobPollAt"),
         "config": config,
+        # Allow a Local Manager reload to redraw the active QR without using
+        # an external QR service. The value is a local data URI only.
+        "pairingQrImage": qr_data_uri(str(config.get("pairingUrl") or "")) if config.get("pairingUrl") else None,
         "control": agent_control(),
         "database": database_health(),
         "sync": diagnostic_part(sync_status, "Pulihkan database lokal dari Local Manager."),

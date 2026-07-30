@@ -22,12 +22,13 @@ manual, bukti yang harus disimpan, serta batas secret didokumentasikan di
   membuka Admin organization sebelum mempunyai mesin, Local Manager hanya
   membuat QR/kode pairing setelah tindakan operator, dan mapping paired disimpan
   permanen. Registry ownership/histori serta revoke/reassign Superadmin memakai
-  PostgreSQL, re-authentication, idempotency, dan audit. Seluruh 385 automated
-  test lulus dan audit interaction menemukan 455 kontrol wired, satu capability
-  sengaja unavailable, serta nol kontrol unknown. Migration
-  `20260729120000_account_machine_pairing_v2.sql` masih harus diterapkan dan
-  diuji pada staging/live; installer GUI, acceptance hardware, mobile visual
-  regression nyata, dan E2E terhadap Supabase production belum diklaim selesai.
+  PostgreSQL, re-authentication, idempotency, dan audit. Repair migration
+  `20260730163000_repair_account_machine_pairing_rpcs.sql` telah diterapkan ke
+  Supabase production untuk melengkapi RPC bootstrap akun dan claim mesin.
+  Seluruh 387 automated test lulus dan audit interaction menemukan 460 kontrol
+  wired, satu capability sengaja unavailable, serta nol kontrol unknown.
+  Installer GUI, acceptance hardware, mobile visual regression nyata, dan E2E
+  terhadap Supabase production belum diklaim selesai.
 
 - Metadata aset booth kini memiliki adapter PostgreSQL service-role-only dan
   mode `off|dual|primary`. Mode primary membaca database sebelum cache,

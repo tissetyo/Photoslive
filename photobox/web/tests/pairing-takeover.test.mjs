@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { claimPairing, createSetupCode } from "../api/bridge.mjs";
 import { setupBooth, validateSetupCode } from "../api/platform.mjs";
-import { machineKey, sha256 } from "../api/_store.mjs";
+import { authenticateWebSession, machineKey, sha256 } from "../api/_store.mjs";
 
 process.env.SESSION_SECRET ||= "photoslive-test-session-secret-32-characters";
 
@@ -90,6 +90,30 @@ test("legacy pairing claim requires an authenticated admin session", async () =>
   const response = await claimPairing(new MemoryRedis(), new Request("https://photoslive.test/api/bridge?action=claim_pairing", { method: "POST" }), { code: "ABCD-2345" });
   assert.equal(response.status, 401);
   assert.match((await response.json()).error, /Login admin/);
+});
+
+test("Supabase stateless sessions can claim without reading Redis", async () => {
+  const payload = {
+    id: "login_stateless_pairing",
+    userId: "11111111-1111-4111-8111-111111111111",
+    authUserId: "11111111-1111-4111-8111-111111111111",
+    organizationId: "22222222-2222-4222-8222-222222222222",
+    role: "owner",
+    authProvider: "supabase",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = Buffer.from(await crypto.subtle.sign(
+    "HMAC",
+    await crypto.subtle.importKey("raw", new TextEncoder().encode(process.env.SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]),
+    new TextEncoder().encode(`stateless:${encoded}`),
+  )).toString("hex");
+  const redis = { get: async () => { throw new Error("Redis must not be read for a Supabase session"); } };
+  const session = await authenticateWebSession(redis, new Request("https://photoslive.test", {
+    headers: { cookie: `__Host-photoslive_session=st.${encoded}.${signature}` },
+  }));
+  assert.equal(session?.organizationId, payload.organizationId);
+  assert.equal(session?.authProvider, "supabase");
 });
 
 test("issuing a replacement setup code invalidates the previous code", async () => {

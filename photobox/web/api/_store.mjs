@@ -74,9 +74,30 @@ export async function authenticateWebSession(redis, request) {
     const index = value.indexOf("=");
     return [value.slice(0, index), decodeURIComponent(value.slice(index + 1))];
   }));
-  const [id, supplied] = String(cookies["__Host-photoslive_session"] || "").split(".");
+  const token = String(cookies["__Host-photoslive_session"] || "");
+  // Supabase account sessions are intentionally self-contained. Pairing must
+  // keep working when Redis is unavailable or its free quota is exhausted.
+  if (token.startsWith("st.")) {
+    const [, encoded, supplied] = token.split(".");
+    if (!encoded || !supplied || supplied !== await hmacHex(`stateless:${encoded}`)) return null;
+    try {
+      const normalized = encoded.replaceAll("-", "+").replaceAll("_", "/");
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+      const record = JSON.parse(atob(padded));
+      if (!record?.id || (record.expiresAt && Date.parse(record.expiresAt) <= Date.now())) return null;
+      return record;
+    } catch {
+      return null;
+    }
+  }
+  const [id, supplied] = token.split(".");
   if (!id || !supplied || supplied !== await hmacHex(id)) return null;
-  const record = await redis.get(sessionKey(id));
+  let record = null;
+  try {
+    record = await redis.get(sessionKey(id));
+  } catch (error) {
+    if (!isUpstashMaxRequestsError(error)) throw error;
+  }
   if (!record || (record.expiresAt && Date.parse(record.expiresAt) <= Date.now())) return null;
   return record;
 }
