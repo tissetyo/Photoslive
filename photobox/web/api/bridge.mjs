@@ -628,8 +628,13 @@ export async function claimPairing(redis, request, payload) {
       return json({ error: durable.reason || "Mesin belum dapat dihubungkan", retryable: status >= 500 }, status);
     }
     const claimed = durable.payload || {};
-    const claimedMachineId = String(claimed.machineId || claimed.machine_id || "");
-    const boothCode = String(claimed.boothCode || claimed.booth_code || "");
+    // The durable RPC returns nested machine/booth records. Read that shape
+    // first so the optional legacy cache mirrors the permanent Postgres claim
+    // instead of silently missing the machine identifier.
+    const claimedMachine = claimed.machine || claimed;
+    const claimedBooth = claimed.booth || null;
+    const claimedMachineId = String(claimedMachine.machineId || claimedMachine.machine_id || "");
+    const boothCode = String(claimedBooth?.boothCode || claimedBooth?.booth_code || claimed.boothCode || claimed.booth_code || "");
     if (claimedMachineId) {
       const legacyMachine = await bestEffortRedis(() => redis.get(machineKey(claimedMachineId)), null);
       if (legacyMachine) {
@@ -652,6 +657,15 @@ export async function claimPairing(redis, request, payload) {
       paired: true,
       permanent: true,
     });
+  }
+  // The pre-account setup route did not have a durable organization boundary.
+  // Leave it available only during an explicitly approved migration window;
+  // normal installations must claim through the Postgres transaction above.
+  if (process.env.PHOTOSLIVE_LEGACY_PAIRING !== "1") {
+    return json({
+      error: "Pairing lama dinonaktifkan. Masuk dengan akun Photoslive lalu scan QR dari Local Manager.",
+      code: "ACCOUNT_PAIRING_REQUIRED",
+    }, 403);
   }
   if (!code) return json({ error: "Masukkan kode pairing" }, 400);
   const postgresStatus = postgresMachineStatus();

@@ -29,7 +29,7 @@ const SETUP_SESSION_TOKEN_KEY = "photoslive.setupSessionToken";
 const SETUP_QUERY = new URLSearchParams(location.search);
 const IS_LOOPBACK_HOST = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
 const IS_LOCAL_SETUP = IS_LOOPBACK_HOST
-  && (SETUP_QUERY.get("mode") || "setup") === "setup";
+  && (SETUP_QUERY.get("local") === "1" || (SETUP_QUERY.get("mode") || "setup") === "setup");
 const CLOUD_PLATFORM_ORIGIN = "https://photoslive.vercel.app";
 
 function cloudRegistrationUrl() {
@@ -258,7 +258,8 @@ function setButtonBusy(button, busy, label = "Memproses…") {
 function syncUrl(name) {
   const booth = $("#login-booth").value.trim();
   const query = new URLSearchParams();
-  if (name !== "register") query.set("mode", name);
+  if (name === "local") query.set("local", "1");
+  else if (name !== "register") query.set("mode", name);
   if (name === "setup" && onboarding.step > 1) query.set("step", String(onboarding.step));
   if (booth && name === "login") query.set("booth", booth);
   if (name === "pairing" && onboarding.pairingToken) query.set("pairToken", onboarding.pairingToken);
@@ -266,7 +267,9 @@ function syncUrl(name) {
 }
 
 function updateRecoveryVisibility(activeMode) {
-  const show = activeMode === "login" || activeMode === "register" || (activeMode === "setup" && onboarding.step === 1);
+  // Installation/recovery is deliberately kept out of the account-first
+  // cloud flow. It remains available only behind the legacy migration flag.
+  const show = activeMode === "setup" && !IS_LOCAL_SETUP && SETUP_QUERY.get("legacy") === "1";
   $("#agent-recovery").classList.toggle("hidden", !show);
 }
 
@@ -292,11 +295,11 @@ function setSetupStep(step) {
 }
 
 function mode(name) {
-  if (!["setup", "login", "register", "forgot", "pairing", "ready"].includes(name)) name = "register";
+  if (!["setup", "login", "register", "forgot", "pairing", "ready", "local"].includes(name)) name = "register";
   document.querySelectorAll("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === name));
-  ["setup", "login", "register", "forgot", "pairing", "ready"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
+  ["setup", "login", "register", "forgot", "pairing", "ready", "local"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
   $("#wizard-progress").classList.toggle("hidden", name !== "setup");
-  $("#setup-modes").classList.toggle("hidden", ["forgot", "pairing", "ready"].includes(name) || (name === "setup" && onboarding.step > 1));
+  $("#setup-modes").classList.toggle("hidden", ["forgot", "pairing", "ready", "local"].includes(name) || (name === "setup" && onboarding.step > 1));
   $(".auth-layout").dataset.mode = name;
   const labels = {
     setup: ["Setup lama", "Gunakan hanya untuk memulihkan instalasi lama."],
@@ -305,6 +308,7 @@ function mode(name) {
     forgot: ["Bantuan password", "Kirim permintaan kepada superadmin."],
     pairing: ["Hubungkan photobox", "Scan QR atau masukkan kode dari Local Manager."],
     ready: ["Photobox siap", "Pairing selesai dan tersimpan permanen."],
+    local: ["Hubungkan mesin", "Pindai QR ini dari akun Admin Photoslive Anda."],
   };
   $("#setup-title").textContent = labels[name][0];
   $("#setup-copy").textContent = labels[name][1];
@@ -312,6 +316,63 @@ function mode(name) {
   updateRecoveryVisibility(name);
   syncUrl(name);
   status("");
+}
+
+async function localInstallationHeaders() {
+  const response = await fetch("/api/local/installation", { cache: "no-store" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.token) throw new Error(payload.error || "Otorisasi Local Manager tidak tersedia");
+  return { "X-Installation-Token": payload.token };
+}
+
+function setLocalPairingView({ config = {}, machine = {}, payload = null } = {}) {
+  const paired = Boolean(config.paired || payload?.paired);
+  const pairingUrl = String(payload?.pairingUrl || config.pairingUrl || "");
+  const qrImage = String(payload?.qrImage || config.pairingQrImage || "");
+  const pairingCode = String(payload?.pairingCode || config.pairingCode || "");
+  const boothCode = String(payload?.boothCode || config.boothCode || "");
+  $("#local-machine-name").textContent = machine.name || config.name || "Photoslive Machine";
+  $("#local-machine-code").textContent = paired
+    ? `Mesin terhubung · /${boothCode || "photobox"}`
+    : String(config.machineId || machine.id || "Kode mesin sedang disiapkan");
+  const pill = $("#local-pairing-state");
+  pill.className = "local-pairing-state-pill";
+  pill.textContent = paired ? "Terhubung" : pairingUrl ? "Menunggu scan" : "Belum dibuat";
+  const pairingStateClass = paired ? "ready" : pairingUrl ? "waiting" : "";
+  if (pairingStateClass) pill.classList.add(pairingStateClass);
+  $("#local-pairing-code").value = paired ? (boothCode || "Terhubung") : (pairingCode || "—");
+  const qrWrap = $("#local-pairing-qr-wrap");
+  // QR is returned by the local Controller as a data URI. Do not use an
+  // external QR service: setup must still be usable on a private/offline LAN.
+  qrWrap.hidden = !qrImage;
+  if (qrImage) $("#local-pairing-qr").src = qrImage;
+  $("#create-local-pairing").disabled = paired;
+  $("#create-local-pairing").textContent = paired ? "Mesin sudah terhubung" : "Buat QR pairing";
+  $("#local-pairing-message").textContent = paired
+    ? "Kepemilikan mesin sudah tersimpan. Gunakan Admin untuk melanjutkan konfigurasi."
+    : pairingUrl ? "Pindai QR atau masukkan kode dari ponsel yang sudah login sebagai Admin." : "Buat QR pairing untuk menghubungkan mesin ini.";
+}
+
+async function refreshLocalPairing({ create = false } = {}) {
+  const action = create ? $("#create-local-pairing") : $("#refresh-local-pairing");
+  setButtonBusy(action, true, create ? "Membuat…" : "Memeriksa…");
+  try {
+    const bootstrap = await controllerRequest("/api/local/setup/bootstrap", "GET");
+    let payload = null;
+    const initialConfig = bootstrap.cloud?.config || {};
+    if (create && !initialConfig.paired) {
+      const headers = await localInstallationHeaders();
+      const response = await fetch("/api/local/agent/setup-code", { method: "POST", headers });
+      payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "QR pairing tidak dapat dibuat");
+    }
+    const agent = await controllerRequest("/api/local/agent/status", "GET").catch(() => ({ config: {} }));
+    setLocalPairingView({ config: agent.config || initialConfig, machine: bootstrap.machine || {}, payload });
+  } catch (error) {
+    $("#local-pairing-message").textContent = error.message;
+  } finally {
+    setButtonBusy(action, false);
+  }
 }
 
 function rememberAccount(result) {
@@ -967,6 +1028,20 @@ $("#pair-another-machine").addEventListener("click", () => {
   pairingMethod("code");
   mode("pairing");
 });
+$("#refresh-local-pairing").addEventListener("click", () => refreshLocalPairing());
+$("#create-local-pairing").addEventListener("click", () => refreshLocalPairing({ create: true }));
+$("#copy-local-pairing-code").addEventListener("click", async () => {
+  const code = $("#local-pairing-code").value;
+  if (!code || code === "—") return;
+  try {
+    await navigator.clipboard.writeText(code);
+    $("#local-pairing-message").textContent = "Kode pairing disalin.";
+  } catch {
+    $("#local-pairing-code").select();
+    document.execCommand("copy");
+    $("#local-pairing-message").textContent = "Kode pairing disalin.";
+  }
+});
 function agentPlatform(name) {
   if (name !== "tablet") stopTabletCameraTest();
   document.querySelectorAll("[data-agent-platform]").forEach(button => {
@@ -1567,12 +1642,20 @@ const setupTokenFromUrl = String(
 const rememberedBooth = localStorage.getItem("photoslive.boothCode") || "";
 if (params.get("booth") || rememberedBooth) $("#login-booth").value = params.get("booth") || rememberedBooth;
 loginMethod("password");
-detectLocalPinLogin();
+if (IS_LOOPBACK_HOST) detectLocalPinLogin();
+else {
+  $("#local-pin-method").classList.add("hidden");
+  $(".login-methods").classList.add("single-method");
+  $("#local-pin-status").textContent = "Gunakan email dan password untuk mengakses Admin dari perangkat mana pun.";
+}
 pairingMethod("code");
 restoreRememberedAccount();
 const requestedMode = params.get("mode")
   || (params.get("legacy") === "1" ? "setup" : "register");
-if (requestedMode === "register" && continueRegistrationOnCloud()) {
+if (IS_LOCAL_SETUP) {
+  mode("local");
+  refreshLocalPairing();
+} else if (requestedMode === "register" && continueRegistrationOnCloud()) {
   // Registration and the resulting admin session must share the cloud origin.
 } else if (requestedMode === "setup") {
   const previewStep = ["127.0.0.1", "localhost"].includes(location.hostname) ? Number(params.get("previewStep")) : 0;

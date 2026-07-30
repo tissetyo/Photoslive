@@ -108,6 +108,30 @@
           </section>
         </form>
 
+        <section id="local-form" class="hidden local-pairing-state" aria-live="polite">
+          <div class="setup-stage-heading">
+            <span class="setup-stage-number">1</span>
+            <div><b>Hubungkan mesin ini</b><p>Pindai QR dari akun Admin Photoslive Anda.</p></div>
+          </div>
+          <div class="local-machine-summary">
+            <span class="setup-icon monitor" aria-hidden="true"></span>
+            <div><b id="local-machine-name">Photoslive Machine</b><small id="local-machine-code">Memeriksa mesin…</small></div>
+            <span class="local-pairing-state-pill" id="local-pairing-state">Memeriksa</span>
+          </div>
+          <div class="local-pairing-qr-wrap" id="local-pairing-qr-wrap" hidden>
+            <img id="local-pairing-qr" alt="QR untuk menghubungkan mesin Photoslive">
+          </div>
+          <label class="local-pairing-code-label">Kode pairing
+            <span class="pairing-code-control"><input id="local-pairing-code" readonly value="—"><button type="button" class="btn" id="copy-local-pairing-code">Salin kode</button></span>
+          </label>
+          <p class="inline-status" id="local-pairing-message">Membaca status pairing dari Controller lokal…</p>
+          <div class="form-actions between">
+            <button type="button" class="btn" id="refresh-local-pairing"><img src="/icons/refresh-cw.svg" alt="">Perbarui</button>
+            <button type="button" class="btn primary" id="create-local-pairing">Buat QR pairing <img src="/icons/scan-line.svg" alt=""></button>
+          </div>
+          <p class="local-pairing-help">QR berlaku sekali. Setelah disetujui oleh Admin, mesin ini tetap terhubung walaupun komputer direstart atau internet terputus.</p>
+        </section>
+
         <form id="login-form" class="hidden">
           <div class="form-grid hidden" id="login-booth-field">
             <label class="full">Alamat photobox<input id="login-booth" placeholder="contoh: booth-mall-1"><small class="login-booth-help">Hanya diperlukan untuk PIN lokal pada instalasi lama.</small></label>
