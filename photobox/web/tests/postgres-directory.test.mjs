@@ -151,3 +151,12 @@ test("directory migration keeps machine links private and RPCs service-role-only
   assert.match(sql, /grant execute on function public\.photoslive_persist_booth_directory[\s\S]+service_role/);
   assert.doesNotMatch(sql, /grant execute[\s\S]+photoslive_persist_booth_directory[\s\S]+to authenticated/);
 });
+
+test("account-first booths are backfilled and remain resolvable without a legacy organization link", () => {
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260731074117_repair_directory_ownership_and_snapshot.sql", import.meta.url), "utf8");
+  assert.match(sql, /insert into private\.organization_directory_links/);
+  assert.match(sql, /'account-org:' \|\| organization\.id::text/);
+  assert.match(sql, /create trigger photoslive_ensure_directory_links/);
+  assert.match(sql, /left join private\.organization_directory_links/);
+  assert.match(sql, /coalesce\([\s\S]*organization_link\.legacy_id[\s\S]*'account-org:' \|\| booth\.organization_id::text/);
+});

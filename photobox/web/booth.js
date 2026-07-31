@@ -54,12 +54,150 @@ const FONT_FAMILIES = {
 async function boothApi(path, options = {}) {
   if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
     if (isBoothCloudDataPath(path)) return boothCloudDataApi(path, options);
+    if (boothState.config?.runtime?.mode === "web") return boothWebRuntimeApi(path, options);
     return boothCloudControllerApi(path, options);
   }
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || payload.message || `Permintaan gagal (${response.status})`);
   return payload;
+}
+
+function webRuntimeRules() {
+  const booth = boothState.config?.booth || {};
+  return {
+    photoSlots: frameSlots(boothState.selectedFrame?.url || boothState.config?.appearance?.activeFrame),
+    countdownSeconds: Math.max(1, Number(booth.countdownSeconds || 15)),
+    unlimitedRetakes: booth.unlimitedRetakes !== false,
+    maxAttemptsPerSlot: Math.max(1, Number(booth.retakeLimit || 1) + 1),
+  };
+}
+
+function webRuntimeSessionProjection(session) {
+  return {
+    ...session,
+    files: session.files || [],
+    slots: Array.from({ length: session.rules.photoSlots }, (_, offset) => {
+      const index = offset + 1;
+      return { index, selectedFileId: session.selected?.[index] || null };
+    }),
+  };
+}
+
+async function syncWebSession(status = "active") {
+  const session = boothState.session;
+  if (!session || !boothState.config?.bridgeToken) return;
+  const payload = {
+    boothCode: routeBoothCode,
+    machineId: boothState.config.runtime?.machineId || boothState.config.booth?.machineId,
+    shareCode: session.shareToken,
+    localSessionId: session.id,
+    status,
+    frameId: session.frameId,
+    photoSlots: session.rules.photoSlots,
+    createdAt: session.createdAt,
+    completedAt: status === "completed" ? new Date().toISOString() : null,
+  };
+  fetch("/api/platform?action=register_session", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${boothState.config.bridgeToken}`,
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+async function syncWebCapture(file, blob) {
+  if (!boothState.config?.bridgeToken || !boothState.session) return;
+  const bodyBase64 = await boothBlobToBase64(blob);
+  fetch("/api/platform?action=upload_session_file", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${boothState.config.bridgeToken}`,
+    },
+    body: JSON.stringify({
+      boothCode: routeBoothCode,
+      machineId: boothState.config.runtime?.machineId || boothState.config.booth?.machineId,
+      shareCode: boothState.session.shareToken,
+      fileId: file.id,
+      fileKind: "capture",
+      slotIndex: file.slotIndex,
+      contentType: blob.type || "image/jpeg",
+      bodyBase64,
+      status: "active",
+    }),
+  }).catch(() => {});
+}
+
+async function boothWebRuntimeApi(path, options = {}) {
+  const pathname = String(path).split("?")[0];
+  const method = String(options.method || "GET").toUpperCase();
+  if (method === "POST" && pathname === "/api/booth/sessions") {
+    const createdAt = new Date().toISOString();
+    const timeoutSeconds = Math.max(30, Number(boothState.config.booth.sessionTimeoutSeconds || 150));
+    const session = {
+      id: `web-${crypto.randomUUID?.() || Date.now()}`,
+      shareToken: Math.random().toString(36).slice(2, 10).toUpperCase(),
+      frameId: boothState.selectedFrame.url,
+      status: "active",
+      createdAt,
+      deadlineAt: new Date(Date.now() + timeoutSeconds * 1000).toISOString(),
+      rules: webRuntimeRules(),
+      files: [],
+      selected: {},
+      attempts: {},
+      outputs: {},
+    };
+    boothState.session = session;
+    syncWebSession("active");
+    return { session: webRuntimeSessionProjection(session) };
+  }
+  const uploadMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/capture-upload$/);
+  if (method === "POST" && uploadMatch && options.body instanceof Blob) {
+    const slotIndex = Math.max(1, Number(options.headers?.["X-Slot-Index"] || boothState.currentSlot));
+    const attemptNumber = Number(boothState.session.attempts[slotIndex] || 0) + 1;
+    boothState.session.attempts[slotIndex] = attemptNumber;
+    const file = {
+      id: `capture-${slotIndex}-${attemptNumber}-${Date.now()}`,
+      kind: "capture",
+      slotIndex,
+      attemptNumber,
+      selected: false,
+      url: URL.createObjectURL(options.body),
+    };
+    boothState.session.files.push(file);
+    syncWebCapture(file, options.body);
+    return { file };
+  }
+  const selectMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/select$/);
+  if (method === "POST" && selectMatch) {
+    const data = JSON.parse(options.body || "{}");
+    const file = boothState.session.files.find(item => item.id === data.fileId);
+    if (!file) throw new Error("Foto yang dipilih tidak ditemukan");
+    boothState.session.files.forEach(item => {
+      if (item.slotIndex === file.slotIndex) item.selected = item.id === file.id;
+    });
+    boothState.session.selected[file.slotIndex] = file.id;
+    return { session: webRuntimeSessionProjection(boothState.session) };
+  }
+  const completeMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/complete$/);
+  if (method === "POST" && completeMatch) {
+    boothState.session.status = "completed";
+    boothState.session.completedAt = new Date().toISOString();
+    syncWebSession("completed");
+    return { session: webRuntimeSessionProjection(boothState.session) };
+  }
+  if (method === "POST" && pathname === "/api/booth/print") {
+    window.print();
+    return { queued: true, mode: "browser" };
+  }
+  if (method === "GET" && /^\/api\/sessions\/[^/]+$/.test(pathname) && boothState.session) {
+    return { session: webRuntimeSessionProjection(boothState.session) };
+  }
+  if (pathname === "/api/booth/recovery") return { session: null };
+  throw new Error("Fitur ini memerlukan Photoslive Agent. Kamera browser tetap dapat digunakan.");
 }
 
 function isBoothCloudDataPath(path) {

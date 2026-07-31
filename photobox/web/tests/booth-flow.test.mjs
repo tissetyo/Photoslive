@@ -21,6 +21,15 @@ test("welcome waits for cached or fresh configuration before it becomes actionab
   assert.doesNotMatch(openGate, /boothApi\("\/api\/booth\/config"/);
 });
 
+test("web-only booth sessions never wait for an Agent hardware job", async () => {
+  const [booth, platform] = await Promise.all([read("booth.js"), read("api/platform.mjs")]);
+  assert.match(booth, /boothState\.config\?\.runtime\?\.mode === "web"\) return boothWebRuntimeApi/);
+  assert.match(booth, /async function boothWebRuntimeApi/);
+  assert.match(booth, /pathname === "\/api\/booth\/sessions"/);
+  assert.match(booth, /pathname === "\/api\/booth\/print"[\s\S]*?window\.print\(\)/);
+  assert.match(platform, /mode: String\(booth\.machineId \|\| ""\)\.startsWith\("web_"\) \? "web" : "agent"/);
+});
+
 test("customer continuation records versioned photo-processing consent", async () => {
   const [html, booth] = await Promise.all([read("booth.html"), read("booth.js")]);
   assert.match(html, /Dengan melanjutkan, kamu menyetujui foto diproses untuk sesi ini/);

@@ -17,6 +17,17 @@ test("tenant admin keeps the machine dashboard separate from account admin", () 
   assert.equal(rewrite("/:booth/admin")?.destination, "/admin?booth=:booth");
 });
 
+test("tenant admin accepts a booth from the Supabase account ownership list", () => {
+  const [app, platform] = [
+    readFileSync(resolve(root, "app.js"), "utf8"),
+    readFileSync(resolve(root, "api/platform.mjs"), "utf8"),
+  ];
+  assert.match(app, /const ownedBooth = \(auth\.booths \|\| \[\]\)\.find\(booth => booth\.boothCode === adminBoothCode\)/);
+  assert.match(app, /location\.replace\(auth\.user\s*\?\s*"\/account-admin"/);
+  assert.match(platform, /account\?\.booths\?\.some\(item => item\.boothCode === booth\.boothCode\)/);
+  assert.match(platform, /authProvider === "supabase"/);
+});
+
 test("clean URL rewrites never target an html extension", () => {
   assert.equal(vercel.cleanUrls, true);
   for (const entry of vercel.rewrites) {

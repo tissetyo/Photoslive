@@ -2029,7 +2029,17 @@ async function boot() {
   if (!adminBoothCode || ["setup","superadmin","booth"].includes(adminBoothCode)) { location.replace("/setup?mode=login"); return; }
   const authResponse = await fetch("/api/platform?action=me");
   const auth = await authResponse.json().catch(() => ({}));
-  if (!authResponse.ok || (auth.user?.role !== "superadmin" && auth.user?.boothCode !== adminBoothCode)) { location.replace(`/setup?mode=login&booth=${encodeURIComponent(adminBoothCode)}`); return; }
+  const ownedBooth = (auth.booths || []).find(booth => booth.boothCode === adminBoothCode);
+  const legacyBooth = auth.booth?.boothCode === adminBoothCode ? auth.booth : null;
+  const canOpenBooth = auth.user?.role === "superadmin"
+    || auth.user?.boothCode === adminBoothCode
+    || Boolean(ownedBooth || legacyBooth);
+  if (!authResponse.ok || !canOpenBooth) {
+    location.replace(auth.user
+      ? "/account-admin"
+      : `/setup?mode=login&booth=${encodeURIComponent(adminBoothCode)}`);
+    return;
+  }
   if (auth.testMode) {
     document.body.dataset.testMode = "true";
     const banner = document.createElement("div");
@@ -2041,7 +2051,7 @@ async function boot() {
   if (auth.user?.role === "operator") {
     $$('[data-view="integrations"], [data-view="finance"]').forEach(item => { item.hidden = true; });
   }
-  state.authBooth = auth.booth || null;
+  state.authBooth = ownedBooth || legacyBooth || auth.booth || null;
   localStorage.setItem("photoslive.boothCode", adminBoothCode);
   if (auth.booth?.machineId) {
     agentState.machineId = auth.booth.machineId;

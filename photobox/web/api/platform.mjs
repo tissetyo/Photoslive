@@ -446,8 +446,18 @@ export async function persistSettingsSnapshot(redis, boothCode, settings, option
 async function requireBoothAdmin(redis, request, requestedCode) {
   const auth = await authenticate(redis, request);
   const booth = await resolveBooth(redis, requestedCode || auth?.boothCode);
-  if (!auth?.boothCode || !booth || auth.boothCode !== booth.boothCode) return null;
-  return { auth, booth };
+  if (!auth || !booth) return null;
+  if (auth.role === "superadmin") return { auth, booth };
+  if (auth.boothCode === booth.boothCode) return { auth, booth };
+  if (auth.authProvider === "supabase" && auth.authUserId) {
+    const account = await readPostgresAccount(auth.authUserId);
+    const ownsBooth = account?.booths?.some(item => item.boothCode === booth.boothCode);
+    if (ownsBooth) return {
+      auth: { ...auth, boothCode: booth.boothCode, organizationId: account.organizationId },
+      booth,
+    };
+  }
+  return null;
 }
 
 async function appendAudit(redis, auth, boothCode, action, target = "", detail = {}, correlationId = "") {
@@ -3250,6 +3260,11 @@ async function cloudData(redis, request, payload, correlationId = "") {
       assets,
       capabilities,
       featureFlags,
+      runtime: {
+        mode: String(booth.machineId || "").startsWith("web_") ? "web" : "agent",
+        hardwareBridgeAvailable: !String(booth.machineId || "").startsWith("web_"),
+        machineId: booth.machineId,
+      },
       bridgeToken: await signScopedToken({ scope: "booth.hardware", boothCode: booth.boothCode, machineId: booth.machineId, exp: Date.now() + 30 * 60_000 }),
     });
   }
