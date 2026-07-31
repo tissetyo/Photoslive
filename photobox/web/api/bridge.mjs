@@ -51,6 +51,11 @@ import {
   persistPostgresMachine,
   postgresMachineStatus,
   readPostgresMachine,
+  readPostgresMachineInternal,
+  enqueuePostgresJob,
+  claimPostgresJob,
+  updatePostgresJob,
+  readPostgresJob,
   readPostgresMachineStatus,
   readPostgresPairing,
 } from "./_postgres_machines.mjs";
@@ -1074,6 +1079,30 @@ async function syncVoucherRedemptions(redis, request, payload) {
 async function enqueueJob(redis, request, payload) {
   const machineId = String(payload.machineId || "");
   if (!await authorizeOperator(redis, request, machineId, payload)) return json({ error: "Akses hardware photobox tidak valid" }, 401);
+  if (postgresMachineStatus().primary) {
+    const machine = await readPostgresMachineInternal(machineId);
+    if (!machine?.paired) return json({ error: "Mesin belum dipasangkan" }, 409);
+    if (machine.accessEnabled === false) return json({ error: "Akses photobox dinonaktifkan oleh superadmin" }, 403);
+    const type = String(payload.type || "");
+    if (!HARDWARE_JOB_TYPES.has(type)) return json({ error: "Jenis job tidak didukung" }, 400);
+    const jobPayload = payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload)
+      ? structuredClone(payload.payload)
+      : {};
+    if (JSON.stringify(jobPayload).length > 16_384) return json({ error: "Payload job terlalu besar" }, 400);
+    const ttlSeconds = Math.max(30, Math.min(900, Number(payload.ttlSeconds || 120)));
+    const createdAt = now();
+    const job = {
+      id: randomId("job"), machineId: machine.id, type, payload: jobPayload, status: "queued",
+      createdAt, updatedAt: createdAt, attempts: 0,
+      idempotencyKey: String(payload.idempotencyKey || "").replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 120) || null,
+      retryOf: String(payload.retryOf || "").replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 80) || null,
+      expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+    };
+    job.signature = await signHardwareJob(machine.commandKey || "", job);
+    const stored = await enqueuePostgresJob(job);
+    if (!stored?.job) return json({ error: "Perintah hardware gagal disimpan" }, 503);
+    return json(stored, stored.reused ? 200 : 201);
+  }
   const machine = await redis.get(machineKey(machineId));
   if (!machine?.paired) return json({ error: "Mesin belum dipasangkan" }, 409);
   if (machine.accessEnabled === false) return json({ error: "Akses photobox dinonaktifkan oleh superadmin" }, 403);
@@ -1094,6 +1123,10 @@ async function enqueueJob(redis, request, payload) {
 async function claimJob(redis, request, payload) {
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
+  if (postgresMachineStatus().primary) {
+    const job = await claimPostgresJob(machine.id);
+    return json({ job, nextPollSeconds: job ? undefined : IDLE_JOB_POLL_SECONDS });
+  }
   const id = await bestEffortRedis(() => redis.lpop(queueKey(machine.id)), null);
   if (!id) return json({ job: null, nextPollSeconds: IDLE_JOB_POLL_SECONDS });
   const job = await bestEffortRedis(() => redis.get(jobKey(id)), null);
@@ -1116,6 +1149,12 @@ async function claimJob(redis, request, payload) {
 async function updateJob(redis, request, payload) {
   const machine = await authenticateAgent(redis, request, payload.machineId);
   if (!machine) return json({ error: "Credential Agent tidak valid" }, 401);
+  if (postgresMachineStatus().primary) {
+    const status = String(payload.status || "");
+    if (!["running", "completed", "failed"].includes(status)) return json({ error: "Status job tidak valid" }, 400);
+    const job = await updatePostgresJob(machine.id, String(payload.jobId || ""), status, payload.result, payload.error);
+    return job ? json({ job }) : json({ error: "Job tidak ditemukan" }, 404);
+  }
   const job = await redis.get(jobKey(String(payload.jobId || "")));
   if (!job || job.machineId !== machine.id) return json({ error: "Job tidak ditemukan" }, 404);
   const status = String(payload.status || "");
@@ -1131,6 +1170,10 @@ async function updateJob(redis, request, payload) {
 async function jobStatus(redis, request, payload) {
   const machineId = String(payload.machineId || "");
   if (!await authorizeOperator(redis, request, machineId)) return json({ error: "Akses hardware photobox tidak valid" }, 401);
+  if (postgresMachineStatus().primary) {
+    const job = await readPostgresJob(machineId, String(payload.jobId || ""));
+    return job ? json({ job }) : json({ error: "Job tidak ditemukan" }, 404);
+  }
   const job = await redis.get(jobKey(String(payload.jobId || "")));
   if (!job || job.machineId !== machineId) return json({ error: "Job tidak ditemukan" }, 404);
   return json({ job });
@@ -1185,6 +1228,10 @@ async function dispatch(request) {
       }
       return json({ machine: null, source: postgresStatus.enabled ? "postgres" : "redis" });
     }
+    if (action === "enqueue_job" && request.method === "POST" && postgresMachineStatus().primary) return enqueueJob(optionalRedis(), request, payload);
+    if (action === "claim_job" && request.method === "POST" && postgresMachineStatus().primary) return claimJob(optionalRedis(), request, payload);
+    if (action === "update_job" && request.method === "POST" && postgresMachineStatus().primary) return updateJob(optionalRedis(), request, payload);
+    if (action === "job_status" && request.method === "GET" && postgresMachineStatus().primary) return jobStatus(optionalRedis(), request, payload);
     const redis = getRedis();
     if (action === "create_setup_code" && request.method === "POST") return createSetupCode(redis, request, payload);
     if (action === "settings_snapshot" && request.method === "POST") return settingsSnapshot(redis, request, payload);

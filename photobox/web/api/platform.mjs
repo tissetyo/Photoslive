@@ -89,12 +89,13 @@ async function deploymentCapabilitiesForBooth(redis, booth) {
 }
 
 function runtimeForBooth(booth) {
+  const reported = booth?.capabilities && typeof booth.capabilities === "object" ? booth.capabilities : {};
   const helper = booth?.helper && typeof booth.helper === "object"
     ? booth.helper
     : { desiredState: "disabled", actualState: "not_installed", available: false };
   const helperInstalled = helper.available === true || ["online", "offline", "paused", "error"].includes(String(helper.actualState || ""));
-  const helperActive = helper.desiredState === "enabled" && helper.actualState === "online";
-  const reported = booth?.capabilities && typeof booth.capabilities === "object" ? booth.capabilities : {};
+  const controllerReady = reported.helper?.controller?.online === true;
+  const helperActive = helper.desiredState === "enabled" && helper.actualState === "online" && controllerReady;
   const helperCamera = helperActive && reported.camera?.source === "helper"
     ? { ...reported.camera, source: "helper", available: reported.camera.available !== false }
     : { source: "browser", available: true };
@@ -114,6 +115,7 @@ function runtimeForBooth(booth) {
         enabled: helper.desiredState === "enabled",
         online: helper.actualState === "online",
         active: helperActive,
+        controllerReady,
         actualState: helper.actualState || "not_installed",
       },
       dslr: { ...(reported.dslr || {}), available: helperActive && reported.dslr?.available === true },

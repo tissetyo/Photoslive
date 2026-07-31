@@ -75,6 +75,22 @@ function safeMachine(payload) {
   };
 }
 
+function safeJob(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const id = clean(payload.id, 80);
+  const machineId = clean(payload.machineId, 160);
+  const type = clean(payload.type, 80);
+  if (!/^job_[a-f0-9]{32}$/.test(id) || !machineId || !type) return null;
+  return {
+    ...payload,
+    id,
+    machineId,
+    type,
+    payload: payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload) ? payload.payload : {},
+    result: payload.result && typeof payload.result === "object" && !Array.isArray(payload.result) ? payload.result : {},
+  };
+}
+
 function publicMachineInput(machine = {}) {
   return {
     ...machine,
@@ -108,6 +124,45 @@ export async function readPostgresMachineStatus(machineId, options = {}) {
     p_machine_id: clean(machineId, 160),
   }, machineId, options);
   return result.ok ? safeMachine(result.payload) : null;
+}
+
+export async function readPostgresMachineInternal(machineId, options = {}) {
+  const result = await machineRpc("photoslive_agent_machine_internal", {
+    p_machine_id: clean(machineId, 160),
+  }, machineId, options);
+  return result.ok ? safeMachine(result.payload) : null;
+}
+
+export async function enqueuePostgresJob(job, options = {}) {
+  const result = await machineRpc("photoslive_enqueue_agent_job", { p_job: job }, job?.machineId, options);
+  const stored = result.ok ? safeJob(result.payload) : null;
+  return stored ? { job: stored, reused: result.payload?.reused === true } : null;
+}
+
+export async function claimPostgresJob(machineId, options = {}) {
+  const result = await machineRpc("photoslive_claim_agent_job", {
+    p_machine_id: clean(machineId, 160),
+  }, machineId, options);
+  return result.ok ? safeJob(result.payload) : null;
+}
+
+export async function updatePostgresJob(machineId, jobId, status, result = {}, error = null, options = {}) {
+  const response = await machineRpc("photoslive_update_agent_job", {
+    p_machine_id: clean(machineId, 160),
+    p_job_id: clean(jobId, 80),
+    p_status: clean(status, 20),
+    p_result: result && typeof result === "object" && !Array.isArray(result) ? result : {},
+    p_error: error == null ? null : clean(error, 500),
+  }, machineId, options);
+  return response.ok ? safeJob(response.payload) : null;
+}
+
+export async function readPostgresJob(machineId, jobId, options = {}) {
+  const result = await machineRpc("photoslive_agent_job_status", {
+    p_machine_id: clean(machineId, 160),
+    p_job_id: clean(jobId, 80),
+  }, machineId, options);
+  return result.ok ? safeJob(result.payload) : null;
 }
 
 export async function createPostgresSetupCode(machine, tokenHash, pairingCode, options = {}) {
