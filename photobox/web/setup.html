@@ -7,8 +7,8 @@
   <title>Setup Photoslive</title>
   <link rel="icon" href="/icons/camera.svg">
   <link rel="manifest" href="/app.webmanifest">
-  <link rel="stylesheet" href="/platform.css?v=2">
-    <link rel="stylesheet" href="/setup.css?v=24">
+  <link rel="stylesheet" href="/platform.css?v=4">
+    <link rel="stylesheet" href="/setup.css?v=25">
 </head>
 <body>
   <div class="platform-shell">
@@ -171,9 +171,22 @@
           <details class="station-agent-install" id="station-agent-install">
             <summary>Installer Agent <span>Opsional, dapat dilakukan nanti dari Admin</span></summary>
             <div class="station-installer-links">
-              <a class="btn" href="/downloads/install-windows.ps1" download><span class="setup-icon windows" aria-hidden="true"></span>Windows</a>
-              <a class="btn" href="/downloads/install-macos.sh" download><span class="setup-icon apple" aria-hidden="true"></span>macOS</a>
-              <a class="btn" href="/downloads/install-linux.sh" download><span class="setup-icon linux" aria-hidden="true"></span>Linux</a>
+              <button class="btn" type="button" data-station-agent-os="windows"><span class="setup-icon windows" aria-hidden="true"></span>Windows</button>
+              <button class="btn" type="button" data-station-agent-os="macos"><span class="setup-icon apple" aria-hidden="true"></span>macOS</button>
+              <button class="btn active" type="button" data-station-agent-os="linux"><span class="setup-icon linux" aria-hidden="true"></span>Linux</button>
+            </div>
+            <div class="station-agent-methods">
+              <a class="btn station-agent-download" id="station-agent-download" href="/downloads/install-linux.sh" download="install-photoslive-linux.sh">
+                <span class="setup-icon download" aria-hidden="true"></span><span id="station-agent-download-label">Download installer Linux</span>
+              </a>
+              <div class="station-command">
+                <div><b id="station-agent-command-label">Atau salin ke Terminal Linux</b><small>Satu perintah; installer akan berjalan otomatis.</small></div>
+                <div class="command-box">
+                  <code id="station-agent-command">curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash</code>
+                  <button type="button" id="copy-station-agent-command"><img src="/icons/copy.svg" alt="">Salin</button>
+                </div>
+                <p class="inline-status" id="station-agent-copy-status" role="status"></p>
+              </div>
             </div>
             <p>Menutup halaman ini tidak membatalkan pairing. Mode dapat diganti lagi dari Pengaturan Mesin di Admin.</p>
           </details>
@@ -397,6 +410,6 @@
       <div class="setup-dialog-actions"><button class="btn" value="cancel">Batal</button><button class="btn primary" id="save-setup-frame-design" value="default"><img src="/icons/save.svg" alt="">Gunakan desain</button></div>
     </form>
   </dialog>
-    <script src="/setup.js?v=24" defer></script>
+    <script src="/setup.js?v=25" defer></script>
 </body>
 </html>

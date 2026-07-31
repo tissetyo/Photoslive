@@ -1348,6 +1348,26 @@ const setupCommands = {
   macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Ambil installer macOS', icon: 'apple' },
   linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Ambil installer Linux', icon: 'linux' },
 };
+function setStationAgentOperatingSystem(name) {
+  const command = setupCommands[name] || setupCommands.linux;
+  const stationCommand = $("#station-agent-command");
+  const stationCommandLabel = $("#station-agent-command-label");
+  const stationDownload = $("#station-agent-download");
+  const stationDownloadLabel = $("#station-agent-download-label");
+  if (!stationCommand || !stationCommandLabel || !stationDownload || !stationDownloadLabel) return;
+  stationCommand.textContent = command.installCommand;
+  stationCommandLabel.textContent = `Atau salin ke ${command.label}`;
+  stationDownload.href = command.downloadUrl;
+  stationDownload.download = command.downloadName;
+  stationDownloadLabel.textContent = command.downloadLabel.replace("Ambil", "Download");
+  document.querySelectorAll("[data-station-agent-os]").forEach(button => {
+    const active = button.dataset.stationAgentOs === name;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const feedback = $("#station-agent-copy-status");
+  if (feedback) feedback.textContent = "";
+}
 function detectedOperatingSystem() {
   const platform = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
   if (/win/i.test(platform)) return "windows";
@@ -1365,10 +1385,28 @@ function agentOperatingSystem(name) {
   $("#primary-agent-label").textContent = downloadLabel;
   $("#primary-agent-icon").className = `setup-icon ${icon}`;
   document.querySelectorAll("[data-agent-os]").forEach(button => button.classList.toggle("active", button.dataset.agentOs === name));
+  setStationAgentOperatingSystem(name);
 }
 document.querySelectorAll("[data-agent-platform]").forEach(button => button.addEventListener("click", () => agentPlatform(button.dataset.agentPlatform)));
 document.querySelectorAll("[data-agent-os]").forEach(button => button.addEventListener("click", () => agentOperatingSystem(button.dataset.agentOs)));
+document.querySelectorAll("[data-station-agent-os]").forEach(button => button.addEventListener("click", () => setStationAgentOperatingSystem(button.dataset.stationAgentOs)));
 $("#primary-agent-download").addEventListener("click", () => { $("#copy-feedback").textContent = "Installer diunduh. Jalankan sekali; setelah selesai layar QR setup mesin terbuka otomatis."; });
+$("#copy-station-agent-command").addEventListener("click", async () => {
+  const command = $("#station-agent-command");
+  const feedback = $("#station-agent-copy-status");
+  if (!command || !feedback) return;
+  try {
+    await navigator.clipboard.writeText(command.textContent.trim());
+    feedback.textContent = "Perintah disalin. Tempel lalu jalankan sekali.";
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(command);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    feedback.textContent = "Perintah dipilih. Tekan salin pada perangkat Anda.";
+  }
+});
 $("#use-companion-agent").addEventListener("click", event => {
   const help = $("#companion-setup-help");
   const expanded = event.currentTarget.getAttribute("aria-expanded") !== "true";

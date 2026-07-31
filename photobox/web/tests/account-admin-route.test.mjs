@@ -1,19 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const vercel = JSON.parse(readFileSync(resolve(root, "vercel.json"), "utf8"));
 const rewrite = source => vercel.rewrites.find(entry => entry.source === source);
+const redirect = source => vercel.redirects.find(entry => entry.source === source);
 
 test("account admin route resolves to the account-first surface", () => {
-  assert.equal(rewrite("/admin")?.destination, "/account-admin.html");
-  assert.equal(rewrite("/account-admin")?.destination, "/account-admin.html");
+  assert.equal(redirect("/admin")?.destination, "/account-admin");
+  assert.equal(redirect("/admin")?.permanent, false);
 });
 
 test("tenant admin keeps the machine dashboard separate from account admin", () => {
-  assert.equal(rewrite("/:booth/admin")?.destination, "/admin.html?booth=:booth");
+  assert.equal(rewrite("/:booth/admin")?.destination, "/admin?booth=:booth");
+});
+
+test("clean URL rewrites never target an html extension", () => {
+  assert.equal(vercel.cleanUrls, true);
+  for (const entry of vercel.rewrites) {
+    assert.doesNotMatch(entry.destination.split("?")[0], /\.html$/);
+  }
+  assert.equal(rewrite("/:booth")?.destination, "/booth?booth=:booth");
+  assert.equal(rewrite("/:booth/sesi/:session")?.destination, "/session?booth=:booth&session=:session");
 });
 
 test("account admin has a real no-machine empty state", () => {
@@ -53,6 +63,28 @@ test("account admin explains the WhatsApp-style machine QR flow", () => {
   assert.match(html, /icons\/scan-line\.svg/);
 });
 
+test("primary platform actions keep external SVG icons visible", () => {
+  const [html, css] = [
+    readFileSync(resolve(root, "account-admin.html"), "utf8"),
+    readFileSync(resolve(root, "platform.css"), "utf8"),
+  ];
+  assert.match(html, /class="btn primary account-add-primary"[^>]*><img src="\/icons\/plus\.svg"/);
+  assert.match(css, /\.btn\.primary img\s*\{[^}]*filter:\s*brightness\(0\) invert\(1\)/s);
+});
+
+test("every static icon reference resolves to a shipped asset", () => {
+  const sourceFiles = readdirSync(root).filter(file => /\.(?:html|js)$/.test(file));
+  const iconReferences = new Set(
+    sourceFiles.flatMap(file => [
+      ...readFileSync(resolve(root, file), "utf8").matchAll(/["'](\/icons\/[a-z0-9._-]+\.svg)["']/gi),
+    ].map(match => match[1])),
+  );
+  assert.ok(iconReferences.size > 0);
+  for (const iconPath of iconReferences) {
+    assert.equal(existsSync(resolve(root, iconPath.slice(1))), true, `${iconPath} is missing`);
+  }
+});
+
 test("account admin exposes persistent account settings without hiding booth users", () => {
   const [html, script, platform, auth] = [
     "account-admin.html",
@@ -83,6 +115,9 @@ test("cloud setup keeps a reusable web pairing QR separate from Agent installati
   assert.match(html, /Gunakan versi web/);
   assert.match(html, /Install Photoslive Agent/);
   assert.match(html, /<details class="station-agent-install"/);
+  assert.match(html, /id="station-agent-command"/);
+  assert.match(html, /curl -fsSL https:\/\/photoslive\.vercel\.app\/downloads\/install-linux\.sh \| bash/);
+  assert.match(script, /copy-station-agent-command/);
   assert.match(script, /create_web_pairing/);
   assert.match(script, /WEB_PAIRING_STORAGE_KEY/);
   assert.match(script, /setInterval\(inspectWebPairing, 10_000\)/);

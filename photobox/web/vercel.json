@@ -10,17 +10,11 @@
     { "source": "/admin", "destination": "/account-admin", "permanent": false }
   ],
   "rewrites": [
-    { "source": "/setup", "destination": "/setup.html" },
-    { "source": "/pair/:token", "destination": "/setup.html?mode=pairing&pairToken=:token" },
-    { "source": "/status", "destination": "/status.html" },
-    { "source": "/superadmin", "destination": "/superadmin.html" },
-    { "source": "/admin", "destination": "/account-admin.html" },
-    { "source": "/account-admin", "destination": "/account-admin.html" },
-    { "source": "/booth", "destination": "/booth.html" },
-    { "source": "/:booth/admin", "destination": "/admin.html?booth=:booth" },
-    { "source": "/:booth/sesi/:session", "destination": "/session.html?booth=:booth&session=:session" },
-    { "source": "/:booth/:session", "destination": "/session.html?booth=:booth&session=:session" },
-    { "source": "/:booth", "destination": "/booth.html?booth=:booth" }
+    { "source": "/pair/:token", "destination": "/setup?mode=pairing&pairToken=:token" },
+    { "source": "/:booth/admin", "destination": "/admin?booth=:booth" },
+    { "source": "/:booth/sesi/:session", "destination": "/session?booth=:booth&session=:session" },
+    { "source": "/:booth/:session", "destination": "/session?booth=:booth&session=:session" },
+    { "source": "/:booth", "destination": "/booth?booth=:booth" }
   ],
   "headers": [
     {

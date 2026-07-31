@@ -212,6 +212,16 @@
 }
 .station-agent-install summary span { color: #777d89; font-size: 11px; font-weight: 700; }
 .station-installer-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.station-installer-links .btn { justify-content: center; min-height: 44px; cursor: pointer; }
+.station-installer-links .btn.active { border-color: #5d56e8; box-shadow: 0 0 0 3px rgba(93,86,232,.12); color: #3f38c8; }
+.station-agent-methods { display: grid; gap: 12px; margin-top: 12px; }
+.station-agent-download { justify-content: center; min-height: 46px; }
+.station-command { display: grid; gap: 8px; padding: 12px; border: 1px solid #e1e3ea; border-radius: 7px; background: #f7f7fb; }
+.station-command > div:first-child { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.station-command b { font-size: 12px; }
+.station-command small { color: #737985; font-size: 11px; }
+.station-command .command-box { margin: 0; }
+.station-command .inline-status { min-height: 18px; margin: 0; }
 .station-agent-install p { margin: 12px 0 0; color: #737985; font-size: 12px; line-height: 1.5; }
 
 .local-pairing-state { display: grid; gap: 18px; }
@@ -839,6 +849,7 @@
   #setup-frame-upload-preview { height: 340px; }
   .station-mode-grid,
   .station-installer-links { grid-template-columns: 1fr; }
+  .station-command > div:first-child { align-items: flex-start; flex-direction: column; gap: 2px; }
   .station-mode-card { min-height: 116px; }
 }
 

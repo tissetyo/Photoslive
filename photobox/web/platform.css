@@ -164,3 +164,10 @@ dialog{width:min(560px,calc(100% - 32px));padding:0;border:0;border-radius:8px;b
   #pairing-action-dialog .auth-card { min-height: 100%; display: flex; flex-direction: column; }
   #pairing-action-dialog .form-actions { margin-top: auto; }
 }
+
+/* External SVG images do not inherit the button's CSS `color`. Keep icons
+   legible on every dark primary action across account, setup, and platform UI. */
+.btn.primary img {
+  filter: brightness(0) invert(1);
+  opacity: 1;
+}
