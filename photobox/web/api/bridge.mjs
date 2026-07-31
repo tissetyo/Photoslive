@@ -51,6 +51,7 @@ import {
   persistPostgresMachine,
   postgresMachineStatus,
   readPostgresMachine,
+  readPostgresMachineStatus,
   readPostgresPairing,
 } from "./_postgres_machines.mjs";
 
@@ -1167,6 +1168,23 @@ async function dispatch(request) {
     if (action === "heartbeat" && request.method === "POST") return heartbeat(optionalRedis(), request, payload);
     if (action === "settings_snapshot" && request.method === "POST" && postgresSettingsStatus().primary) return settingsSnapshot(optionalRedis(), request, payload);
     if (action === "voucher_snapshot" && request.method === "POST" && postgresVoucherStatus().primary) return voucherSnapshot(optionalRedis(), request, payload);
+    if (action === "machine_status" && request.method === "GET") {
+      const machineId = String(payload.machineId || "");
+      const redis = optionalRedis();
+      if (!await authorizeOperator(redis, request, machineId)) return json({ error: "Login admin diperlukan" }, 401);
+      const postgresStatus = postgresMachineStatus();
+      if (postgresStatus.primary) {
+        const durable = await readPostgresMachineStatus(machineId);
+        if (durable) return json({ machine: publicMachine(durable), source: "postgres" });
+      }
+      const cached = redis ? await bestEffortRedis(() => redis.get(machineKey(machineId)), null) : null;
+      if (cached) return json({ machine: publicMachine(cached), source: "redis" });
+      if (postgresStatus.enabled && !postgresStatus.primary) {
+        const durable = await readPostgresMachineStatus(machineId);
+        if (durable) return json({ machine: publicMachine(durable), source: "postgres" });
+      }
+      return json({ machine: null, source: postgresStatus.enabled ? "postgres" : "redis" });
+    }
     const redis = getRedis();
     if (action === "create_setup_code" && request.method === "POST") return createSetupCode(redis, request, payload);
     if (action === "settings_snapshot" && request.method === "POST") return settingsSnapshot(redis, request, payload);
@@ -1179,11 +1197,6 @@ async function dispatch(request) {
     if (action === "complete_session_file_multipart" && request.method === "POST") return completeSessionFileMultipart(redis, request, payload);
     if (action === "finalize_session_file" && request.method === "POST") return finalizeSessionFile(redis, request, payload);
     if (action === "sync_session_file" && request.method === "POST") return syncSessionFile(redis, request, payload);
-    if (action === "machine_status" && request.method === "GET") {
-      const machineId = String(payload.machineId || "");
-      if (!await authorizeOperator(redis, request, machineId)) return json({ error: "Login admin diperlukan" }, 401);
-      return json({ machine: publicMachine(await redis.get(machineKey(machineId))) });
-    }
     if (action === "enqueue_job" && request.method === "POST") return enqueueJob(redis, request, payload);
     if (action === "claim_job" && request.method === "POST") return claimJob(redis, request, payload);
     if (action === "update_job" && request.method === "POST") return updateJob(redis, request, payload);

@@ -1,8 +1,8 @@
-const CACHE_VERSION = "photoslive-shell-v9";
+const CACHE_VERSION = "photoslive-shell-v10";
 const APP_SHELL = [
   "/booth.html",
   "/booth.css?v=2",
-  "/booth.js?v=10",
+  "/booth.js?v=11",
   "/setup.html",
   "/platform.css?v=4",
   "/setup.css?v=26",

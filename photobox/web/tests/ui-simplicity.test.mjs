@@ -47,3 +47,16 @@ test("superadmin groups controls by operational domain without duplicating pages
   assert.match(css, /\.super-domain-nav/);
   assert.match(css, /\.super-domain-hidden/);
 });
+
+test("web booth reports a missing browser camera without falsely requiring Helper", () => {
+  const script = read("booth.js");
+  const capture = script.slice(script.indexOf("async function captureCurrentSlot"), script.indexOf("async function acceptCurrentPhoto"));
+
+  assert.match(capture, /if \(!boothState\.cameraMode\)/);
+  assert.match(capture, /Kamera browser belum siap\. Izinkan akses kamera/);
+  assert.ok(
+    capture.indexOf("if (!boothState.cameraMode)") < capture.indexOf('boothState.cameraMode === "browser"'),
+    "camera readiness must be checked before selecting browser or Helper capture",
+  );
+  assert.doesNotMatch(capture, /Fitur ini memerlukan Photoslive Helper/);
+});

@@ -103,6 +103,13 @@ export async function readPostgresMachine(machineId, tokenHash, options = {}) {
   return result.ok ? safeMachine(result.payload) : null;
 }
 
+export async function readPostgresMachineStatus(machineId, options = {}) {
+  const result = await machineRpc("photoslive_agent_machine_status", {
+    p_machine_id: clean(machineId, 160),
+  }, machineId, options);
+  return result.ok ? safeMachine(result.payload) : null;
+}
+
 export async function createPostgresSetupCode(machine, tokenHash, pairingCode, options = {}) {
   const prepared = publicMachineInput({
     ...machine,

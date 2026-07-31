@@ -70,6 +70,15 @@ test("Agent bridge keeps primary cloud data out of Redis hot paths and backs off
   assert.match(platform, /Redis is the short ring-buffer for browsing audit logs/);
 });
 
+test("Admin Helper status reads PostgreSQL before the optional Redis cache", () => {
+  assert.match(bridge, /readPostgresMachineStatus/);
+  assert.match(bridge, /action === "machine_status"[\s\S]{0,900}postgresStatus\.primary/);
+  assert.match(bridge, /source: "postgres"/);
+  assert.match(bridge, /bestEffortRedis\(\(\) => redis\.get\(machineKey\(machineId\)\), null\)/);
+  const statusBranch = bridge.slice(bridge.indexOf('if (action === "machine_status"'), bridge.indexOf("const redis = getRedis();", bridge.indexOf('if (action === "machine_status"')));
+  assert.doesNotMatch(statusBranch, /await redis\.get/);
+});
+
 test("heartbeat carries bounded operational summaries instead of remote file payloads", () => {
   assert.match(agent, /"sync": local_status\.get\("sync"\)/);
   assert.match(agent, /"queue": local_status\.get\("queue"\)/);

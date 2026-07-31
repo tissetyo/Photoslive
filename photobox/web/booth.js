@@ -815,6 +815,9 @@ async function runShotCountdown() {
 async function captureCurrentSlot() {
   $("#capture-instruction b").textContent = "Mengambil foto…"; $("#capture-instruction small").textContent = "Tetap diam sebentar.";
   try {
+    if (!boothState.cameraMode) {
+      throw new Error("Kamera browser belum siap. Izinkan akses kamera, pastikan kamera tidak dipakai aplikasi lain, lalu coba lagi.");
+    }
     const file = boothState.cameraMode === "browser"
       ? await captureBrowserFrame()
       : (await boothApi(`/api/sessions/${boothState.session.id}/capture`, { method: "POST", body: JSON.stringify({ slotIndex: boothState.currentSlot }) })).file;
