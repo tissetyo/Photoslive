@@ -390,10 +390,11 @@ function showView(name) {
   currentUrl.searchParams.set("view", name);
   window.history.replaceState(null, "", currentUrl);
   if (name === "storage" && state.settings && !isWebRuntime()) loadStorageData(false);
-  if (name === "agent") {
-    if (isWebRuntime()) renderWebRuntimeStatus();
-    else loadAgentStatus();
-  }
+  // The Helper page is also the installation and recovery surface. Always
+  // read its durable machine snapshot, even while the booth correctly falls
+  // back to browser capabilities because Controller is offline. Otherwise a
+  // healthy Agent heartbeat is hidden behind the generic web-only empty state.
+  if (name === "agent") loadAgentStatus();
   if (name === "users") loadUsers();
   if (name === "system") loadAuditLog();
   if (name === "integrations") loadBoothIntegrations();

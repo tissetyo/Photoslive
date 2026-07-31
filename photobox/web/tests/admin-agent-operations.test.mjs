@@ -141,6 +141,7 @@ test("web-only photobox never enters the Helper polling or remote-job path", () 
   assert.match(app, /const isHelperActive = \(\) => state\.runtime\?\.capabilities\?\.helper\?\.active === true/);
   assert.match(app, /if \(!isHelperActive\(\)\) \{[\s\S]{0,180}Photoslive Helper aktif/);
   assert.match(app, /if \(!isWebRuntime\(\)\) setInterval\(\(\) => refreshStatus/);
-  assert.match(app, /if \(isWebRuntime\(\)\) \{\s*renderWebRuntimeStatus\(\)/);
+  assert.match(app, /if \(name === "agent"\) loadAgentStatus\(\)/);
+  assert.doesNotMatch(app, /if \(name === "agent"\) \{\s*if \(isWebRuntime\(\)\) renderWebRuntimeStatus\(\)/);
   assert.match(app, /Web\/PWA aktif\. Tidak ada polling perangkat sampai Photoslive Helper diaktifkan\./);
 });
