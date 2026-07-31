@@ -1,6 +1,6 @@
 # Migrasi metadata sesi foto ke PostgreSQL
 
-Migration `supabase/migrations/20260722150000_photo_session_metadata.sql`
+Migration `supabase/migrations/20260727143442_photo_session_metadata.sql`
 menyimpan metadata sesi secara tenant-safe pada `public.photo_sessions`.
 Foto binary tetap berada di disk lokal dan object storage; migration ini tidak
 memindahkan JPEG, hasil frame, atau GIF ke PostgreSQL. Metadata internal object

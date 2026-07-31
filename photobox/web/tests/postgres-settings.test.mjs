@@ -79,7 +79,7 @@ test("settings snapshot restores config and version", async () => {
 });
 
 test("settings migration is bounded and service-role-only", () => {
-  const sql = readFileSync(new URL("../../../supabase/migrations/20260722123000_transactional_booth_settings.sql", import.meta.url), "utf8").toLowerCase();
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260727143427_transactional_booth_settings.sql", import.meta.url), "utf8").toLowerCase();
   assert.match(sql, /for update/);
   assert.match(sql, /octet_length\(p_config::text\) > 500000/);
   assert.match(sql, /config_version = config_version \+ 1/);

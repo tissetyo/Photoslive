@@ -20,17 +20,27 @@ const onboarding = {
   pairingCode: "",
   pairingScannerStream: null,
   pairingScannerTimer: null,
+  webPairing: null,
+  webPairingTimer: null,
 };
 
 let deferredTabletInstallPrompt = null;
 
 const SETUP_DRAFT_KEY = "photoslive.setupDraft.v2";
 const SETUP_SESSION_TOKEN_KEY = "photoslive.setupSessionToken";
+const WEB_PAIRING_STORAGE_KEY = "photoslive.webPairing.v1";
+const PENDING_PAIRING_KEY = "photoslive.pendingPairing.v1";
 const SETUP_QUERY = new URLSearchParams(location.search);
 const IS_LOOPBACK_HOST = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
 const IS_LOCAL_SETUP = IS_LOOPBACK_HOST
-  && (SETUP_QUERY.get("local") === "1" || (SETUP_QUERY.get("mode") || "setup") === "setup");
+  // Only the explicit local link or the installed Controller port is a
+  // machine screen. A dev server on 8081/8082 must stay in the cloud
+  // account flow; otherwise it falsely claims a Local Manager exists.
+  && (SETUP_QUERY.get("local") === "1"
+    || (location.port === "8080" && (SETUP_QUERY.get("mode") || "setup") === "setup"));
 const CLOUD_PLATFORM_ORIGIN = "https://photoslive.vercel.app";
+const PAIRING_PATH_TOKEN = location.pathname.match(/^\/pair\/([^/]+)$/)?.[1] || "";
+const IS_PHONE_PAIRING_FLOW = Boolean(PAIRING_PATH_TOKEN || SETUP_QUERY.get("pairToken"));
 
 function cloudRegistrationUrl() {
   const target = new URL("/setup", CLOUD_PLATFORM_ORIGIN);
@@ -271,6 +281,12 @@ function updateRecoveryVisibility(activeMode) {
   // cloud flow. It remains available only behind the legacy migration flag.
   const show = activeMode === "setup" && !IS_LOCAL_SETUP && SETUP_QUERY.get("legacy") === "1";
   $("#agent-recovery").classList.toggle("hidden", !show);
+  const showPairingQr = activeMode === "local"
+    || (!IS_LOCAL_SETUP
+      && !IS_PHONE_PAIRING_FLOW
+      && ["register", "login"].includes(activeMode));
+  $("#local-qr-side").classList.toggle("hidden", !showPairingQr);
+  $(".auth-layout").classList.toggle("web-pairing-layout", showPairingQr && activeMode !== "local");
 }
 
 function setSetupStep(step) {
@@ -295,20 +311,21 @@ function setSetupStep(step) {
 }
 
 function mode(name) {
-  if (!["setup", "login", "register", "forgot", "pairing", "ready", "local"].includes(name)) name = "register";
+  if (!["setup", "login", "register", "forgot", "pairing", "ready", "local", "station"].includes(name)) name = "register";
   document.querySelectorAll("[data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === name));
-  ["setup", "login", "register", "forgot", "pairing", "ready", "local"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
+  ["setup", "login", "register", "forgot", "pairing", "ready", "local", "station"].forEach(value => $(`#${value}-form`).classList.toggle("hidden", value !== name));
   $("#wizard-progress").classList.toggle("hidden", name !== "setup");
-  $("#setup-modes").classList.toggle("hidden", ["forgot", "pairing", "ready", "local"].includes(name) || (name === "setup" && onboarding.step > 1));
+  $("#setup-modes").classList.toggle("hidden", ["forgot", "pairing", "ready", "local", "station"].includes(name) || (name === "setup" && onboarding.step > 1));
   $(".auth-layout").dataset.mode = name;
   const labels = {
     setup: ["Setup lama", "Gunakan hanya untuk memulihkan instalasi lama."],
     login: ["Masuk", "Gunakan email dan password akun Photoslive."],
     register: ["Buat akun Photoslive", "Daftar dengan email. Mesin dapat dihubungkan setelah akun siap."],
     forgot: ["Bantuan password", "Kirim permintaan kepada superadmin."],
-    pairing: ["Hubungkan photobox", "Scan QR atau masukkan kode dari Local Manager."],
+    pairing: ["Hubungkan photobox", "Scan QR atau masukkan kode dari layar mesin photobox."],
     ready: ["Photobox siap", "Pairing selesai dan tersimpan permanen."],
     local: ["Hubungkan mesin", "Pindai QR ini dari akun Admin Photoslive Anda."],
+    station: ["Pilih cara menjalankan", "Photobox sudah terhubung. Pilih mode yang paling sesuai."],
   };
   $("#setup-title").textContent = labels[name][0];
   $("#setup-copy").textContent = labels[name][1];
@@ -318,10 +335,138 @@ function mode(name) {
   status("");
 }
 
+function readWebPairing() {
+  try {
+    const value = JSON.parse(localStorage.getItem(WEB_PAIRING_STORAGE_KEY) || "null");
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    localStorage.removeItem(WEB_PAIRING_STORAGE_KEY);
+    return null;
+  }
+}
+
+function persistWebPairing(value) {
+  onboarding.webPairing = value;
+  localStorage.setItem(WEB_PAIRING_STORAGE_KEY, JSON.stringify(value));
+}
+
+function stopWebPairingPoll() {
+  if (onboarding.webPairingTimer) clearInterval(onboarding.webPairingTimer);
+  onboarding.webPairingTimer = null;
+}
+
+function setWebPairingSide(pairing, message = "") {
+  const qr = $("#local-pairing-qr-side");
+  const frame = qr?.closest(".local-qr-side-frame");
+  const code = $("#local-qr-side-code-value");
+  const copy = $("#local-qr-side-status");
+  if (qr) {
+    if (pairing?.qrImage) qr.src = pairing.qrImage;
+    else qr.removeAttribute("src");
+  }
+  frame?.classList.toggle("is-empty", !pairing?.qrImage);
+  if (code) code.textContent = pairing?.pairingCode || (pairing?.paired ? "TERHUBUNG" : "Menyiapkan QR…");
+  if (copy) copy.textContent = message || (pairing?.paired
+    ? "Photobox sudah terhubung ke akun Admin."
+    : "Scan dari ponsel yang sudah masuk ke Admin Photoslive.");
+}
+
+function showClaimedWebStation(claim = {}) {
+  stopWebPairingPoll();
+  const current = { ...(onboarding.webPairing || readWebPairing() || {}), paired: true, claim };
+  persistWebPairing(current);
+  setWebPairingSide(current, "Berhasil terhubung. Lanjutkan pilihan di sebelah kanan.");
+  $("#station-booth-name").textContent = claim.boothName || claim.name || "Photoslive Booth";
+  $("#station-booth-code").textContent = claim.boothCode ? `/${claim.boothCode}` : "Tersimpan di akun Admin";
+  $("#station-ready-copy").textContent = "Pilih versi web sekarang atau pasang Agent untuk kemampuan hardware lanjutan.";
+  mode("station");
+}
+
+async function inspectWebPairing() {
+  const pairing = onboarding.webPairing || readWebPairing();
+  if (!pairing?.pairingToken) return;
+  if (document.hidden) return;
+  try {
+    const result = await bridgeApi("pairing_status", { token: pairing.pairingToken }, "GET");
+    const claim = result.claim || {};
+    if (claim.status === "claimed") {
+      showClaimedWebStation(claim);
+      return;
+    }
+    if (claim.status === "expired") {
+      stopWebPairingPoll();
+      setWebPairingSide(pairing, "QR sudah kedaluwarsa. Tekan Buat QR baru.");
+      return;
+    }
+  } catch (error) {
+    // A temporary network failure must not replace the QR or create another
+    // machine. The next bounded poll retries the same durable token.
+    $("#local-qr-side-status").textContent = `Koneksi terputus sementara. QR tetap berlaku. ${error.message}`;
+  }
+}
+
+function startWebPairingPoll() {
+  stopWebPairingPoll();
+  onboarding.webPairingTimer = setInterval(inspectWebPairing, 10_000);
+}
+
+async function createWebPairing({ force = false } = {}) {
+  const button = $("#refresh-web-pairing");
+  const cached = readWebPairing();
+  const validUntil = Date.parse(cached?.expiresAt || "");
+  if (!force && cached?.paired && cached.claim) {
+    showClaimedWebStation(cached.claim);
+    return cached;
+  }
+  if (!force && cached?.pairingToken && Number.isFinite(validUntil) && validUntil > Date.now()) {
+    onboarding.webPairing = cached;
+    setWebPairingSide(cached);
+    startWebPairingPoll();
+    inspectWebPairing();
+    return cached;
+  }
+  setButtonBusy(button, true, "Membuat…");
+  setWebPairingSide(null, "Membuat QR aman untuk mesin ini…");
+  try {
+    const result = await bridgeApi("create_web_pairing", {
+      installationId: cached?.installationId || "",
+      name: "Photoslive Web Booth",
+      platform: `${navigator.platform || "Web"} · ${navigator.userAgent}`,
+    });
+    persistWebPairing(result);
+    setWebPairingSide(result);
+    startWebPairingPoll();
+    return result;
+  } catch (error) {
+    setWebPairingSide(null, `QR belum dapat dibuat: ${error.message}`);
+    return null;
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+function pendingPairingIdentity() {
+  try {
+    return JSON.parse(sessionStorage.getItem(PENDING_PAIRING_KEY) || "null") || { token: "", code: "" };
+  } catch {
+    sessionStorage.removeItem(PENDING_PAIRING_KEY);
+    return { token: "", code: "" };
+  }
+}
+
+async function continuePendingPairing() {
+  const identity = pendingPairingIdentity();
+  if (!identity.token && !identity.code) return false;
+  mode("pairing");
+  if (identity.code) $("#pairing-code").value = identity.code;
+  await inspectPairingIdentity(identity);
+  return true;
+}
+
 async function localInstallationHeaders() {
   const response = await fetch("/api/local/installation", { cache: "no-store" });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.token) throw new Error(payload.error || "Otorisasi Local Manager tidak tersedia");
+  if (!response.ok || !payload.token) throw new Error(payload.error || "Controller mesin tidak tersedia");
   return { "X-Installation-Token": payload.token };
 }
 
@@ -346,11 +491,25 @@ function setLocalPairingView({ config = {}, machine = {}, payload = null } = {})
   // external QR service: setup must still be usable on a private/offline LAN.
   qrWrap.hidden = !qrImage;
   if (qrImage) $("#local-pairing-qr").src = qrImage;
+  const sideQr = $("#local-pairing-qr-side");
+  if (sideQr) {
+    if (qrImage) sideQr.src = qrImage;
+    else sideQr.removeAttribute("src");
+    sideQr.closest(".local-qr-side-frame")?.classList.toggle("is-empty", !qrImage);
+  }
+  const sideCode = $("#local-qr-side-code-value");
+  const sideStatus = $("#local-qr-side-status");
+  if (sideCode) sideCode.textContent = paired ? (boothCode || "Sudah terhubung") : (pairingCode || "Menunggu QR dibuat");
+  if (sideStatus) sideStatus.textContent = paired
+    ? "Mesin sudah terhubung ke akun Admin."
+    : pairingUrl ? "Pindai sekali dari ponsel Admin yang sudah login." : "QR akan dibuat otomatis oleh Controller lokal.";
   $("#create-local-pairing").disabled = paired;
-  $("#create-local-pairing").textContent = paired ? "Mesin sudah terhubung" : "Buat QR pairing";
+  $("#create-local-pairing").textContent = paired
+    ? "Mesin sudah terhubung"
+    : pairingUrl ? "Buat QR baru" : "Buat QR pairing";
   $("#local-pairing-message").textContent = paired
     ? "Kepemilikan mesin sudah tersimpan. Gunakan Admin untuk melanjutkan konfigurasi."
-    : pairingUrl ? "Pindai QR atau masukkan kode dari ponsel yang sudah login sebagai Admin." : "Buat QR pairing untuk menghubungkan mesin ini.";
+    : pairingUrl ? "Pindai QR ini dari ponsel Admin. Kode hanya dapat dipakai sekali." : "QR akan dibuat otomatis saat halaman setup mesin dibuka.";
 }
 
 async function refreshLocalPairing({ create = false } = {}) {
@@ -360,7 +519,15 @@ async function refreshLocalPairing({ create = false } = {}) {
     const bootstrap = await controllerRequest("/api/local/setup/bootstrap", "GET");
     let payload = null;
     const initialConfig = bootstrap.cloud?.config || {};
-    if (create && !initialConfig.paired) {
+    // The local machine page is the source of the QR. Generate it on first
+    // load so an operator never has to discover an extra button before the
+    // phone can scan. Repeated refreshes remain read-only until the operator
+    // explicitly requests a new code.
+    const shouldCreate = !initialConfig.paired
+      && !initialConfig.pairingUrl
+      && !initialConfig.pairingCode
+      && (create || !bootstrap.cloud?.pairingCode);
+    if (shouldCreate) {
       const headers = await localInstallationHeaders();
       const response = await fetch("/api/local/agent/setup-code", { method: "POST", headers });
       payload = await response.json().catch(() => ({}));
@@ -473,8 +640,8 @@ async function inspectPairingIdentity(identity) {
   const result = await bridgeApi("pairing_status", identity, "GET");
   if (!result.claim || result.claim.status !== "pending") {
     throw new Error(result.claim?.status === "claimed"
-      ? "Kode sudah digunakan. Buat kode baru dari Local Manager."
-      : "Kode sudah kedaluwarsa. Buat kode baru dari Local Manager.");
+      ? "Kode sudah digunakan. Buat QR baru dari layar setup mesin."
+      : "Kode sudah kedaluwarsa. Buat QR baru dari layar setup mesin.");
   }
   onboarding.pairingToken = identity.token || "";
   onboarding.pairingCode = identity.code || "";
@@ -496,7 +663,7 @@ async function startPairingScanner() {
   video.srcObject = onboarding.pairingScannerStream;
   await video.play();
   const detector = new BarcodeDetector({ formats: ["qr_code"] });
-  $("#pairing-scanner-status").textContent = "Arahkan kamera ke QR Local Manager.";
+  $("#pairing-scanner-status").textContent = "Arahkan kamera ke QR di layar mesin photobox.";
   onboarding.pairingScannerTimer = setInterval(async () => {
     if (video.readyState < 2) return;
     try {
@@ -534,6 +701,7 @@ async function claimPairingMachine(event) {
       idempotencyKey,
     });
     sessionStorage.removeItem("photoslive.pairingIdempotency");
+    sessionStorage.removeItem(PENDING_PAIRING_KEY);
     onboarding.machine = result.machine;
     onboarding.booth = result.booth;
     if (result.booth?.boothCode) {
@@ -1017,7 +1185,7 @@ $("#start-pairing-scanner").addEventListener("click", async () => {
 $("#pairing-form").addEventListener("submit", claimPairingMachine);
 $("#prepare-machine-later").addEventListener("click", () => {
   stopPairingScanner();
-  location.href = "/admin";
+  location.href = "/account-admin";
 });
 $("#pair-another-machine").addEventListener("click", () => {
   onboarding.pairingClaim = null;
@@ -1030,6 +1198,23 @@ $("#pair-another-machine").addEventListener("click", () => {
 });
 $("#refresh-local-pairing").addEventListener("click", () => refreshLocalPairing());
 $("#create-local-pairing").addEventListener("click", () => refreshLocalPairing({ create: true }));
+$("#refresh-web-pairing").addEventListener("click", () => {
+  localStorage.removeItem(WEB_PAIRING_STORAGE_KEY);
+  createWebPairing({ force: true });
+});
+$("#use-web-mode").addEventListener("click", () => {
+  const pairing = onboarding.webPairing || readWebPairing() || {};
+  const boothCode = pairing.claim?.boothCode || "";
+  localStorage.setItem("photoslive.stationMode", "web");
+  if (boothCode) location.href = `/${encodeURIComponent(boothCode)}`;
+  else location.href = "/account-admin";
+});
+$("#show-agent-install").addEventListener("click", () => {
+  const details = $("#station-agent-install");
+  details.open = !details.open;
+  $("#show-agent-install").setAttribute("aria-expanded", String(details.open));
+  if (details.open) details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+});
 $("#copy-local-pairing-code").addEventListener("click", async () => {
   const code = $("#local-pairing-code").value;
   if (!code || code === "—") return;
@@ -1159,9 +1344,9 @@ window.addEventListener("beforeinstallprompt", event => {
 });
 window.addEventListener("appinstalled", () => refreshTabletCapabilities("Photoslive berhasil di-install."));
 const setupCommands = {
-  windows: { label: 'Windows PowerShell', installCommand: 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', setupCommand: 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-link --open-setup', downloadUrl: '/downloads/install-windows.ps1', downloadName: 'install-photoslive-windows.ps1', downloadLabel: 'Ambil installer Windows', icon: 'windows' },
-  macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-link --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Ambil installer macOS', icon: 'apple' },
-  linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-link --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Ambil installer Linux', icon: 'linux' },
+  windows: { label: 'Windows PowerShell', installCommand: 'irm https://photoslive.vercel.app/downloads/install-windows.ps1 | iex', setupCommand: 'python "$env:LOCALAPPDATA\\Photoslive\\source\\photobox\\agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-windows.ps1', downloadName: 'install-photoslive-windows.ps1', downloadLabel: 'Ambil installer Windows', icon: 'windows' },
+  macos: { label: 'macOS Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-macos.sh | bash', setupCommand: 'python3 "$HOME/Library/Application Support/Photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-macos.sh', downloadName: 'install-photoslive-macos.sh', downloadLabel: 'Ambil installer macOS', icon: 'apple' },
+  linux: { label: 'Linux Terminal', installCommand: 'curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash', setupCommand: 'python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code --open-setup', downloadUrl: '/downloads/install-linux.sh', downloadName: 'install-photoslive-linux.sh', downloadLabel: 'Ambil installer Linux', icon: 'linux' },
 };
 function detectedOperatingSystem() {
   const platform = `${navigator.userAgentData?.platform || ""} ${navigator.platform || ""} ${navigator.userAgent || ""}`;
@@ -1183,7 +1368,7 @@ function agentOperatingSystem(name) {
 }
 document.querySelectorAll("[data-agent-platform]").forEach(button => button.addEventListener("click", () => agentPlatform(button.dataset.agentPlatform)));
 document.querySelectorAll("[data-agent-os]").forEach(button => button.addEventListener("click", () => agentOperatingSystem(button.dataset.agentOs)));
-$("#primary-agent-download").addEventListener("click", () => { $("#copy-feedback").textContent = "Installer ringan diunduh. Jalankan file itu; setelah selesai Setup/Local Manager akan terbuka di browser."; });
+$("#primary-agent-download").addEventListener("click", () => { $("#copy-feedback").textContent = "Installer diunduh. Jalankan sekali; setelah selesai layar QR setup mesin terbuka otomatis."; });
 $("#use-companion-agent").addEventListener("click", event => {
   const help = $("#companion-setup-help");
   const expanded = event.currentTarget.getAttribute("aria-expanded") !== "true";
@@ -1540,6 +1725,7 @@ $("#login-form").addEventListener("submit", async event => {
       } else throw error;
     }
     rememberAccount(result);
+    if (await continuePendingPairing()) return;
     if (result.booth?.boothCode) {
       localStorage.setItem("photoslive.machineId", result.booth.machineId || "");
       localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
@@ -1552,7 +1738,7 @@ $("#login-form").addEventListener("submit", async event => {
       location.href = `/${booth.boothCode}/admin`;
       return;
     }
-    location.href = "/admin";
+    location.href = "/account-admin";
   } catch (error) {
     status(error.message);
   } finally {
@@ -1581,7 +1767,8 @@ $("#register-form").addEventListener("submit", async event => {
       return;
     }
     rememberAccount(result);
-    location.href = "/admin";
+    if (await continuePendingPairing()) return;
+    location.href = "/account-admin";
   } catch (error) {
     status(error.message);
   } finally {
@@ -1652,6 +1839,15 @@ pairingMethod("code");
 restoreRememberedAccount();
 const requestedMode = params.get("mode")
   || (params.get("legacy") === "1" ? "setup" : "register");
+const initialPairingIdentity = pairingIdentityFromValue(
+  PAIRING_PATH_TOKEN
+  || params.get("pairToken")
+  || (requestedMode === "pairing" ? params.get("code") : "")
+  || "",
+);
+if (initialPairingIdentity.token || initialPairingIdentity.code) {
+  sessionStorage.setItem(PENDING_PAIRING_KEY, JSON.stringify(initialPairingIdentity));
+}
 if (IS_LOCAL_SETUP) {
   mode("local");
   refreshLocalPairing();
@@ -1667,6 +1863,14 @@ if (IS_LOCAL_SETUP) {
     if (!resumed && setupTokenFromUrl) validateSetupLink(setupTokenFromUrl);
     else if (!setupTokenFromUrl) renderSetupLinkState("idle", "Siapkan Photoslive di mesin ini", "Install Photoslive satu kali. Sesudah selesai, wizard ini terbuka dan mengenali mesin secara otomatis.");
   }
+} else if (requestedMode === "station") {
+  const pairing = readWebPairing();
+  if (pairing?.paired && pairing.claim) {
+    showClaimedWebStation(pairing.claim);
+  } else {
+    mode("register");
+    createWebPairing();
+  }
 } else {
   onboarding.step = 1;
   mode(requestedMode);
@@ -1677,21 +1881,26 @@ if (IS_LOCAL_SETUP) {
         mode("login");
         return;
       }
-      const identity = pairingIdentityFromValue(params.get("pairToken") || params.get("code") || "");
+      const identity = pendingPairingIdentity();
       if (identity.token || identity.code) {
         if (identity.code) $("#pairing-code").value = identity.code;
         inspectPairingIdentity(identity).catch(error => status(error.message));
       }
     });
   } else if (requestedMode === "register" || requestedMode === "login") {
+    createWebPairing();
     ensureAccountSession().then(account => {
       if (!account) return;
+      if (initialPairingIdentity.token || initialPairingIdentity.code) {
+        continuePendingPairing().catch(error => status(error.message));
+        return;
+      }
       const booth = Array.isArray(account.booths) ? account.booths[0] : null;
       if (booth?.boothCode) {
         location.replace(`/${booth.boothCode}/admin`);
         return;
       }
-      location.replace("/admin");
+      location.replace("/account-admin");
     });
   }
 }

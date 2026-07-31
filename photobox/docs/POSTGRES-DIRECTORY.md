@@ -7,7 +7,7 @@ tersebut.
 
 ## Konfigurasi
 
-Jalankan migration `supabase/migrations/20260722140000_booth_directory.sql`,
+Jalankan migration `supabase/migrations/20260727143435_booth_directory.sql`,
 lalu isi environment server:
 
 ```text

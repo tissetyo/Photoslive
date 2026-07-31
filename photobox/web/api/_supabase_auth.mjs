@@ -91,7 +91,15 @@ export async function readSupabaseUser(accessToken, options = {}) {
   return authRequest("user", { ...options, method: "GET", accessToken });
 }
 
+export async function updateSupabaseUser(accessToken, updates, options = {}) {
+  return authRequest("user", {
+    ...options,
+    method: "PUT",
+    accessToken,
+    body: updates,
+  });
+}
+
 export async function logoutSupabaseUser(accessToken, options = {}) {
   return authRequest("logout", { ...options, accessToken, body: {} });
 }
-

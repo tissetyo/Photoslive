@@ -5,12 +5,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const migrationPath = path.join(workspace, "supabase/migrations/20260720035058_platform_core.sql");
+const migrationPath = path.join(workspace, "supabase/migrations/20260727143337_platform_core.sql");
 const migration = fs.readFileSync(migrationPath, "utf8").toLowerCase();
-const shadowMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260720071108_add_migration_shadow_events.sql"), "utf8").toLowerCase();
-const paymentShadowMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260721102309_extend_shadow_payment_entities.sql"), "utf8").toLowerCase();
-const financeMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260721104654_create_payment_ledger.sql"), "utf8").toLowerCase();
-const payoutMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260721170000_create_manual_payouts.sql"), "utf8").toLowerCase();
+const shadowMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260727143344_add_migration_shadow_events.sql"), "utf8").toLowerCase();
+const paymentShadowMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260727143352_extend_shadow_payment_entities.sql"), "utf8").toLowerCase();
+const financeMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260727143403_create_payment_ledger.sql"), "utf8").toLowerCase();
+const payoutMigration = fs.readFileSync(path.join(workspace, "supabase/migrations/20260727143413_create_manual_payouts.sql"), "utf8").toLowerCase();
 const publicTables = [
   "organizations", "profiles", "platform_memberships", "booths", "booth_memberships",
   "booth_configs", "voucher_events", "vouchers", "photo_sessions", "assets",

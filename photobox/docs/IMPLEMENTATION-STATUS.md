@@ -23,7 +23,7 @@ manual, bukti yang harus disimpan, serta batas secret didokumentasikan di
   membuat QR/kode pairing setelah tindakan operator, dan mapping paired disimpan
   permanen. Registry ownership/histori serta revoke/reassign Superadmin memakai
   PostgreSQL, re-authentication, idempotency, dan audit. Repair migration
-  `20260730163000_repair_account_machine_pairing_rpcs.sql` telah diterapkan ke
+  `20260730160535_repair_account_machine_pairing_rpcs.sql` telah diterapkan ke
   Supabase production untuk melengkapi RPC bootstrap akun dan claim mesin.
   Seluruh 387 automated test lulus dan audit interaction menemukan 460 kontrol
   wired, satu capability sengaja unavailable, serta nol kontrol unknown.

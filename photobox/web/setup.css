@@ -96,9 +96,123 @@
 @keyframes progress-border-color { to { filter: hue-rotate(360deg); } }
 
 .auth-layout[data-mode="setup"] .auth-card { width: min(680px, 100%); }
-.auth-layout[data-mode="local"] { grid-template-areas: "card"; grid-template-columns: minmax(0, 620px); justify-content: center; }
+.auth-layout[data-mode="local"] { grid-template-areas: "qr card"; grid-template-columns: minmax(280px, .72fr) minmax(460px, 590px); align-items: center; justify-content: center; }
 .auth-layout[data-mode="local"] .auth-card { justify-self: center; width: min(590px, 100%); }
 .auth-layout[data-mode="local"] #agent-recovery { display: none; }
+.auth-layout.web-pairing-layout,
+.auth-layout[data-mode="register"],
+.auth-layout[data-mode="login"] {
+  grid-template-areas: "qr card";
+  grid-template-columns: minmax(280px, .72fr) minmax(460px, 590px);
+  align-items: center;
+  justify-content: center;
+}
+.auth-layout.web-pairing-layout .auth-card,
+.auth-layout[data-mode="register"] .auth-card,
+.auth-layout[data-mode="login"] .auth-card {
+  justify-self: center;
+}
+.auth-layout[data-mode="station"] {
+  grid-template-areas: "qr card";
+  grid-template-columns: minmax(280px, .72fr) minmax(460px, 590px);
+  align-items: center;
+  justify-content: center;
+}
+.auth-layout[data-mode="station"] .auth-card { justify-self: center; }
+
+.local-qr-side {
+  grid-area: qr;
+  align-self: center;
+  color: #fff;
+  width: min(360px, 100%);
+}
+.local-qr-side-head .eyebrow { margin: 0 0 8px; color: rgba(255,255,255,.72); }
+.local-qr-side-head h2 { margin: 0; font-size: clamp(25px, 3vw, 38px); letter-spacing: -.045em; line-height: 1.02; }
+.local-qr-side-head p:not(.eyebrow) { margin: 10px 0 0; color: rgba(255,255,255,.72); font-size: 13px; line-height: 1.55; }
+.local-qr-side-code { display: grid; justify-items: center; gap: 10px; margin-top: 24px; }
+.local-qr-side-frame { display: grid; place-items: center; width: min(280px, 100%); min-height: 280px; padding: 18px; border: 1px solid rgba(255,255,255,.65); border-radius: 8px; background: #fff; box-shadow: 0 20px 55px rgba(0,0,0,.24); }
+.local-qr-side-frame.is-empty::before { content: "Menyiapkan QR…"; color: #707681; font-size: 13px; font-weight: 800; }
+.local-qr-side-frame img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.local-qr-side-code b { color: #fff; font-size: 18px; letter-spacing: .18em; }
+.local-qr-side-code small { color: rgba(255,255,255,.68); font-size: 11px; text-align: center; }
+.qr-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 7px;
+  background: rgba(17,19,26,.34);
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.qr-refresh-button:hover { background: rgba(17,19,26,.5); }
+.qr-refresh-button:disabled { cursor: wait; opacity: .65; }
+.qr-refresh-button img { width: 16px; height: 16px; filter: invert(1); }
+
+.station-ready-state { display: grid; gap: 18px; }
+.station-mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.station-mode-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  align-items: start;
+  gap: 12px;
+  min-height: 142px;
+  padding: 16px;
+  border: 1px solid #dfe2e9;
+  border-radius: 8px;
+  background: #fff;
+  color: #17191f;
+  text-align: left;
+  cursor: pointer;
+}
+.station-mode-card:hover { border-color: #9c94ff; box-shadow: 0 8px 24px rgba(41,35,100,.08); }
+.station-mode-card.recommended { border-color: #6a5cff; background: #f7f5ff; }
+.station-mode-card span:nth-child(2) { display: grid; gap: 6px; }
+.station-mode-card b { font-size: 15px; }
+.station-mode-card small { color: #6f7581; line-height: 1.45; }
+.station-mode-card em {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  color: #5c4ae8;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.station-mode-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #dddfea;
+  border-radius: 7px;
+  background: #fff;
+}
+.station-mode-icon img { width: 20px; height: 20px; }
+.station-agent-install {
+  padding: 14px;
+  border: 1px solid #dfe2e9;
+  border-radius: 8px;
+  background: #f8f9fc;
+}
+.station-agent-install summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 900;
+}
+.station-agent-install summary span { color: #777d89; font-size: 11px; font-weight: 700; }
+.station-installer-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.station-agent-install p { margin: 12px 0 0; color: #737985; font-size: 12px; line-height: 1.5; }
 
 .local-pairing-state { display: grid; gap: 18px; }
 .local-machine-summary { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid #dfe2e9; border-radius: 8px; background: #f8f9fc; }
@@ -711,12 +825,21 @@
   .auth-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "card" "helper"; justify-items: center; gap: 36px; }
   .auth-card, .agent-recovery { justify-self: center; }
   .agent-recovery { padding: 8px; }
+  .auth-layout[data-mode="local"] { grid-template-columns: minmax(0, 590px); grid-template-areas: "qr" "card"; }
+  .auth-layout.web-pairing-layout,
+  .auth-layout[data-mode="register"],
+  .auth-layout[data-mode="login"],
+  .auth-layout[data-mode="station"] { grid-template-columns: minmax(0, 590px); grid-template-areas: "qr" "card"; }
+  .local-qr-side { justify-self: center; text-align: center; }
 }
 
 @media (max-width: 760px) {
   .setup-frame-modal-layout { grid-template-columns: 1fr; }
   .setup-frame-crop-stage { min-height: 400px; }
   #setup-frame-upload-preview { height: 340px; }
+  .station-mode-grid,
+  .station-installer-links { grid-template-columns: 1fr; }
+  .station-mode-card { min-height: 116px; }
 }
 
 /* Operator-facing type and controls stay readable on small touchscreens. */

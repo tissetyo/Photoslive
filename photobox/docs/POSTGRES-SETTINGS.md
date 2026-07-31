@@ -18,7 +18,7 @@ boleh masuk client bundle, Agent, log, atau response.
 
 ## Kontrak transaksi
 
-Migration `20260722123000_transactional_booth_settings.sql` menyediakan dua RPC
+Migration `20260727143427_transactional_booth_settings.sql` menyediakan dua RPC
 service-role-only:
 
 - `photoslive_persist_booth_config` mengunci row booth, membatasi config hingga

@@ -3,6 +3,7 @@ const $ = selector => document.querySelector(selector);
 const state = {
   account: null,
   loading: false,
+  firstBoothCode: "",
 };
 
 function setStatus(message = "", kind = "error") {
@@ -95,12 +96,16 @@ function createMachineCard(booth, fallbackMachine = null) {
     const open = document.createElement("a");
     open.className = "btn primary";
     open.href = `/${encodeURIComponent(boothCode)}/admin`;
-    open.textContent = "Buka admin";
+    open.innerHTML = '<img src="/icons/settings.svg" alt="">Pengaturan photobox';
     const boothPage = document.createElement("a");
     boothPage.className = "btn";
     boothPage.href = `/${encodeURIComponent(boothCode)}`;
-    boothPage.textContent = "Buka booth";
+    boothPage.innerHTML = '<img src="/icons/monitor.svg" alt="">Buka booth';
     actions.append(open, boothPage);
+    const hint = document.createElement("p");
+    hint.className = "machine-card-hint";
+    hint.textContent = "Atur tampilan, sesi, pembayaran, perangkat, dan penyimpanan dari pengaturan photobox.";
+    article.append(hint);
   } else {
     const pair = document.createElement("a");
     pair.className = "btn primary";
@@ -124,11 +129,13 @@ function renderAccount(account) {
   }] : [];
   const machines = Array.isArray(account.machines) ? account.machines : legacyMachine;
   state.account = { ...account, booths, machines };
+  state.firstBoothCode = String(booths[0]?.boothCode || "");
   const user = account.user || {};
   const organization = account.organization || {};
 
   $("#account-admin-code").textContent = user.adminCode || "Belum tersedia";
   $("#account-email").textContent = user.email || "—";
+  $("#account-settings-email").value = user.email || "";
   $("#account-organization").textContent = organization.name || user.organizationName || "Organisasi";
   $("#account-role").textContent = `${organization.code || user.organizationCode || "—"} · ${String(user.role || "owner").toUpperCase()}`;
   $("#account-machine-count").textContent = String(machines.length);
@@ -144,6 +151,17 @@ function renderAccount(account) {
     .forEach(machine => grid.append(createMachineCard(null, machine)));
 
   const hasMachine = grid.childElementCount > 0;
+  const usersLink = $("#account-users-link");
+  if (state.firstBoothCode) {
+    usersLink.href = `/${encodeURIComponent(state.firstBoothCode)}/admin?view=users`;
+    usersLink.classList.remove("is-disabled");
+    usersLink.removeAttribute("aria-disabled");
+    usersLink.querySelector("small").textContent = "Kelola Owner, Admin, Operator, dan sesi login photobox ini.";
+  } else {
+    usersLink.removeAttribute("href");
+    usersLink.classList.add("is-disabled");
+    usersLink.setAttribute("aria-disabled", "true");
+  }
   $("#account-loading").hidden = true;
   $("#account-empty").hidden = hasMachine;
   grid.hidden = !hasMachine;
@@ -175,6 +193,68 @@ async function loadAccount() {
 }
 
 $("#refresh-account").addEventListener("click", loadAccount);
+
+function setSettingsStatus(message = "", kind = "") {
+  const node = $("#account-settings-status");
+  node.textContent = message;
+  node.className = `account-settings-status${kind ? ` ${kind}` : ""}`;
+}
+
+function openAccountSettings() {
+  setSettingsStatus("");
+  $("#account-settings-password").value = "";
+  $("#account-settings-confirm").value = "";
+  $("#account-settings-dialog").showModal();
+  $("#account-settings-password").focus();
+}
+
+function closeAccountSettings() {
+  if ($("#account-settings-dialog").open) $("#account-settings-dialog").close();
+}
+
+$("#open-account-settings").addEventListener("click", openAccountSettings);
+$("#open-account-settings-mobile").addEventListener("click", openAccountSettings);
+$("#close-account-settings").addEventListener("click", closeAccountSettings);
+$("#cancel-account-settings").addEventListener("click", closeAccountSettings);
+$("#account-settings-dialog").addEventListener("click", event => {
+  if (event.target === event.currentTarget) closeAccountSettings();
+});
+$("#account-users-link").addEventListener("click", event => {
+  if (event.currentTarget.classList.contains("is-disabled")) event.preventDefault();
+});
+$("#account-settings-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const password = $("#account-settings-password").value;
+  const confirmation = $("#account-settings-confirm").value;
+  if (password.length < 8) {
+    setSettingsStatus("Password minimal 8 karakter.");
+    $("#account-settings-password").focus();
+    return;
+  }
+  if (password !== confirmation) {
+    setSettingsStatus("Konfirmasi password tidak sama.");
+    $("#account-settings-confirm").focus();
+    return;
+  }
+  const button = $("#save-account-settings");
+  setButtonBusy(button, true, "Menyimpan…");
+  setSettingsStatus("");
+  try {
+    await api("profile", { method: "POST", body: JSON.stringify({ password }) });
+    $("#account-settings-password").value = "";
+    $("#account-settings-confirm").value = "";
+    setSettingsStatus("Password berhasil diperbarui.", "success");
+  } catch (error) {
+    if (error.status === 401) {
+      location.replace("/setup?mode=login");
+      return;
+    }
+    setSettingsStatus(error.message || "Password belum dapat diperbarui.");
+  } finally {
+    setButtonBusy(button, false);
+  }
+});
+
 $("#account-logout").addEventListener("click", async event => {
   const button = event.currentTarget;
   setButtonBusy(button, true, "Keluar…");

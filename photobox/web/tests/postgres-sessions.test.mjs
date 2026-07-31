@@ -199,7 +199,7 @@ test("manifest validation rejects cross-session object keys", async () => {
 });
 
 test("session migration is service-role-only and prevents terminal regression", () => {
-  const sql = readFileSync(new URL("../../../supabase/migrations/20260722150000_photo_session_metadata.sql", import.meta.url), "utf8");
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260727143442_photo_session_metadata.sql", import.meta.url), "utf8");
   assert.match(sql, /pg_advisory_xact_lock/);
   assert.match(sql, /when public\.photo_sessions\.status = 'expired' then 'expired'/);
   assert.match(sql, /when public\.photo_sessions\.status = 'completed'/);
@@ -212,12 +212,12 @@ test("session migration is service-role-only and prevents terminal regression", 
   assert.match(bridge, /fileManifests/);
   assert.match(bridge, /persistPostgresSession\(record\)/);
   assert.ok((agent.match(/cloud_url\(config, "sync_session_metadata"\)/g) || []).length >= 2);
-  const deletionSql = readFileSync(new URL("../../../supabase/migrations/20260722160000_photo_session_deletion_request.sql", import.meta.url), "utf8");
+  const deletionSql = readFileSync(new URL("../../../supabase/migrations/20260727143450_photo_session_deletion_request.sql", import.meta.url), "utf8");
   assert.match(deletionSql, /pg_advisory_xact_lock/);
   assert.match(deletionSql, /deletionRequestedAt/);
   assert.match(deletionSql, /revoke all[\s\S]+authenticated/);
   assert.match(deletionSql, /grant execute[\s\S]+service_role/);
-  const reconciliationSql = readFileSync(new URL("../../../supabase/migrations/20260727120000_daily_session_reconciliation.sql", import.meta.url), "utf8");
+  const reconciliationSql = readFileSync(new URL("../../../supabase/migrations/20260727143509_daily_session_reconciliation.sql", import.meta.url), "utf8");
   assert.match(reconciliationSql, /jsonb_array_length\(p_sessions\) > 500/);
   assert.match(reconciliationSql, /photoslive_persist_photo_session/);
   assert.match(reconciliationSql, /revoke all[\s\S]+authenticated/);

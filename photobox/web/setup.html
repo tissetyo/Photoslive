@@ -8,7 +8,7 @@
   <link rel="icon" href="/icons/camera.svg">
   <link rel="manifest" href="/app.webmanifest">
   <link rel="stylesheet" href="/platform.css?v=2">
-    <link rel="stylesheet" href="/setup.css?v=19">
+    <link rel="stylesheet" href="/setup.css?v=24">
 </head>
 <body>
   <div class="platform-shell">
@@ -17,6 +17,21 @@
       <a class="btn" href="/">Kembali</a>
     </nav>
     <main class="auth-layout">
+      <aside class="local-qr-side hidden" id="local-qr-side" aria-labelledby="local-qr-side-title">
+        <div class="local-qr-side-head">
+          <p class="eyebrow">HUBUNGKAN PHOTOBOX</p>
+          <h2 id="local-qr-side-title">Scan QR ini dari ponsel Admin</h2>
+          <p>Biarkan halaman ini terbuka. Setelah disetujui, mesin tetap terhubung tanpa scan ulang.</p>
+        </div>
+        <div class="local-qr-side-code" aria-live="polite">
+          <div class="local-qr-side-frame"><img id="local-pairing-qr-side" alt="QR pairing Photoslive"></div>
+          <b id="local-qr-side-code-value">Menyiapkan QR…</b>
+          <small id="local-qr-side-status">Buka kamera ponsel, scan QR, lalu setujui dari akun Admin.</small>
+          <button class="qr-refresh-button" id="refresh-web-pairing" type="button">
+            <img src="/icons/refresh-cw.svg" alt="">Buat QR baru
+          </button>
+        </div>
+      </aside>
       <section class="auth-card">
         <header class="auth-head">
           <h1 id="setup-title">Buat akun Photoslive</h1>
@@ -82,7 +97,7 @@
             <video id="setup-camera-preview" class="setup-camera-preview" autoplay muted playsinline hidden></video>
             <label class="setup-storage-field">Folder foto lokal
               <span class="path-picker-control"><input id="setup-storage-path" placeholder="Pilih folder atau masukkan path manual"><button type="button" class="btn" id="pick-setup-storage-folder"><img src="/icons/folder-open.svg" alt="">Pilih folder</button></span>
-              <small>Folder ini berada di komputer Agent. Kosongkan untuk memakai folder bawaan.</small>
+              <small>Folder ini berada di komputer photobox. Kosongkan untuk memakai folder bawaan.</small>
             </label>
             <p class="inline-status" id="device-onboarding-status" role="status"></p>
             <div class="onboarding-tools"><button type="button" class="btn" id="refresh-onboarding-devices"><img src="/icons/refresh-cw.svg" alt="">Periksa perangkat</button></div>
@@ -130,6 +145,38 @@
             <button type="button" class="btn primary" id="create-local-pairing">Buat QR pairing <img src="/icons/scan-line.svg" alt=""></button>
           </div>
           <p class="local-pairing-help">QR berlaku sekali. Setelah disetujui oleh Admin, mesin ini tetap terhubung walaupun komputer direstart atau internet terputus.</p>
+        </section>
+
+        <section id="station-form" class="hidden station-ready-state" aria-live="polite">
+          <div class="ready-mark"><img src="/icons/circle-check.svg" alt=""></div>
+          <div class="ready-copy">
+            <h2>Photobox berhasil dihubungkan</h2>
+            <p id="station-ready-copy">Pilih cara menjalankan photobox di komputer ini.</p>
+          </div>
+          <dl class="ready-identities">
+            <div><dt>Photobox</dt><dd id="station-booth-name">—</dd></div>
+            <div><dt>Alamat</dt><dd id="station-booth-code">—</dd></div>
+          </dl>
+          <div class="station-mode-grid">
+            <button type="button" class="station-mode-card recommended" id="use-web-mode">
+              <span class="station-mode-icon"><img src="/icons/cloud.svg" alt=""></span>
+              <span><b>Gunakan versi web</b><small>Langsung mulai. Kamera browser tersedia setelah diberi izin.</small></span>
+              <em>Direkomendasikan</em>
+            </button>
+            <button type="button" class="station-mode-card" id="show-agent-install" aria-expanded="false" aria-controls="station-agent-install">
+              <span class="station-mode-icon"><img src="/icons/hard-drive.svg" alt=""></span>
+              <span><b>Install Photoslive Agent</b><small>Untuk DSLR, silent print, folder lokal, dan mode offline penuh.</small></span>
+            </button>
+          </div>
+          <details class="station-agent-install" id="station-agent-install">
+            <summary>Installer Agent <span>Opsional, dapat dilakukan nanti dari Admin</span></summary>
+            <div class="station-installer-links">
+              <a class="btn" href="/downloads/install-windows.ps1" download><span class="setup-icon windows" aria-hidden="true"></span>Windows</a>
+              <a class="btn" href="/downloads/install-macos.sh" download><span class="setup-icon apple" aria-hidden="true"></span>macOS</a>
+              <a class="btn" href="/downloads/install-linux.sh" download><span class="setup-icon linux" aria-hidden="true"></span>Linux</a>
+            </div>
+            <p>Menutup halaman ini tidak membatalkan pairing. Mode dapat diganti lagi dari Pengaturan Mesin di Admin.</p>
+          </details>
         </section>
 
         <form id="login-form" class="hidden">
@@ -180,7 +227,7 @@
         <form id="pairing-form" class="hidden">
           <div class="setup-stage-heading">
             <span class="setup-stage-number">2</span>
-            <div><b>Hubungkan mesin</b><p>Gunakan QR atau kode yang tampil di Local Manager.</p></div>
+            <div><b>Hubungkan mesin</b><p>Gunakan QR atau kode yang tampil di komputer photobox.</p></div>
           </div>
           <div class="pairing-methods" role="group" aria-label="Cara menghubungkan mesin">
             <button type="button" class="pairing-method active" data-pairing-method="code" aria-pressed="true"><img src="/icons/scan-line.svg" alt="">Masukkan kode</button>
@@ -195,7 +242,7 @@
             <div class="pairing-scanner">
               <video id="pairing-scanner-video" autoplay muted playsinline></video>
               <div class="pairing-scanner-guide" aria-hidden="true"></div>
-              <p id="pairing-scanner-status">Izinkan kamera, lalu arahkan ke QR Local Manager.</p>
+              <p id="pairing-scanner-status">Izinkan kamera, lalu arahkan ke QR di layar mesin photobox.</p>
             </div>
             <button type="button" class="btn" id="start-pairing-scanner"><img src="/icons/camera.svg" alt="">Nyalakan kamera</button>
           </section>
@@ -276,7 +323,7 @@
                   <button type="button" data-agent-os="linux"><span class="setup-icon linux" aria-hidden="true"></span>Linux</button>
                 </div></details>
               </div></li>
-              <li><span>2</span><div><b>Jalankan installer</b><p>Versi saat ini berupa script/PowerShell kecil. Setelah selesai, Local Manager tersedia di <code>127.0.0.1:8080/local-agent</code>.</p></div></li>
+              <li><span>2</span><div><b>Jalankan installer</b><p>Installer menyalakan service mesin dan membuka layar QR pairing. Setelah selesai, biarkan service berjalan di latar belakang.</p></div></li>
             </ol>
             <details class="existing-agent technician-install"><summary>Metode teknisi melalui Terminal</summary>
               <b class="command-label" id="install-command-label">Perintah instalasi Linux Terminal</b>
@@ -289,7 +336,7 @@
               <summary>Photoslive sudah terpasang? Buka wizard lagi</summary>
               <b class="command-label" id="setup-command-label">Perintah Linux Terminal</b>
               <div class="command-box">
-                <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-link --open-setup</code>
+                <code id="setup-code-command">python3 "$HOME/.local/share/photoslive/source/photobox/agent.py" --setup-code --open-setup</code>
                 <button type="button" id="copy-setup-command" aria-label="Salin perintah untuk membuka wizard setup"><img src="/icons/copy.svg" alt=""><span>Salin</span></button>
               </div>
             </details>
@@ -302,7 +349,7 @@
             </div>
             <div class="tablet-limit">
               <img src="/icons/info.svg" alt="">
-              <p>Untuk printer USB, DSLR/mirrorless, dan monitoring storage, hubungkan satu komputer Windows, macOS, atau Linux yang menjalankan Agent.</p>
+              <p>Untuk printer USB, DSLR/mirrorless, dan monitoring storage, hubungkan satu komputer Windows, macOS, atau Linux yang menjalankan service Photoslive.</p>
             </div>
             <div class="tablet-standalone-controls">
               <label>Kamera tablet
@@ -321,7 +368,7 @@
             <button type="button" class="btn use-companion-agent" id="use-companion-agent" aria-expanded="false" aria-controls="companion-setup-help"><span class="setup-icon monitor" aria-hidden="true"></span>Siapkan komputer pendamping</button>
             <div class="tablet-limit hidden" id="companion-setup-help" role="status">
               <img src="/icons/scan-line.svg" alt="">
-              <p>Buka <strong>Local Manager</strong> di komputer pendamping, pilih <strong>Buat QR pairing</strong>, lalu pindai QR dari tablet ini. Kamera tablet tetap dapat dipakai secara standalone jika langkah ini dilewati.</p>
+              <p>Buka layar setup di komputer pendamping. QR pairing tampil otomatis, lalu pindai QR dari tablet ini. Kamera tablet tetap dapat dipakai secara standalone jika langkah ini dilewati.</p>
             </div>
           </div>
           <p class="copy-feedback" id="copy-feedback" role="status"></p>
@@ -350,6 +397,6 @@
       <div class="setup-dialog-actions"><button class="btn" value="cancel">Batal</button><button class="btn primary" id="save-setup-frame-design" value="default"><img src="/icons/save.svg" alt="">Gunakan desain</button></div>
     </form>
   </dialog>
-    <script src="/setup.js?v=23" defer></script>
+    <script src="/setup.js?v=24" defer></script>
 </body>
 </html>

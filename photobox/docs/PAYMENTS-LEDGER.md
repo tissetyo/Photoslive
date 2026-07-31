@@ -102,7 +102,7 @@ yang telah dialokasikan atau mode gratis.
   `pending`; entry final dan adjustment finance masuk `available`. Endpoint
   hanya dapat dibaca role finance dan UI menyediakan loading, empty, error,
   retry, serta total per photobox.
-- Migration `20260721104654_create_payment_ledger.sql` menyiapkan payment intent,
+- Migration `20260727143403_create_payment_ledger.sql` menyiapkan payment intent,
   reconciliation queue server-only, RLS finance, hash entry, dan trigger yang
   menolak update/delete ledger. Direct dual-write diaktifkan terpisah agar
   kegagalan PostgreSQL tidak memutus flow booth yang masih Redis-primary.

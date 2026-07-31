@@ -339,19 +339,31 @@ class LocalFirstTests(unittest.TestCase):
             self.assertEqual(agent.main(), 1)
         open_page.assert_not_called()
 
-    def test_agent_waits_for_local_onboarding_before_background_registration(self):
+    def test_agent_can_create_pairing_before_local_onboarding_is_complete(self):
         config = {
             "cloud": "https://photoslive.example",
             "controller": "http://127.0.0.1:8080",
             "name": "Mini PC",
         }
+        response = {
+            "machineId": "machine-cloud",
+            "commandKey": "command-key",
+            "pairingToken": "pair-token",
+            "pairingCode": "ABCD-1234",
+            "pairingUrl": "https://photoslive.example/pair/pair-token",
+            "expiresInSeconds": 900,
+        }
         with mock.patch.object(agent, "local_setup_bootstrap", return_value={"completed": False}), \
-                mock.patch.object(agent, "request_json") as cloud, \
+                mock.patch.object(agent, "request_json", return_value=response) as cloud, \
                 mock.patch.object(agent, "save_config") as save:
             result = agent.ensure_pairing(config)
-        self.assertTrue(result["cloudRegistrationPending"])
-        cloud.assert_not_called()
-        save.assert_not_called()
+        self.assertTrue(result["cloudRegistered"])
+        self.assertFalse(result["paired"])
+        self.assertEqual(result["pairingCode"], "ABCD-1234")
+        payload = cloud.call_args.args[2]
+        self.assertEqual(payload["localSetup"]["completed"], False)
+        self.assertEqual(payload["localSetup"]["devices"], [])
+        self.assertGreaterEqual(save.call_count, 2)
 
     def test_agent_registers_completed_local_setup_without_operator_pairing_code(self):
         config = {
@@ -378,10 +390,16 @@ class LocalFirstTests(unittest.TestCase):
         self.assertTrue(result["cloudRegistered"])
         payload = cloud.call_args.args[2]
         self.assertEqual(payload["boothCode"], "booth-lokal")
-        self.assertEqual(payload["localSetup"], {"completed": True, "boothCode": "booth-lokal"})
+        self.assertEqual(payload["localSetup"], {
+            "completed": True,
+            "boothCode": "booth-lokal",
+            "controllerVersion": None,
+            "devices": [],
+        })
         self.assertNotIn("pairingCode", payload)
         self.assertNotIn("setupToken", payload)
-        save.assert_called_once_with(result)
+        self.assertGreaterEqual(save.call_count, 2)
+        save.assert_called_with(result)
 
     def test_local_setup_completion_is_persistent_and_cloud_independent(self):
         config_path = Path(self.temp.name) / "agent.json"

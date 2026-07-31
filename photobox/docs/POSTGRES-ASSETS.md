@@ -15,7 +15,7 @@ object privat. Status kode lokal bukan bukti bahwa rollout production selesai.
 ## Urutan rollout aman
 
 1. Backup data legacy dan database.
-2. Terapkan migration `20260722170000_booth_asset_metadata.sql` pada staging.
+2. Terapkan migration `20260727143500_booth_asset_metadata.sql` pada staging.
 3. Jalankan RLS/grant test dengan service role dan role yang tidak berwenang.
 4. Aktifkan `dual` dan backfill metadata aset lama secara idempotent.
 5. Bandingkan record count, checksum, booth ownership, jenis aset, dan status.

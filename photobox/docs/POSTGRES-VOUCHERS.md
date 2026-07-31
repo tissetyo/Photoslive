@@ -21,7 +21,7 @@ response API.
 
 ## Operasi transaksional
 
-Migration `20260722110000_transactional_voucher_batches.sql` menyediakan RPC
+Migration `20260727143420_transactional_voucher_batches.sql` menyediakan RPC
 service-role-only:
 
 - `photoslive_persist_voucher_batch` — satu SQL insert untuk 1–100 voucher,

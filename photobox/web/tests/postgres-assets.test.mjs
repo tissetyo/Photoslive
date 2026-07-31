@@ -120,7 +120,7 @@ test("asset deletion request immediately hides the asset", async () => {
 });
 
 test("asset migration is bounded, tenant-scoped, locked, and service-role-only", () => {
-  const sql = readFileSync(new URL("../../../supabase/migrations/20260722170000_booth_asset_metadata.sql", import.meta.url), "utf8").toLowerCase();
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260727143500_booth_asset_metadata.sql", import.meta.url), "utf8").toLowerCase();
   assert.match(sql, /assets\/.*booth_code.*kind/);
   assert.match(sql, /pg_advisory_xact_lock/);
   assert.match(sql, /p_byte_size > 25000000/);

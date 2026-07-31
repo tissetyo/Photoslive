@@ -32,7 +32,7 @@ import { deletePostgresAsset, persistPostgresAsset, postgresAssetStatus, readPos
 import { markPostgresMachinePaired, postgresMachineStatus, readPostgresPairing } from "./_postgres_machines.mjs";
 import { listPostgresAdminUsers, persistPostgresAdminUser, postgresUsersStatus, readPostgresAdminUserByEmail, readPostgresAdminUserById } from "./_postgres_users.mjs";
 import { bootstrapPostgresAccount, listPostgresFleet, listPostgresPairingHistory, postgresAccountsStatus, readPostgresAccount, reassignPostgresMachine, revokePostgresMachine } from "./_postgres_accounts.mjs";
-import { loginSupabaseUser, logoutSupabaseUser, refreshSupabaseSession, registerSupabaseUser, supabaseAuthStatus } from "./_supabase_auth.mjs";
+import { loginSupabaseUser, logoutSupabaseUser, refreshSupabaseSession, registerSupabaseUser, supabaseAuthStatus, updateSupabaseUser } from "./_supabase_auth.mjs";
 
 const encoder = new TextEncoder();
 const json = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), {
@@ -2332,6 +2332,23 @@ async function addUser(redis, request, payload) {
 export async function updateProfile(redis, request, payload) {
   const auth = await authenticate(redis, request);
   if (!auth?.userId || auth.role === "superadmin") return json({ error: "Login pengguna diperlukan" }, 401);
+  if (auth.authProvider === "supabase") {
+    const password = String(payload.password || "");
+    if (password.length < 8 || password.length > 128) return json({ error: "Password harus 8–128 karakter" }, 400);
+    const updated = await updateSupabaseUser(auth.accessToken, { password });
+    if (!updated.ok) return json({ error: updated.error || "Password belum dapat diperbarui" }, updated.status || 503);
+    await appendAudit(redis, auth, auth.boothCode || "account", "profile.password_updated", auth.userId, {
+      provider: "supabase",
+    });
+    return json({
+      user: {
+        id: auth.userId,
+        email: normalizeEmail(updated.payload?.email),
+        role: auth.role,
+        hasRemotePassword: true,
+      },
+    });
+  }
   const user = await readAdminUserById(redis, auth.userId);
   if (!user) return json({ error: "Pengguna tidak ditemukan" }, 404);
   const changed = [];

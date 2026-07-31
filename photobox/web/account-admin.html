@@ -7,14 +7,15 @@
   <title>Admin Photoslive</title>
   <link rel="icon" href="/icons/camera.svg">
   <link rel="stylesheet" href="/platform.css?v=3">
-  <link rel="stylesheet" href="/account-admin.css?v=1">
+  <link rel="stylesheet" href="/account-admin.css?v=3">
 </head>
 <body>
   <div class="account-shell">
     <header class="account-topbar">
-      <a class="platform-brand" href="/admin"><span class="platform-mark"><img src="/icons/camera.svg" alt=""></span>Photoslive</a>
+      <a class="platform-brand" href="/account-admin"><span class="platform-mark"><img src="/icons/camera.svg" alt=""></span>Photoslive</a>
       <div class="account-top-actions">
         <button class="btn" id="refresh-account" type="button"><img src="/icons/refresh-cw.svg" alt="">Perbarui</button>
+        <button class="btn" id="open-account-settings" type="button"><img src="/icons/settings.svg" alt="">Pengaturan akun</button>
         <button class="btn" id="account-logout" type="button">Keluar</button>
       </div>
     </header>
@@ -31,10 +32,24 @@
 
       <p class="account-alert" id="account-status" role="status" aria-live="polite"></p>
 
+      <section class="account-pairing-guide" aria-labelledby="pairing-guide-title">
+        <div class="account-pairing-visual" aria-hidden="true"><span class="account-pairing-icon"><img src="/icons/scan-line.svg" alt=""></span><span class="account-pairing-dot"></span></div>
+        <div class="account-pairing-copy">
+          <p class="eyebrow">HUBUNGKAN PHOTOBOX</p>
+          <h2 id="pairing-guide-title">Hubungkan seperti WhatsApp Web</h2>
+          <ol class="account-pairing-steps">
+            <li>Buka <b>photoslive.vercel.app/setup</b> pada komputer photobox. Belum perlu menginstal apa pun.</li>
+            <li>QR pairing tampil otomatis di komputer tersebut.</li>
+            <li>Tekan scan di sini dari ponsel, lalu setujui photobox yang akan dihubungkan.</li>
+          </ol>
+        </div>
+        <a class="btn primary" href="/setup?mode=pairing"><img src="/icons/scan-line.svg" alt="">Scan QR mesin</a>
+      </section>
+
       <section class="account-identity" id="account-identity" aria-label="Identitas akun">
-        <article><span>ADMIN</span><strong id="account-admin-code">—</strong><small id="account-email">Memuat…</small></article>
-        <article><span>ORGANISASI</span><strong id="account-organization">—</strong><small id="account-role">—</small></article>
-        <article><span>MESIN</span><strong id="account-machine-count">—</strong><small>Terhubung permanen</small></article>
+        <article><div class="account-stat-head"><img src="/icons/user-round.svg" alt=""><span>ADMIN</span></div><strong id="account-admin-code">—</strong><small id="account-email">Memuat…</small></article>
+        <article><div class="account-stat-head"><img src="/icons/folder-open.svg" alt=""><span>ORGANISASI</span></div><strong id="account-organization">—</strong><small id="account-role">—</small></article>
+        <article><div class="account-stat-head"><img src="/icons/monitor.svg" alt=""><span>MESIN</span></div><strong id="account-machine-count">—</strong><small>Terhubung permanen</small></article>
       </section>
 
       <section class="account-list-section">
@@ -47,18 +62,53 @@
         <div class="account-empty" id="account-empty" hidden>
           <span class="account-empty-icon"><img src="/icons/monitor.svg" alt=""></span>
           <h2>Belum ada photobox</h2>
-          <p>Akun Admin sudah siap. Hubungkan mesin saat Anda siap—registrasi akun tidak bergantung pada Agent.</p>
-          <a class="btn primary" href="/setup?mode=pairing"><img src="/icons/plus.svg" alt="">Hubungkan photobox</a>
+          <p>Akun Admin sudah siap. Hubungkan mesin saat Anda siap—registrasi akun tidak bergantung pada komputer photobox.</p>
+          <a class="btn primary" href="/setup?mode=pairing"><img src="/icons/scan-line.svg" alt="">Scan QR mesin</a>
         </div>
         <div class="account-machine-grid" id="account-machine-grid" hidden></div>
       </section>
     </main>
 
     <nav class="account-mobile-nav" aria-label="Navigasi admin">
-      <a class="active" href="/admin"><img src="/icons/monitor.svg" alt=""><span>Photobox</span></a>
+      <a class="active" href="/account-admin"><img src="/icons/monitor.svg" alt=""><span>Photobox</span></a>
       <a href="/setup?mode=pairing"><img src="/icons/plus.svg" alt=""><span>Tambah</span></a>
+      <button id="open-account-settings-mobile" type="button"><img src="/icons/settings.svg" alt=""><span>Akun</span></button>
     </nav>
+
+    <dialog class="account-settings-dialog" id="account-settings-dialog">
+      <form class="auth-card account-settings-card" id="account-settings-form">
+        <header class="account-settings-head">
+          <div>
+            <p class="eyebrow">AKUN ADMIN</p>
+            <h2>Pengaturan akun</h2>
+            <p>Ubah password akun cloud. Pengaturan operator berada di masing-masing photobox.</p>
+          </div>
+          <button class="account-dialog-close" id="close-account-settings" type="button" aria-label="Tutup pengaturan akun"><img src="/icons/x.svg" alt=""></button>
+        </header>
+        <label>Email akun
+          <input id="account-settings-email" type="email" readonly>
+          <small>Email menjadi identitas login dan belum dapat diubah dari halaman ini.</small>
+        </label>
+        <div class="account-password-grid">
+          <label>Password baru
+            <input id="account-settings-password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="Minimal 8 karakter">
+          </label>
+          <label>Konfirmasi password
+            <input id="account-settings-confirm" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="Ulangi password">
+          </label>
+        </div>
+        <a class="account-users-link is-disabled" id="account-users-link" aria-disabled="true">
+          <img src="/icons/user-round.svg" alt="">
+          <span><b>Pengguna photobox</b><small>Hubungkan photobox terlebih dahulu untuk menambah Owner, Admin, atau Operator.</small></span>
+        </a>
+        <p class="account-settings-status" id="account-settings-status" role="status" aria-live="polite"></p>
+        <footer class="account-settings-actions">
+          <button class="btn" id="cancel-account-settings" type="button">Batal</button>
+          <button class="btn primary" id="save-account-settings" type="submit"><img src="/icons/save.svg" alt="">Simpan password</button>
+        </footer>
+      </form>
+    </dialog>
   </div>
-  <script type="module" src="/account-admin.js?v=1"></script>
+  <script type="module" src="/account-admin.js?v=3"></script>
 </body>
 </html>

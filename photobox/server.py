@@ -4531,11 +4531,11 @@ class ApiHandler(SimpleHTTPRequestHandler):
             self.path = "/admin.html"
         elif dynamic_session:
             self.path = "/session.html"
-        elif dynamic_booth and dynamic_booth.group(1).lower() not in {"setup", "superadmin", "local-agent", "status", "companion", "booth", "kiosk"}:
+        elif dynamic_booth and dynamic_booth.group(1).lower() not in {"setup", "admin", "account-admin", "superadmin", "local-agent", "status", "companion", "booth", "kiosk"}:
             self.path = "/booth.html"
         elif path in {"/booth", "/kiosk"}:
             self.path = "/booth.html"
-        elif path == "/admin":
+        elif path in {"/admin", "/account-admin"}:
             self.path = "/account-admin.html"
         elif path == "/setup":
             self.path = "/setup.html"

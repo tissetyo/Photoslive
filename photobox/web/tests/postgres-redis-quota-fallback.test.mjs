@@ -192,7 +192,7 @@ test("regular email registration works without an installed Agent or Redis", asy
 });
 
 test("admin identity migration is private and service-role-only", () => {
-  const sql = readFileSync(new URL("../../../supabase/migrations/20260724123000_booth_admin_identities.sql", import.meta.url), "utf8");
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260724095513_booth_admin_identities.sql", import.meta.url), "utf8");
   assert.match(sql, /private\.booth_admin_identities/);
   assert.match(sql, /revoke all on table private\.booth_admin_identities from public, anon, authenticated/);
   assert.match(sql, /revoke all on function public\.photoslive_persist_admin_user[\s\S]+authenticated/);

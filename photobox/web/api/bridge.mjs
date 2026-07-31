@@ -38,6 +38,7 @@ import {
   inspectPostgresMachineClaim,
   postgresAccountsStatus,
 } from "./_postgres_accounts.mjs";
+import QRCode from "qrcode";
 import {
   createPostgresSetupCode,
   markPostgresMachinePaired,
@@ -574,6 +575,8 @@ async function createPairing(redis, payload) {
         agentVersion: machine.agentVersion,
         controllerVersion: String(localSetup.controllerVersion || ""),
         devices: Array.isArray(localSetup.devices) ? localSetup.devices.slice(0, 24) : [],
+        boothCode: machine.boothCode,
+        installationMode: String(localSetup.installationMode || "agent").slice(0, 24),
       },
       idempotencyKey: `install:${machineId}:${code}`,
     });
@@ -600,6 +603,44 @@ async function createPairing(redis, payload) {
     expiresInSeconds: 900,
     boothCode: machine.boothCode,
     paired: false,
+  };
+}
+
+async function createWebPairing(redis, request, payload) {
+  const suppliedInstallationId = String(payload.installationId || "").trim();
+  const installationId = /^[A-Za-z0-9._:-]{12,160}$/.test(suppliedInstallationId)
+    ? suppliedInstallationId
+    : `web_${crypto.randomUUID().replaceAll("-", "")}`;
+  const result = await createPairing(redis, {
+    machineId: installationId,
+    name: String(payload.name || "Photoslive Web Booth").slice(0, 80),
+    location: "",
+    platform: String(payload.platform || request.headers.get("user-agent") || "Web browser").slice(0, 120),
+    agentVersion: "web-only",
+    localSetup: {
+      controllerVersion: "web",
+      devices: [],
+      installationMode: "web",
+    },
+  });
+  const qrImage = await QRCode.toDataURL(result.pairingUrl, {
+    errorCorrectionLevel: "M",
+    margin: 1,
+    width: 440,
+    color: { dark: "#17191f", light: "#ffffff" },
+  });
+  return {
+    installationId,
+    machineId: result.machineId,
+    machineCode: null,
+    pairingCode: result.pairingCode,
+    pairingToken: result.pairingToken,
+    pairingUrl: result.pairingUrl,
+    qrImage,
+    expiresInSeconds: result.expiresInSeconds,
+    expiresAt: new Date(Date.now() + (result.expiresInSeconds * 1000)).toISOString(),
+    paired: false,
+    installationMode: "web",
   };
 }
 
@@ -952,6 +993,7 @@ async function dispatch(request) {
     });
     const redis = getRedis();
     if (action === "create_pairing" && request.method === "POST") return json(await createPairing(redis, payload), 201);
+    if (action === "create_web_pairing" && request.method === "POST") return json(await createWebPairing(redis, request, payload), 201);
     if (action === "pairing_status" && request.method === "GET") return inspectPairing(payload);
     if (action === "claim_pairing" && request.method === "POST") return claimPairing(redis, request, payload);
     if (action === "create_setup_code" && request.method === "POST") return createSetupCode(redis, request, payload);

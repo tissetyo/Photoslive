@@ -194,7 +194,7 @@ test("versioned voucher operations fail closed on malformed database responses",
 });
 
 test("voucher migration exposes service-role-only transactional functions", () => {
-  const sql = readFileSync(new URL("../../../supabase/migrations/20260722110000_transactional_voucher_batches.sql", import.meta.url), "utf8").toLowerCase();
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260727143420_transactional_voucher_batches.sql", import.meta.url), "utf8").toLowerCase();
   assert.match(sql, /for update/);
   assert.match(sql, /jsonb_array_length\(p_vouchers\)/);
   assert.match(sql, /v_requested > 100/);

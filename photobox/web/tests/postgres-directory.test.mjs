@@ -140,7 +140,7 @@ test("primary setup fails closed before mutating Redis when directory is unavail
 });
 
 test("directory migration keeps machine links private and RPCs service-role-only", () => {
-  const sql = readFileSync(new URL("../../../supabase/migrations/20260722140000_booth_directory.sql", import.meta.url), "utf8");
+  const sql = readFileSync(new URL("../../../supabase/migrations/20260727143435_booth_directory.sql", import.meta.url), "utf8");
   assert.match(sql, /private\.organization_directory_links/);
   assert.match(sql, /private\.booth_directory_links/);
   assert.match(sql, /pg_advisory_xact_lock/);

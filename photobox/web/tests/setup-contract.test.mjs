@@ -46,15 +46,14 @@ test("computer setup exposes every required real onboarding control", async () =
   assert.match(setup, /location\.href = `\/\$\{code\}`/);
 });
 
-test("setup detects the operating system and keeps secrets out of restart draft", async () => {
+test("legacy setup detects the operating system and keeps secrets out of restart draft", async () => {
   const [html, setup] = await Promise.all([read("setup.html"), read("setup.js")]);
   assert.match(setup, /navigator\.userAgentData\?\.platform/);
   assert.match(setup, /function detectedOperatingSystem/);
   assert.match(html, /id="primary-agent-download"/);
   assert.match(html, /Download installer ringan/);
-  assert.match(html, /Local Manager tersedia di/);
-  assert.match(html, /Pakai sistem operasi lain/);
   assert.match(html, /Metode teknisi melalui Terminal/);
+  assert.match(html, /Pakai sistem operasi lain/);
   assert.match(setup, /primary-agent-download/);
   assert.match(setup, /downloadUrl: '\/downloads\/install-windows\.ps1'/);
   assert.match(setup, /downloadUrl: '\/downloads\/install-macos\.sh'/);
@@ -155,7 +154,7 @@ test("cloud account registration is real and does not require an installer", asy
   assert.match(setup, /const CLOUD_PLATFORM_ORIGIN = "https:\/\/photoslive\.vercel\.app"/);
   assert.match(setup, /location\.replace\(cloudRegistrationUrl\(\)\)/);
   assert.match(setup, /requestedMode === "register" && continueRegistrationOnCloud\(\)/);
-  assert.match(setup, /pairing: \["Hubungkan photobox", "Scan QR atau masukkan kode dari Local Manager\."\]/);
+  assert.match(setup, /pairing: \["Hubungkan photobox", "Scan QR atau masukkan kode dari layar mesin photobox\."\]/);
   assert.match(platform, /export async function registerAccount/);
   assert.match(platform, /action === "register"/);
   assert.match(platform, /status: "not-installed"/);
