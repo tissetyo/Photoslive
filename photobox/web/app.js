@@ -2096,6 +2096,10 @@ async function boot() {
   const routeMachineId = state.authBooth?.machineId || "";
   state.runtimeMode = String(routeMachineId).startsWith("web_") ? "web" : "agent";
   document.body.dataset.runtimeMode = state.runtimeMode;
+  // Render the truthful web-only state before any optional cloud section
+  // loads. A voucher/assets failure must never leave the dashboard stuck on
+  // the default "Memeriksa mesin" placeholder.
+  if (isWebRuntime()) renderWebRuntimeStatus();
   localStorage.setItem("photoslive.boothCode", adminBoothCode);
   if (routeMachineId) {
     agentState.machineId = routeMachineId;

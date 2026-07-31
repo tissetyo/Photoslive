@@ -128,6 +128,7 @@ test("admin presents a simple machine-first UI while preserving technical contro
 
 test("web-only photobox never enters the Agent polling or remote-job path", () => {
   assert.match(app, /state\.runtimeMode = String\(routeMachineId\)\.startsWith\("web_"\) \? "web" : "agent"/);
+  assert.match(app, /document\.body\.dataset\.runtimeMode = state\.runtimeMode;\s*\/\/[\s\S]{0,240}if \(isWebRuntime\(\)\) renderWebRuntimeStatus\(\);/);
   assert.match(app, /if \(String\(machineId\)\.startsWith\("web_"\)\) \{/);
   assert.match(app, /if \(!isWebRuntime\(\)\) setInterval\(\(\) => refreshStatus/);
   assert.match(app, /if \(isWebRuntime\(\)\) \{\s*renderWebRuntimeStatus\(\)/);
