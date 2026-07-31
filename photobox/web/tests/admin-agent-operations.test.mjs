@@ -113,24 +113,25 @@ test("hardware actions expose pending state and become unavailable while the mac
   assert.match(app, /Mesin offline\. Pengaturan cloud tetap dapat disimpan/);
 });
 
-test("admin presents a simple machine-first UI while preserving technical controls", () => {
-  assert.match(html, /data-view="agent"[\s\S]{0,160}Mesin &amp; koneksi/);
-  assert.match(html, /id="agent-setup-guide"/);
-  assert.match(html, /class="agent-advanced-controls"/);
-  assert.match(html, />Pengaturan lanjutan</);
+test("admin presents browser-first operation while preserving optional Helper controls", () => {
+  assert.match(html, /data-view="agent"[\s\S]{0,160}Photoslive Helper/);
+  assert.match(html, /id="helper-enabled-toggle"/);
+  assert.match(html, /data-helper-installer="windows"/);
+  assert.match(html, /class="agent-technician-command"/);
+  assert.match(html, />Teknisi \/ Lanjutan</);
   assert.match(html, />Sinkronkan sekarang</);
   assert.match(html, /Kondisi mesin diperiksa otomatis setiap 60 detik/);
   assert.doesNotMatch(html, /Kondisi mesin diperiksa otomatis setiap 30 detik/);
   assert.doesNotMatch(html, />Photoslive Agent</);
-  assert.match(app, /setupGuide\.hidden = true/);
+  assert.match(app, /create_helper_bootstrap/);
   assert.match(app, /setTimeout\(loadAgentStatus, 60000\)/);
 });
 
-test("web-only photobox never enters the Agent polling or remote-job path", () => {
-  assert.match(app, /state\.runtimeMode = String\(routeMachineId\)\.startsWith\("web_"\) \? "web" : "agent"/);
-  assert.match(app, /document\.body\.dataset\.runtimeMode = state\.runtimeMode;\s*\/\/[\s\S]{0,240}if \(isWebRuntime\(\)\) renderWebRuntimeStatus\(\);/);
-  assert.match(app, /if \(String\(machineId\)\.startsWith\("web_"\)\) \{/);
+test("web-only photobox never enters the Helper polling or remote-job path", () => {
+  assert.match(app, /state\.runtimeMode = "browser"/);
+  assert.match(app, /const isHelperActive = \(\) => state\.runtime\?\.capabilities\?\.helper\?\.active === true/);
+  assert.match(app, /if \(!isHelperActive\(\)\) \{[\s\S]{0,180}Photoslive Helper aktif/);
   assert.match(app, /if \(!isWebRuntime\(\)\) setInterval\(\(\) => refreshStatus/);
   assert.match(app, /if \(isWebRuntime\(\)\) \{\s*renderWebRuntimeStatus\(\)/);
-  assert.match(app, /Mode web aktif\. Admin tidak mengirim perintah atau polling ke Agent\./);
+  assert.match(app, /Web\/PWA aktif\. Tidak ada polling perangkat sampai Photoslive Helper diaktifkan\./);
 });

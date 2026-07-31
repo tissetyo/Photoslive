@@ -26,7 +26,7 @@ from typing import Any
 from redaction import redact_log_value, redact_text
 
 
-VERSION = "0.11.1"
+VERSION = "0.12.0"
 PROTOCOL_VERSION = 2
 DEFAULT_CLOUD = "https://photoslive.vercel.app"
 DEFAULT_CONTROLLER = "http://127.0.0.1:8080"
@@ -271,6 +271,52 @@ def ensure_pairing(config: dict[str, Any]) -> dict[str, Any]:
     # The installation identity is local and durable. It must not change merely
     # because the cloud is unavailable or the operator retries onboarding.
     return request_machine_pairing(config)
+
+
+def activate_helper_installation(config: dict[str, Any], bootstrap_token: str) -> dict[str, Any]:
+    """Attach this optional Helper to an already paired browser photobox.
+
+    The short-lived bootstrap is issued from Booth Admin. It rotates the local
+    Helper credential and deliberately reuses the browser station machine ID,
+    so the operator never performs a second QR pairing.
+    """
+    token = str(bootstrap_token or "").strip()
+    if len(token) < 32:
+        raise RuntimeError("Token pemasangan Photoslive Helper tidak valid")
+    agent_token = f"agent_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    command_key = f"command_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    response = request_json(
+        cloud_url(config, "activate_helper"),
+        "POST",
+        {
+            "bootstrapToken": token,
+            "agentToken": agent_token,
+            "commandKey": command_key,
+            "platform": platform.platform(),
+            "agentVersion": VERSION,
+        },
+        timeout=30,
+    )
+    helper = response.get("helper") if isinstance(response.get("helper"), dict) else {}
+    machine_id = str(helper.get("machineId") or "").strip()
+    booth_code = str(helper.get("boothCode") or "").strip()
+    if not machine_id or not booth_code:
+        raise RuntimeError("Cloud tidak mengembalikan identitas photobox untuk Photoslive Helper")
+    config.update({
+        "machineId": machine_id,
+        "boothCode": booth_code,
+        "agentToken": agent_token,
+        "commandKey": command_key,
+        "paired": True,
+        "cloudRegistered": True,
+        "cloudRegisteredAt": time.time(),
+        "helperInstalled": True,
+    })
+    for key in ("setupToken", "pairingToken", "pairingCode", "pairingUrl", "pairingExpiresAt", "cloudRegistrationPending"):
+        config.pop(key, None)
+    save_config(config)
+    log_event("info", "Photoslive Helper terhubung ke photobox", machineId=machine_id, boothCode=booth_code)
+    return config
 
 
 def clear_invalid_cloud_credentials(config: dict[str, Any]) -> dict[str, Any]:
@@ -888,12 +934,26 @@ def main() -> int:
     parser.add_argument("--status", action="store_true", help="Tampilkan konfigurasi/status lokal")
     parser.add_argument("--setup-link", action="store_true", help="Buka onboarding lokal tanpa pairing code")
     parser.add_argument("--pairing-link", action="store_true", help="Buat QR dan kode pairing akun yang berlaku 15 menit")
+    parser.add_argument("--helper-bootstrap", default="", help="Aktifkan Helper untuk browser photobox yang sudah terhubung")
     parser.add_argument("--json", action="store_true", help="Keluarkan hasil perintah sebagai JSON")
     parser.add_argument("--open-setup", action="store_true", help="Buka halaman setup di browser")
     parser.add_argument("--pause", action="store_true", help="Jeda job cloud tanpa menghentikan heartbeat")
     parser.add_argument("--resume", action="store_true", help="Lanjutkan job cloud")
     arguments = parser.parse_args()
     config = load_config(arguments.cloud, arguments.controller)
+    helper_bootstrap = str(arguments.helper_bootstrap or os.environ.get("PHOTOSLIVE_HELPER_BOOTSTRAP") or "").strip()
+    if helper_bootstrap:
+        try:
+            config = activate_helper_installation(config, helper_bootstrap)
+            payload = {"activated": True, "machineId": config.get("machineId"), "boothCode": config.get("boothCode")}
+            print(json.dumps(payload, ensure_ascii=False) if arguments.json else f"Photoslive Helper aktif untuk {config.get('boothCode')}.", flush=True)
+            return 0
+        except Exception as error:
+            if arguments.json:
+                print(json.dumps({"activated": False, "error": str(error)}, ensure_ascii=False))
+            else:
+                print(f"Pemasangan Photoslive Helper gagal: {error}", file=sys.stderr, flush=True)
+            return 1
     if arguments.pause or arguments.resume:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONTROL_PATH.write_text(json.dumps({"paused": arguments.pause, "updatedAt": time.time()}, indent=2), encoding="utf-8")

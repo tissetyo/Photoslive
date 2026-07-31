@@ -5,6 +5,8 @@ const routeParts = location.pathname.split("/").filter(Boolean);
 const routeBoothCode = new URLSearchParams(location.search).get("booth") || (routeParts[0] && !["booth","setup","superadmin"].includes(routeParts[0]) ? routeParts[0] : "");
 const boothConfigCacheKey = () => `photoslive.boothConfig.${routeBoothCode || "local"}`;
 const boothSessionRecoveryKey = () => `photoslive.activeSession.${routeBoothCode || "local"}`;
+const BOOTH_DB_NAME = "photoslive-booth-v1";
+const BOOTH_DB_VERSION = 1;
 
 const boothState = {
   config: null,
@@ -32,7 +34,44 @@ const boothState = {
   consent: null,
   paymentPollTimer: null,
   paymentPollToken: 0,
+  captureBlobs: {},
 };
+
+function openBoothDatabase() {
+  if (!globalThis.indexedDB) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(BOOTH_DB_NAME, BOOTH_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("state")) database.createObjectStore("state", { keyPath: "key" });
+      if (!database.objectStoreNames.contains("outbox")) database.createObjectStore("outbox", { keyPath: "id" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Penyimpanan PWA tidak tersedia"));
+  });
+}
+
+async function boothDbRequest(storeName, mode, operation) {
+  const database = await openBoothDatabase();
+  if (!database) return null;
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(storeName, mode);
+    const request = operation(transaction.objectStore(storeName));
+    request.onsuccess = () => resolve(request.result ?? null);
+    request.onerror = () => reject(request.error || new Error("Penyimpanan PWA gagal"));
+    transaction.oncomplete = () => database.close();
+  });
+}
+
+const boothDbGet = (store, key) => boothDbRequest(store, "readonly", target => target.get(key));
+const boothDbPut = (store, value) => boothDbRequest(store, "readwrite", target => target.put(value));
+const boothDbDelete = (store, key) => boothDbRequest(store, "readwrite", target => target.delete(key));
+const boothDbAll = store => boothDbRequest(store, "readonly", target => target.getAll());
+
+function helperRuntimeActive() {
+  return boothState.config?.runtime?.capabilities?.helper?.active === true
+    && boothState.config?.runtime?.hardwareBridgeAvailable === true;
+}
 
 const BUILTIN_BACKGROUNDS = {
   "default-gradient": "linear-gradient(145deg,#111522,#635bff 65%,#de79ab)",
@@ -54,8 +93,8 @@ const FONT_FAMILIES = {
 async function boothApi(path, options = {}) {
   if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
     if (isBoothCloudDataPath(path)) return boothCloudDataApi(path, options);
-    if (boothState.config?.runtime?.mode === "web") return boothWebRuntimeApi(path, options);
-    return boothCloudControllerApi(path, options);
+    if (helperRuntimeActive()) return boothCloudControllerApi(path, options);
+    return boothWebRuntimeApi(path, options);
   }
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
@@ -98,6 +137,8 @@ async function syncWebSession(status = "active") {
     createdAt: session.createdAt,
     completedAt: status === "completed" ? new Date().toISOString() : null,
   };
+  const outbox = { id: `session:${session.id}:${status}`, kind: "session", payload, createdAt: Date.now() };
+  if (!navigator.onLine) { await boothDbPut("outbox", outbox).catch(() => {}); return; }
   fetch("/api/platform?action=register_session", {
     method: "POST",
     headers: {
@@ -105,11 +146,22 @@ async function syncWebSession(status = "active") {
       Authorization: `Bearer ${boothState.config.bridgeToken}`,
     },
     body: JSON.stringify(payload),
-  }).catch(() => {});
+  }).then(response => {
+    if (!response.ok) throw new Error(`Sinkronisasi sesi gagal (${response.status})`);
+    return boothDbDelete("outbox", outbox.id);
+  }).catch(() => boothDbPut("outbox", outbox).catch(() => {}));
 }
 
 async function syncWebCapture(file, blob) {
   if (!boothState.config?.bridgeToken || !boothState.session) return;
+  const outbox = {
+    id: `capture:${boothState.session.id}:${file.id}`,
+    kind: "capture",
+    payload: { boothCode: routeBoothCode, machineId: boothState.config.runtime?.machineId || boothState.config.booth?.machineId, shareCode: boothState.session.shareToken, fileId: file.id, fileKind: "capture", slotIndex: file.slotIndex, contentType: blob.type || "image/jpeg", status: "active" },
+    blob,
+    createdAt: Date.now(),
+  };
+  if (!navigator.onLine) { await boothDbPut("outbox", outbox).catch(() => {}); return; }
   const bodyBase64 = await boothBlobToBase64(blob);
   fetch("/api/platform?action=upload_session_file", {
     method: "POST",
@@ -117,18 +169,59 @@ async function syncWebCapture(file, blob) {
       "Content-Type": "application/json",
       Authorization: `Bearer ${boothState.config.bridgeToken}`,
     },
-    body: JSON.stringify({
-      boothCode: routeBoothCode,
-      machineId: boothState.config.runtime?.machineId || boothState.config.booth?.machineId,
-      shareCode: boothState.session.shareToken,
-      fileId: file.id,
-      fileKind: "capture",
-      slotIndex: file.slotIndex,
-      contentType: blob.type || "image/jpeg",
-      bodyBase64,
-      status: "active",
-    }),
-  }).catch(() => {});
+    body: JSON.stringify({ ...outbox.payload, bodyBase64 }),
+  }).then(response => {
+    if (!response.ok) throw new Error(`Sinkronisasi foto gagal (${response.status})`);
+    return boothDbDelete("outbox", outbox.id);
+  }).catch(() => boothDbPut("outbox", outbox).catch(() => {}));
+}
+
+async function flushWebOutbox() {
+  if (!navigator.onLine || !boothState.config?.bridgeToken) return;
+  const records = (await boothDbAll("outbox").catch(() => [])) || [];
+  for (const record of records.sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))) {
+    try {
+      const action = record.kind === "capture" ? "upload_session_file" : "register_session";
+      const body = record.kind === "capture"
+        ? { ...record.payload, bodyBase64: await boothBlobToBase64(record.blob) }
+        : record.payload;
+      const response = await fetch(`/api/platform?action=${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${boothState.config.bridgeToken}`, "Idempotency-Key": record.id },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) break;
+      await boothDbDelete("outbox", record.id);
+    } catch { break; }
+  }
+}
+
+function browserSessionStorageKey() {
+  return `session:${routeBoothCode || "local"}`;
+}
+
+async function persistBrowserSession() {
+  if (!boothState.session || helperRuntimeActive()) return;
+  const session = {
+    ...boothState.session,
+    files: (boothState.session.files || []).map(file => ({ ...file, url: "", blob: boothState.captureBlobs[file.id] || null })),
+  };
+  await boothDbPut("state", { key: browserSessionStorageKey(), value: session, savedAt: Date.now() }).catch(() => {});
+}
+
+async function restoreBrowserSession() {
+  if (helperRuntimeActive()) return false;
+  const record = await boothDbGet("state", browserSessionStorageKey()).catch(() => null);
+  const session = record?.value;
+  if (!session || !["active", "completed"].includes(session.status)) return false;
+  boothState.captureBlobs = {};
+  session.files = (session.files || []).map(file => {
+    if (file.blob instanceof Blob) boothState.captureBlobs[file.id] = file.blob;
+    return { ...file, url: file.blob instanceof Blob ? URL.createObjectURL(file.blob) : file.url || "" };
+  });
+  boothState.session = session;
+  rememberSession(session);
+  return true;
 }
 
 async function boothWebRuntimeApi(path, options = {}) {
@@ -152,6 +245,7 @@ async function boothWebRuntimeApi(path, options = {}) {
     };
     boothState.session = session;
     syncWebSession("active");
+    persistBrowserSession();
     return { session: webRuntimeSessionProjection(session) };
   }
   const uploadMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/capture-upload$/);
@@ -168,6 +262,8 @@ async function boothWebRuntimeApi(path, options = {}) {
       url: URL.createObjectURL(options.body),
     };
     boothState.session.files.push(file);
+    boothState.captureBlobs[file.id] = options.body;
+    persistBrowserSession();
     syncWebCapture(file, options.body);
     return { file };
   }
@@ -180,6 +276,7 @@ async function boothWebRuntimeApi(path, options = {}) {
       if (item.slotIndex === file.slotIndex) item.selected = item.id === file.id;
     });
     boothState.session.selected[file.slotIndex] = file.id;
+    persistBrowserSession();
     return { session: webRuntimeSessionProjection(boothState.session) };
   }
   const completeMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/complete$/);
@@ -187,6 +284,7 @@ async function boothWebRuntimeApi(path, options = {}) {
     boothState.session.status = "completed";
     boothState.session.completedAt = new Date().toISOString();
     syncWebSession("completed");
+    persistBrowserSession();
     return { session: webRuntimeSessionProjection(boothState.session) };
   }
   if (method === "POST" && pathname === "/api/booth/print") {
@@ -197,7 +295,7 @@ async function boothWebRuntimeApi(path, options = {}) {
     return { session: webRuntimeSessionProjection(boothState.session) };
   }
   if (pathname === "/api/booth/recovery") return { session: null };
-  throw new Error("Fitur ini memerlukan Photoslive Agent. Kamera browser tetap dapat digunakan.");
+  throw new Error("Fitur ini memerlukan Photoslive Helper. Kamera dan dialog cetak browser tetap dapat digunakan.");
 }
 
 function isBoothCloudDataPath(path) {
@@ -268,7 +366,7 @@ async function boothCloudControllerApi(path, options = {}) {
     localStorage.setItem("photoslive.machineId", machineId);
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
   }
-  if (!machineId) throw new Error("Mesin photobox belum dipasangkan melalui halaman admin Photoslive Agent");
+  if (!machineId) throw new Error("Photoslive Helper belum dihubungkan untuk photobox ini");
   let requestBody = null;
   let bodyBase64 = null;
   if (typeof options.body === "string" && options.body) requestBody = JSON.parse(options.body);
@@ -280,9 +378,9 @@ async function boothCloudControllerApi(path, options = {}) {
     await wait(600);
     const status = await boothBridge("job_status", { machineId, jobId: job.id }, "GET");
     if (status.job.status === "completed") return status.job.result || {};
-    if (status.job.status === "failed") throw new Error(status.job.error || "Perintah gagal dijalankan Agent");
+    if (status.job.status === "failed") throw new Error(status.job.error || "Perintah gagal dijalankan Photoslive Helper");
   }
-  throw new Error("Agent tidak merespons dalam 35 detik");
+  throw new Error("Photoslive Helper tidak merespons dalam 35 detik");
 }
 
 function boothBlobToBase64(blob) {
@@ -292,12 +390,13 @@ function boothBlobToBase64(blob) {
 }
 
 function boothBinaryUrl(result) {
-  if (!result?.bodyBase64) throw new Error("Agent tidak mengirim preview kamera");
+  if (!result?.bodyBase64) throw new Error("Photoslive Helper tidak mengirim preview kamera");
   const bytes = Uint8Array.from(atob(result.bodyBase64), character => character.charCodeAt(0));
   return URL.createObjectURL(new Blob([bytes], { type: result.contentType || "application/octet-stream" }));
 }
 
 async function recoverableFileUrl(file) {
+  if (file?.blob instanceof Blob) return URL.createObjectURL(file.blob);
   const url = file?.url || (file?.id ? `/api/session-files/${file.id}` : "");
   if (!url) return "";
   if (location.hostname === "127.0.0.1" || location.hostname === "localhost") return url;
@@ -310,6 +409,7 @@ function rememberSession(session) {
 }
 
 async function recoverPersistedSession() {
+  if (!helperRuntimeActive() && !boothState.session) await restoreBrowserSession();
   let saved;
   try { saved = JSON.parse(localStorage.getItem(boothSessionRecoveryKey()) || "null"); }
   catch { localStorage.removeItem(boothSessionRecoveryKey()); return false; }
@@ -410,6 +510,16 @@ function configReportsCloudOnline(config) {
 
 function cacheBoothConfig(config) {
   localStorage.setItem(boothConfigCacheKey(), JSON.stringify({ value: config, savedAt: Date.now() }));
+  boothDbPut("state", { key: `config:${routeBoothCode || "local"}`, value: config, savedAt: Date.now() }).catch(() => {});
+}
+
+async function readCachedBoothConfig() {
+  try {
+    const cachedRecord = JSON.parse(localStorage.getItem(boothConfigCacheKey()) || "null");
+    if (cachedRecord?.value || cachedRecord?.booth) return cachedRecord?.value || cachedRecord;
+  } catch { localStorage.removeItem(boothConfigCacheKey()); }
+  const record = await boothDbGet("state", `config:${routeBoothCode || "local"}`).catch(() => null);
+  return record?.value || null;
 }
 
 function setScreen(name) {
@@ -611,8 +721,16 @@ async function startCameraPreview() {
   try {
     await startBrowserCamera();
   } catch (browserError) {
+    if (!helperRuntimeActive() && !localControllerAvailable()) {
+      boothState.cameraMode = null;
+      $("#frame-camera-status").textContent = `${browserError.message}. Izinkan kamera pada browser untuk melanjutkan.`;
+      $("#capture-camera-status").textContent = $("#frame-camera-status").textContent;
+      $("#camera-live-pill").classList.add("is-offline");
+      $("#camera-live-label").textContent = "IZIN KAMERA DIPERLUKAN";
+      return;
+    }
     boothState.cameraMode = "controller";
-    $("#frame-camera-status").textContent = `${browserError.message}. Mencoba kamera controller…`;
+    $("#frame-camera-status").textContent = `${browserError.message}. Mencoba kamera Photoslive Helper…`;
     await pollControllerPreview();
     reportClientCapabilities();
   }
@@ -936,7 +1054,11 @@ function resetBooth({ preserveRecovery = false } = {}) {
   clearInterval(boothState.goodbyeTimer); clearInterval(boothState.sessionTimer); stopPaymentPolling(); stopCameraPreview();
   if ($("#goodbye-dialog").open) $("#goodbye-dialog").close(); if ($("#print-dialog").open) $("#print-dialog").close(); if ($("#access-dialog").open) $("#access-dialog").close();
   boothState.session = null; boothState.currentSlot = 1; boothState.currentPhoto = null; boothState.photos = {}; boothState.expired = false; boothState.accessMethod = null; boothState.printIncluded = false; boothState.voucherCode = ""; boothState.consent = null;
-  if (!preserveRecovery) localStorage.removeItem(boothSessionRecoveryKey());
+  if (!preserveRecovery) {
+    localStorage.removeItem(boothSessionRecoveryKey());
+    boothDbDelete("state", browserSessionStorageKey()).catch(() => {});
+    boothState.captureBlobs = {};
+  }
   $("#capture-heading").textContent = "Sudah siap?"; $(".ready-card>p:not(.eyebrow)").textContent = "Pastikan semua orang terlihat. Setelah ditekan, hitung mundur akan langsung dimulai."; $("#camera-start").firstChild.textContent = "Ketuk untuk mulai ";
   $("#session-countdown").textContent = formatTimer(boothState.config.booth.sessionTimeoutSeconds); $("#session-time").classList.remove("urgent");
   $("#photo-review").hidden = true; $("#countdown-overlay").hidden = true; $("#capture-ready-overlay").hidden = false; $(".capture-screen").classList.remove("is-waiting");
@@ -985,8 +1107,7 @@ async function initBooth() {
   let startedFromCache = false;
   let recoveredSession = false;
   try {
-    const cachedRecord = JSON.parse(localStorage.getItem(boothConfigCacheKey()) || "null");
-    const cached = cachedRecord?.value || cachedRecord;
+    const cached = await readCachedBoothConfig();
     if (cached?.appearance && cached?.booth && cached?.payment) {
       boothState.config = cached;
       boothState.cloudOnline = false;
@@ -1011,17 +1132,26 @@ async function initBooth() {
     if (!recoveredSession) recoveredSession = await recoverPersistedSession().catch(error => { notice(`Sesi lama belum dapat dipulihkan: ${error.message}`, "error"); return false; });
     if (!recoveredSession) recoveredSession = await discoverLocalRecoverableSession().catch(() => false);
     reportClientCapabilities();
-    setInterval(() => reportClientCapabilities(boothState.cameraLabels), 30000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) reportClientCapabilities(boothState.cameraLabels).catch(() => {});
+    });
     setWelcomeButtonState(freshConfig.booth.maintenanceMode ? "maintenance" : "ready");
+    flushWebOutbox().catch(() => {});
   } catch (error) {
     boothState.cloudOnline = false;
     if (startedFromCache) {
-      notice(`Mode lokal: konfigurasi tersimpan digunakan. ${error.message}`, "error");
+      notice(`Koneksi cloud terputus. Konfigurasi terakhir digunakan dan sesi akan disinkronkan saat online. ${error.message}`, "error");
       return;
     }
     setWelcomeButtonState("retry");
     notice(`Mesin belum siap. Tekan Coba hubungkan lagi. ${error.message}`, "error");
   }
 }
+
+window.addEventListener("online", () => {
+  boothState.cloudOnline = true;
+  flushWebOutbox().catch(() => {});
+});
+window.addEventListener("offline", () => { boothState.cloudOnline = false; });
 
 initBooth();

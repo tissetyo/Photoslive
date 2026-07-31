@@ -150,46 +150,18 @@
         <section id="station-form" class="hidden station-ready-state" aria-live="polite">
           <div class="ready-mark"><img src="/icons/circle-check.svg" alt=""></div>
           <div class="ready-copy">
-            <h2>Photobox berhasil dihubungkan</h2>
-            <p id="station-ready-copy">Pilih cara menjalankan photobox di komputer ini.</p>
+            <h2>Photobox siap</h2>
+            <p id="station-ready-copy">Komputer ini sudah terhubung permanen dan siap digunakan.</p>
           </div>
           <dl class="ready-identities">
             <div><dt>Photobox</dt><dd id="station-booth-name">—</dd></div>
             <div><dt>Alamat</dt><dd id="station-booth-code">—</dd></div>
           </dl>
-          <div class="station-mode-grid">
-            <button type="button" class="station-mode-card recommended" id="use-web-mode">
-              <span class="station-mode-icon"><img src="/icons/cloud.svg" alt=""></span>
-              <span><b>Gunakan versi web</b><small>Langsung mulai. Kamera browser tersedia setelah diberi izin.</small></span>
-              <em>Direkomendasikan</em>
-            </button>
-            <button type="button" class="station-mode-card" id="show-agent-install" aria-expanded="false" aria-controls="station-agent-install">
-              <span class="station-mode-icon"><img src="/icons/hard-drive.svg" alt=""></span>
-              <span><b>Install Photoslive Agent</b><small>Untuk DSLR, silent print, folder lokal, dan mode offline penuh.</small></span>
-            </button>
+          <div class="station-ready-actions">
+            <button type="button" class="btn primary" id="open-station-booth">Buka photobox <img src="/icons/arrow-right.svg" alt=""></button>
+            <button type="button" class="btn hidden" id="install-station-pwa"><img src="/icons/download.svg" alt="">Tambahkan ke desktop</button>
           </div>
-          <details class="station-agent-install" id="station-agent-install">
-            <summary>Installer Agent <span>Opsional, dapat dilakukan nanti dari Admin</span></summary>
-            <div class="station-installer-links">
-              <button class="btn" type="button" data-station-agent-os="windows"><span class="setup-icon windows" aria-hidden="true"></span>Windows</button>
-              <button class="btn" type="button" data-station-agent-os="macos"><span class="setup-icon apple" aria-hidden="true"></span>macOS</button>
-              <button class="btn active" type="button" data-station-agent-os="linux"><span class="setup-icon linux" aria-hidden="true"></span>Linux</button>
-            </div>
-            <div class="station-agent-methods">
-              <a class="btn station-agent-download" id="station-agent-download" href="/downloads/install-linux.sh" download="install-photoslive-linux.sh">
-                <span class="setup-icon download" aria-hidden="true"></span><span id="station-agent-download-label">Download installer Linux</span>
-              </a>
-              <div class="station-command">
-                <div><b id="station-agent-command-label">Atau salin ke Terminal Linux</b><small>Satu perintah; installer akan berjalan otomatis.</small></div>
-                <div class="command-box">
-                  <code id="station-agent-command">curl -fsSL https://photoslive.vercel.app/downloads/install-linux.sh | bash</code>
-                  <button type="button" id="copy-station-agent-command"><img src="/icons/copy.svg" alt="">Salin</button>
-                </div>
-                <p class="inline-status" id="station-agent-copy-status" role="status"></p>
-              </div>
-            </div>
-            <p>Menutup halaman ini tidak membatalkan pairing. Mode dapat diganti lagi dari Pengaturan Mesin di Admin.</p>
-          </details>
+          <p class="station-ready-help">Fitur perangkat lanjutan seperti silent print, DSLR, autostart, dan offline penuh dapat diaktifkan nanti dari Admin melalui Photoslive Helper.</p>
         </section>
 
         <form id="login-form" class="hidden">
@@ -224,7 +196,7 @@
         <form id="register-form" class="hidden">
           <div class="register-note">
             <span class="setup-icon user" aria-hidden="true"></span>
-            <div><b>Mulai tanpa installer</b><p>Buat akun cloud sekarang. Kamera, printer, dan mode offline dapat dihubungkan nanti dari admin.</p></div>
+            <div><b>Buat akun dari perangkat apa pun</b><p>Setelah akun siap, scan QR di sebelah kiri untuk menghubungkan komputer ini.</p></div>
           </div>
           <div class="form-grid">
             <label class="full">Email<input id="register-email" type="email" autocomplete="email" placeholder="nama@email.com" required></label>
@@ -315,7 +287,7 @@
 
       </section>
 
-      <aside class="agent-recovery" id="agent-recovery">
+      <aside class="agent-recovery hidden" id="agent-recovery">
           <div class="recovery-heading">
             <span class="recovery-icon"><img src="/icons/terminal.svg" alt=""></span>
             <div><b>Install Photoslive</b><p>Pilih perangkat utama. Operator tidak perlu membuat atau mengetik kode.</p></div>
@@ -330,7 +302,7 @@
             <ol class="install-steps">
               <li><span>1</span><div><b>Download installer ringan</b><p>Installer memasang service lokal dan membuka wizard ini kembali secara otomatis.</p>
                 <a class="primary-installer-download" id="primary-agent-download" href="/downloads/install-linux.sh" download="install-photoslive-linux.sh"><span id="primary-agent-icon" class="setup-icon linux" aria-hidden="true"></span><span id="primary-agent-label">Ambil installer Linux</span><span class="setup-icon download" aria-hidden="true"></span></a>
-                <details class="installer-alternatives"><summary>Pakai sistem operasi lain</summary><div class="installer-links" aria-label="Pilihan installer Photoslive Agent">
+                <details class="installer-alternatives"><summary>Pakai sistem operasi lain</summary><div class="installer-links" aria-label="Pilihan installer Photoslive Helper">
                   <button type="button" data-agent-os="windows"><span class="setup-icon windows" aria-hidden="true"></span>Windows</button>
                   <button type="button" data-agent-os="macos"><span class="setup-icon apple" aria-hidden="true"></span>macOS</button>
                   <button type="button" data-agent-os="linux"><span class="setup-icon linux" aria-hidden="true"></span>Linux</button>

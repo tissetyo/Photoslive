@@ -51,7 +51,7 @@
         <div class="platform-frame-grid" id="platform-frame-grid"><p class="empty">Memuat perpustakaan frame…</p></div>
       </section>
       <section class="dashboard-card" id="fleet-health-card">
-        <div class="card-head"><div><h2>Kesehatan fleet</h2><p id="fleet-health-summary">Memeriksa heartbeat Agent…</p></div><button class="btn" id="health-retry" type="button">Periksa sekarang</button></div>
+        <div class="card-head"><div><h2>Kesehatan fleet</h2><p id="fleet-health-summary">Memeriksa heartbeat Photoslive Helper…</p></div><button class="btn" id="health-retry" type="button">Periksa sekarang</button></div>
         <p class="status" id="health-status" role="status"></p>
         <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>INSIDEN</th><th>DIMULAI</th><th>STATUS</th><th>TINDAKAN</th></tr></thead><tbody id="incident-rows"><tr><td colspan="5" class="empty">Memuat incident timeline…</td></tr></tbody></table></div>
       </section>
@@ -64,7 +64,7 @@
       </section>
       <section class="dashboard-card" id="alert-routing-card">
         <div class="card-head"><div><h2>Routing alert</h2><p id="alert-routing-summary">Memuat antrean notifikasi insiden…</p></div><div class="card-actions"><button class="btn" id="alert-routing-retry" type="button">Perbarui</button><button class="btn primary" id="alert-routing-process" type="button">Kirim antrean</button></div></div>
-        <p class="form-note">Insiden dikirim lewat provider Monitoring webhook. Pengiriman berjalan terpisah dan tidak menghambat booth atau Agent.</p>
+        <p class="form-note">Insiden dikirim lewat provider Monitoring webhook. Pengiriman berjalan terpisah dan tidak menghambat booth web atau Photoslive Helper.</p>
         <p class="status" id="alert-routing-status" role="status"></p>
         <div class="table-wrap"><table><thead><tr><th>WAKTU</th><th>EVENT</th><th>PHOTOBOX</th><th>STATUS</th><th>COBA</th><th>ERROR</th><th>TINDAKAN</th></tr></thead><tbody id="alert-routing-rows"><tr><td colspan="7" class="empty">Memuat delivery alert…</td></tr></tbody></table></div>
       </section>
@@ -133,7 +133,7 @@
         <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>SUMBER → TUJUAN</th><th>PROGRESS</th><th>STATUS</th><th>DIPERBARUI</th><th>TINDAKAN</th></tr></thead><tbody id="provider-migration-rows"><tr><td colspan="6" class="empty">Memuat migrasi provider…</td></tr></tbody></table></div>
       </section>
       <section class="dashboard-card" id="email-delivery-card">
-        <div class="card-head"><div><h2>Pengiriman email</h2><p>Antrean Resend berjalan terpisah dari booth dan Agent.</p></div><div class="card-actions"><button class="btn" id="email-delivery-retry" type="button">Perbarui</button><button class="btn primary" id="email-delivery-process" type="button">Kirim antrean</button></div></div>
+        <div class="card-head"><div><h2>Pengiriman email</h2><p>Antrean Resend berjalan terpisah dari booth web dan Photoslive Helper.</p></div><div class="card-actions"><button class="btn" id="email-delivery-retry" type="button">Perbarui</button><button class="btn primary" id="email-delivery-process" type="button">Kirim antrean</button></div></div>
         <div class="metric-grid reconciliation-metrics"><article class="metric"><small>MENUNGGU</small><strong id="email-summary-queued">0</strong></article><article class="metric"><small>TERKIRIM</small><strong id="email-summary-sent">0</strong></article><article class="metric"><small>DITERIMA</small><strong id="email-summary-delivered">0</strong></article><article class="metric"><small>PERLU DIPERIKSA</small><strong id="email-summary-problems">0</strong></article></div>
         <form id="email-test-form" class="provider-form">
           <label>Email penerima<input id="email-test-recipient" type="email" autocomplete="off" required></label>
@@ -287,7 +287,7 @@
         <div class="card-head"><div><h2>Antrean remote</h2><p id="remote-jobs-summary">Memuat perintah hardware terbaru…</p></div><button class="btn" id="remote-jobs-retry" type="button">Perbarui antrean</button></div>
         <form id="remote-job-form" class="remote-job-form">
           <label>Photobox<select id="remote-job-machine" required><option value="">Memuat mesin…</option></select></label>
-          <label>Perintah<select id="remote-job-type" required><option value="devices.refresh">Periksa perangkat</option><option value="agent.update.check">Periksa update Agent</option><option value="agent.update.apply">Pasang update terverifikasi</option><option value="agent.update.rollback">Rollback Agent</option><option value="service.restart">Restart Controller</option></select></label>
+          <label>Perintah<select id="remote-job-type" required><option value="devices.refresh">Periksa perangkat</option><option value="agent.update.check">Periksa update Helper</option><option value="agent.update.apply">Pasang update terverifikasi</option><option value="agent.update.rollback">Rollback Helper</option><option value="service.restart">Restart Controller</option></select></label>
           <button class="btn primary" id="remote-job-send" type="submit">Kirim perintah</button>
         </form>
         <p class="form-note">Perintah ditandatangani dan memiliki expiry. Install hanya bekerja setelah pemeriksaan menemukan versi siap; rollback dan restart memerlukan konfirmasi.</p>
@@ -295,8 +295,8 @@
         <div class="table-wrap"><table><thead><tr><th>WAKTU</th><th>PHOTOBOX</th><th>PERINTAH</th><th>STATUS</th><th>PERCOBAAN</th><th>ERROR</th><th>TINDAKAN</th></tr></thead><tbody id="remote-job-rows"><tr><td colspan="7" class="empty">Memuat antrean remote…</td></tr></tbody></table></div>
       </section>
       <section class="dashboard-card" id="machine-card">
-        <div class="card-head"><div><h2>Perangkat terpasang</h2><p>Status terakhir dari Agent.</p></div></div>
-        <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>STATUS</th><th>CONTROLLER</th><th>TERAKHIR TERLIHAT</th><th>SISTEM</th><th>BACKUP</th><th>AGENT</th><th>AKSES</th><th>BUKA</th></tr></thead><tbody id="machine-rows"></tbody></table></div>
+        <div class="card-head"><div><h2>Station dan Helper</h2><p>Browser station selalu terdaftar; Photoslive Helper bersifat opsional.</p></div></div>
+        <div class="table-wrap"><table><thead><tr><th>PHOTOBOX</th><th>STATUS</th><th>CONTROLLER</th><th>TERAKHIR TERLIHAT</th><th>SISTEM</th><th>BACKUP</th><th>HELPER</th><th>AKSES</th><th>BUKA</th></tr></thead><tbody id="machine-rows"></tbody></table></div>
       </section>
       <section class="dashboard-card" id="pairing-registry-card">
         <div class="card-head"><div><h2>Ownership mesin</h2><p>Identitas permanen mesin, owner, dan photobox dari PostgreSQL.</p></div><button class="btn" id="pairing-registry-retry" type="button">Perbarui</button></div>

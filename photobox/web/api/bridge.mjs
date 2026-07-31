@@ -33,10 +33,15 @@ import { persistPostgresSession, postgresSessionStatus, readPostgresSession, rec
 import { postgresSettingsStatus, readPostgresSettings } from "./_postgres_settings.mjs";
 import { postgresVoucherStatus, readPostgresVoucherSnapshot, redeemPostgresVoucher } from "./_postgres_vouchers.mjs";
 import {
+  activatePostgresHelper,
+  bootstrapPostgresBrowserStation,
   claimPostgresMachine,
   createPostgresMachineClaim,
   inspectPostgresMachineClaim,
   postgresAccountsStatus,
+  registerPostgresBrowserInstallation,
+  updatePostgresBrowserCapabilities,
+  updatePostgresHelperRuntime,
 } from "./_postgres_accounts.mjs";
 import QRCode from "qrcode";
 import {
@@ -61,6 +66,49 @@ const json = (response, status = 200, headers = {}) => new Response(JSON.stringi
   },
 });
 
+const STATION_COOKIE_NAMES = ["__Host-photoslive_station", "photoslive_station"];
+
+function stationCookie(request, machineId, credential) {
+  const secure = new URL(request.url).protocol === "https:";
+  const name = secure ? STATION_COOKIE_NAMES[0] : STATION_COOKIE_NAMES[1];
+  const value = encodeURIComponent(`${machineId}:${credential}`);
+  return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? "; Secure" : ""}`;
+}
+
+function stationIdentity(request, payload = {}) {
+  const cookies = String(request.headers.get("cookie") || "")
+    .split(";")
+    .map(part => part.trim())
+    .filter(Boolean);
+  let cookieValue = "";
+  for (const name of STATION_COOKIE_NAMES) {
+    const prefix = `${name}=`;
+    const match = cookies.find(part => part.startsWith(prefix));
+    if (match) {
+      cookieValue = match.slice(prefix.length);
+      break;
+    }
+  }
+  let cookieMachineId = "";
+  let cookieCredential = "";
+  if (cookieValue) {
+    try {
+      const decoded = decodeURIComponent(cookieValue);
+      const separator = decoded.lastIndexOf(":");
+      if (separator > 0) {
+        cookieMachineId = decoded.slice(0, separator);
+        cookieCredential = decoded.slice(separator + 1);
+      }
+    } catch {
+      // Invalid cookies fail normal credential verification below.
+    }
+  }
+  return {
+    machineId: String(cookieMachineId || payload.machineId || payload.installationId || "").trim(),
+    credential: String(cookieCredential || payload.credential || payload.stationCredential || "").trim(),
+  };
+}
+
 async function body(request) {
   if (request.method === "GET") return {};
   return request.json().catch(() => ({}));
@@ -75,11 +123,13 @@ async function authenticateAgent(redis, request, machineId) {
     const durable = await readPostgresMachine(machineId, tokenHash);
     if (durable) return durable;
   }
-  try {
-    const machine = await redis.get(machineKey(machineId));
-    if (machine?.agentTokenHash === tokenHash) return machine;
-  } catch (error) {
-    if (!isUpstashMaxRequestsError(error)) throw error;
+  if (redis) {
+    try {
+      const machine = await redis.get(machineKey(machineId));
+      if (machine?.agentTokenHash === tokenHash) return machine;
+    } catch (error) {
+      if (!isUpstashMaxRequestsError(error)) throw error;
+    }
   }
   if (postgresStatus.enabled && !postgresStatus.primary) {
     const durable = await readPostgresMachine(machineId, tokenHash);
@@ -94,6 +144,14 @@ async function bestEffortRedis(operation, fallback = null) {
   } catch (error) {
     if (!isUpstashMaxRequestsError(error)) throw error;
     return fallback;
+  }
+}
+
+function optionalRedis() {
+  try {
+    return getRedis();
+  } catch {
+    return null;
   }
 }
 
@@ -563,6 +621,7 @@ async function createPairing(redis, payload) {
     const persisted = await persistPostgresMachine(machine);
     if (!persisted.ok) throw Object.assign(new Error(persisted.reason || "Pairing PostgreSQL gagal dibuat"), { status: Number(persisted.status || 503) });
   }
+  let claimId = null;
   if (accountStatus.primary) {
     const claim = await createPostgresMachineClaim({
       machineId,
@@ -585,11 +644,14 @@ async function createPairing(redis, payload) {
         status: Number(claim.status || 503),
       });
     }
+    claimId = String(claim.payload?.claimId || claim.payload?.claim_id || "") || null;
   }
-  await bestEffortRedis(async () => {
-    await redis.set(machineKey(machineId), machine);
-    await redis.set(`photoslive:pairing:${code}`, machineId, { ex: 900 });
-  });
+  if (redis) {
+    await bestEffortRedis(async () => {
+      await redis.set(machineKey(machineId), machine);
+      await redis.set(`photoslive:pairing:${code}`, machineId, { ex: 900 });
+    });
+  }
   if (postgresStatus.mode === "dual") await persistPostgresMachine(machine);
   return {
     machineId,
@@ -600,6 +662,7 @@ async function createPairing(redis, payload) {
     pairingCode: code,
     pairingToken: claimToken,
     pairingUrl: `https://photoslive.vercel.app/pair/${claimToken}`,
+    claimId,
     expiresInSeconds: 900,
     boothCode: machine.boothCode,
     paired: false,
@@ -611,6 +674,15 @@ async function createWebPairing(redis, request, payload) {
   const installationId = /^[A-Za-z0-9._:-]{12,160}$/.test(suppliedInstallationId)
     ? suppliedInstallationId
     : `web_${crypto.randomUUID().replaceAll("-", "")}`;
+  const stationCredential = `${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+  const browserCapabilities = {
+    camera: { source: "browser", available: true },
+    print: { mode: "dialog", available: true, silent: false },
+    helper: { installed: false, enabled: false, online: false },
+    dslr: false,
+    managedLocalStorage: false,
+    fullOffline: false,
+  };
   const result = await createPairing(redis, {
     machineId: installationId,
     name: String(payload.name || "Photoslive Web Booth").slice(0, 80),
@@ -623,6 +695,16 @@ async function createWebPairing(redis, request, payload) {
       installationMode: "web",
     },
   });
+  const station = await registerPostgresBrowserInstallation({
+    machineId: result.machineId,
+    credentialHash: await sha256(stationCredential),
+    capabilities: browserCapabilities,
+  });
+  if (!station.ok) {
+    throw Object.assign(new Error(station.reason || "Credential station belum dapat disimpan"), {
+      status: Number(station.status || 503),
+    });
+  }
   const qrImage = await QRCode.toDataURL(result.pairingUrl, {
     errorCorrectionLevel: "M",
     margin: 1,
@@ -636,12 +718,70 @@ async function createWebPairing(redis, request, payload) {
     pairingCode: result.pairingCode,
     pairingToken: result.pairingToken,
     pairingUrl: result.pairingUrl,
+    claimId: result.claimId,
+    _stationCredential: stationCredential,
     qrImage,
     expiresInSeconds: result.expiresInSeconds,
     expiresAt: new Date(Date.now() + (result.expiresInSeconds * 1000)).toISOString(),
     paired: false,
     installationMode: "web",
+    installationKind: "browser",
+    capabilities: browserCapabilities,
+    realtime: {
+      url: String(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/+$/g, ""),
+      publishableKey: String(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""),
+      topic: result.claimId ? `pairing:${result.claimId}` : "",
+    },
   };
+}
+
+async function stationBootstrap(request, payload) {
+  const { machineId, credential } = stationIdentity(request, payload);
+  if (!machineId || credential.length < 32) return json({ error: "Identitas station belum tersedia" }, 400);
+  const result = await bootstrapPostgresBrowserStation({
+    machineId,
+    credentialHash: await sha256(credential),
+  });
+  if (!result.ok) {
+    const status = /not paired/i.test(result.reason || "") ? 409 : /invalid/i.test(result.reason || "") ? 401 : Number(result.status || 503);
+    return json({ error: result.reason || "Station belum dapat dibuka", retryable: status >= 500 }, status);
+  }
+  return json({ station: result.payload, paired: true });
+}
+
+async function updateStationCapabilities(request, payload) {
+  const { machineId, credential } = stationIdentity(request, payload);
+  if (!machineId || credential.length < 32) return json({ error: "Identitas station belum tersedia" }, 400);
+  const capabilities = payload.capabilities && typeof payload.capabilities === "object" ? payload.capabilities : {};
+  const result = await updatePostgresBrowserCapabilities({
+    machineId,
+    credentialHash: await sha256(credential),
+    capabilities,
+  });
+  return result.ok
+    ? json({ station: result.payload })
+    : json({ error: result.reason || "Capability station belum dapat diperbarui", retryable: Number(result.status || 503) >= 500 }, Number(result.status || 503));
+}
+
+async function activateHelper(payload) {
+  const bootstrapToken = String(payload.bootstrapToken || "").trim();
+  const agentToken = String(payload.agentToken || "").trim();
+  const commandKey = String(payload.commandKey || "").trim();
+  if (bootstrapToken.length < 32 || agentToken.length < 32 || commandKey.length < 32) {
+    return json({ error: "Bootstrap Photoslive Helper tidak valid" }, 400);
+  }
+  const result = await activatePostgresHelper({
+    tokenHash: await sha256(bootstrapToken),
+    agentTokenHash: await sha256(agentToken),
+    commandKey,
+    platform: payload.platform,
+    agentVersion: payload.agentVersion,
+  });
+  if (!result.ok) {
+    const status = /expired|invalid|used/i.test(result.reason || "") ? 409 : Number(result.status || 503);
+    return json({ error: result.reason || "Photoslive Helper belum dapat diaktifkan", retryable: status >= 500 }, status);
+  }
+  return json({ helper: result.payload, paired: true, activated: true });
 }
 
 export async function claimPairing(redis, request, payload) {
@@ -677,7 +817,9 @@ export async function claimPairing(redis, request, payload) {
     const claimedMachineId = String(claimedMachine.machineId || claimedMachine.machine_id || "");
     const boothCode = String(claimedBooth?.boothCode || claimedBooth?.booth_code || claimed.boothCode || claimed.booth_code || "");
     if (claimedMachineId) {
-      const legacyMachine = await bestEffortRedis(() => redis.get(machineKey(claimedMachineId)), null);
+      const legacyMachine = redis
+        ? await bestEffortRedis(() => redis.get(machineKey(claimedMachineId)), null)
+        : null;
       if (legacyMachine) {
         legacyMachine.paired = true;
         legacyMachine.status = "offline";
@@ -689,7 +831,7 @@ export async function claimPairing(redis, request, payload) {
         await bestEffortRedis(() => redis.set(machineKey(claimedMachineId), legacyMachine));
         if (legacyMachine.boothCode) await bestEffortRedis(() => redis.set(boothKey(legacyMachine.boothCode), claimedMachineId));
       }
-      if (code) await bestEffortRedis(() => redis.del(`photoslive:pairing:${code}`));
+      if (redis && code) await bestEffortRedis(() => redis.del(`photoslive:pairing:${code}`));
     }
     return json({
       machine: claimed.machine || claimed,
@@ -711,9 +853,9 @@ export async function claimPairing(redis, request, payload) {
   if (!code) return json({ error: "Masukkan kode pairing" }, 400);
   const postgresStatus = postgresMachineStatus();
   let machine = postgresStatus.primary ? await readPostgresPairing(code) : null;
-  const machineId = machine?.id || await bestEffortRedis(() => redis.get(`photoslive:pairing:${code}`), null);
+  const machineId = machine?.id || (redis ? await bestEffortRedis(() => redis.get(`photoslive:pairing:${code}`), null) : null);
   if (!machineId) return json({ error: "Kode pairing tidak ditemukan atau sudah kedaluwarsa" }, 404);
-  if (!machine) machine = await bestEffortRedis(() => redis.get(machineKey(machineId)), null);
+  if (!machine && redis) machine = await bestEffortRedis(() => redis.get(machineKey(machineId)), null);
   if (!machine) return json({ error: "Data mesin tidak ditemukan" }, 404);
   if (machine.pairingCode !== code) return json({ error: "Kode pairing bukan kode terbaru untuk mesin ini" }, 409);
   machine.paired = true;
@@ -728,9 +870,11 @@ export async function claimPairing(redis, request, payload) {
     if (!persisted.ok) return json({ error: persisted.reason || "Pairing belum dapat disimpan ke database", retryable: true }, Number(persisted.status || 503));
     machine = persisted.machine || machine;
   }
-  await bestEffortRedis(() => redis.set(machineKey(machineId), machine));
-  await bestEffortRedis(() => redis.set(boothKey(machine.boothCode), machineId));
-  await bestEffortRedis(() => redis.del(`photoslive:pairing:${code}`));
+  if (redis) {
+    await bestEffortRedis(() => redis.set(machineKey(machineId), machine));
+    await bestEffortRedis(() => redis.set(boothKey(machine.boothCode), machineId));
+    await bestEffortRedis(() => redis.del(`photoslive:pairing:${code}`));
+  }
   if (postgresStatus.mode === "dual") await markPostgresMachinePaired(code, machine, machine.boothCode).catch(() => null);
   return json({ machine: publicMachine(machine) });
 }
@@ -819,30 +963,43 @@ async function heartbeat(redis, request, payload) {
   } : { sessions: [] };
   machine.commandKey ||= randomId("command");
   machine.boothCode = persistentBoothCode(machine);
-  await recordTelemetrySnapshot(redis, machine).catch(error => {
-    if (!isUpstashMaxRequestsError(error)) throw error;
-    return null;
-  });
-  await bestEffortRedis(() => resolveMachineIncident(redis, machine, machine.lastSeenAt));
-  await bestEffortRedis(() => redis.sadd("photoslive:machines", machine.id));
-  if (machine.paired) await bestEffortRedis(() => redis.set(boothKey(machine.boothCode), machine.id));
+  if (redis) {
+    await recordTelemetrySnapshot(redis, machine).catch(error => {
+      if (!isUpstashMaxRequestsError(error)) throw error;
+      return null;
+    });
+    await bestEffortRedis(() => resolveMachineIncident(redis, machine, machine.lastSeenAt));
+    await bestEffortRedis(() => redis.sadd("photoslive:machines", machine.id));
+    if (machine.paired) await bestEffortRedis(() => redis.set(boothKey(machine.boothCode), machine.id));
+  }
   let voucherVersion = 0;
   let settingsVersion = 0;
   if (machine.paired && postgresVoucherStatus().primary) {
     voucherVersion = Number((await readPostgresVoucherSnapshot(machine.boothCode))?.version || 0);
-  } else if (machine.paired) {
+  } else if (machine.paired && redis) {
     voucherVersion = Number(await bestEffortRedis(() => redis.get(`photoslive:booth:${machine.boothCode}:voucher-version`), 0) || 0);
   }
   if (machine.paired && postgresSettingsStatus().primary) {
     settingsVersion = Number((await readPostgresSettings(machine.boothCode))?.version || 0);
-  } else if (machine.paired) {
+  } else if (machine.paired && redis) {
     settingsVersion = Number(await bestEffortRedis(() => redis.get(`photoslive:booth:${machine.boothCode}:settings-version`), 0) || 0);
   }
   machine.protocolVersion = protocolVersion;
   if (postgresStatus.primary) {
     await persistPostgresHeartbeat(machine, tokenHash).catch(() => null);
+    await updatePostgresHelperRuntime({
+      machineId: machine.id,
+      actualState: machine.agentState === "paused" ? "paused" : "online",
+      capabilities: {
+        installed: true,
+        enabled: true,
+        online: true,
+        devices: machine.devices,
+        controller: machine.controller,
+      },
+    }).catch(() => null);
   }
-  await bestEffortRedis(() => redis.set(machineKey(machine.id), machine));
+  if (redis) await bestEffortRedis(() => redis.set(machineKey(machine.id), machine));
   if (postgresStatus.mode === "dual") await persistPostgresHeartbeat(machine, tokenHash).catch(() => null);
   const accessEnabled = machine.accessEnabled !== false;
   const response = {
@@ -991,13 +1148,27 @@ async function dispatch(request) {
       objectStorage: publicObjectStorageStatus(),
       time: now(),
     });
-    const redis = getRedis();
-    if (action === "create_pairing" && request.method === "POST") return json(await createPairing(redis, payload), 201);
-    if (action === "create_web_pairing" && request.method === "POST") return json(await createWebPairing(redis, request, payload), 201);
+    // Browser setup, claim, and station bootstrap use PostgreSQL as their
+    // source of truth. Redis is only an optional compatibility cache here and
+    // must never block a clean machine from becoming a web/PWA photobox.
+    if (action === "create_pairing" && request.method === "POST") return json(await createPairing(optionalRedis(), payload), 201);
+    if (action === "create_web_pairing" && request.method === "POST") {
+      const pairing = await createWebPairing(optionalRedis(), request, payload);
+      const { _stationCredential, ...publicPairing } = pairing;
+      return json(publicPairing, 201, {
+        "set-cookie": stationCookie(request, pairing.machineId, _stationCredential),
+      });
+    }
     if (action === "pairing_status" && request.method === "GET") return inspectPairing(payload);
-    if (action === "claim_pairing" && request.method === "POST") return claimPairing(redis, request, payload);
+    if (action === "claim_pairing" && request.method === "POST") return claimPairing(optionalRedis(), request, payload);
+    if (action === "station_bootstrap" && request.method === "POST") return stationBootstrap(request, payload);
+    if (action === "update_station_capabilities" && request.method === "POST") return updateStationCapabilities(request, payload);
+    if (action === "activate_helper" && request.method === "POST") return activateHelper(payload);
+    if (action === "heartbeat" && request.method === "POST") return heartbeat(optionalRedis(), request, payload);
+    if (action === "settings_snapshot" && request.method === "POST" && postgresSettingsStatus().primary) return settingsSnapshot(optionalRedis(), request, payload);
+    if (action === "voucher_snapshot" && request.method === "POST" && postgresVoucherStatus().primary) return voucherSnapshot(optionalRedis(), request, payload);
+    const redis = getRedis();
     if (action === "create_setup_code" && request.method === "POST") return createSetupCode(redis, request, payload);
-    if (action === "heartbeat" && request.method === "POST") return heartbeat(redis, request, payload);
     if (action === "settings_snapshot" && request.method === "POST") return settingsSnapshot(redis, request, payload);
     if (action === "voucher_snapshot" && request.method === "POST") return voucherSnapshot(redis, request, payload);
     if (action === "sync_voucher_redemptions" && request.method === "POST") return syncVoucherRedemptions(redis, request, payload);

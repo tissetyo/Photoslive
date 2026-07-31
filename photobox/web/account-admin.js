@@ -52,12 +52,25 @@ function machineStatus(machine) {
     : { label: "PERLU DIPERIKSA", className: "machine-card-status off" };
 }
 
+function helperSummary(machine) {
+  const helper = machine?.helper && typeof machine.helper === "object" ? machine.helper : {};
+  const actual = String(helper.actualState || "not_installed");
+  if (actual === "online" && helper.desiredState === "enabled") return "Aktif";
+  if (["online", "offline", "paused", "error"].includes(actual)) {
+    return helper.desiredState === "enabled" ? "Perlu diperiksa" : "Terpasang · nonaktif";
+  }
+  return "Belum dipasang";
+}
+
 function createMachineCard(booth, fallbackMachine = null) {
   const machine = machineById(booth?.machineId) || fallbackMachine || {};
   const status = machineStatus(machine);
   const boothCode = String(booth?.boothCode || "");
   const machineCode = String(machine.machineCode || machine.machine_code || machine.machineId || machine.id || "—");
   const platform = String(machine.platform || machine.os || machine.system || "Belum dilaporkan");
+  const runtimeLabel = machine.installationKind === "helper" || machine.helper?.available
+    ? "Web/PWA + Helper"
+    : "Web/PWA";
   const article = document.createElement("article");
   article.className = "machine-card";
 
@@ -80,7 +93,7 @@ function createMachineCard(booth, fallbackMachine = null) {
 
   const meta = document.createElement("div");
   meta.className = "machine-card-meta";
-  [["KODE MESIN", machineCode], ["SISTEM", platform]].forEach(([key, value]) => {
+  [["KODE MESIN", machineCode], ["RUNTIME", runtimeLabel], ["PHOTOSLIVE HELPER", helperSummary(machine)], ["SISTEM", platform]].forEach(([key, value]) => {
     const block = document.createElement("div");
     const small = document.createElement("span");
     const strong = document.createElement("strong");

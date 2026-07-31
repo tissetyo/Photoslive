@@ -113,7 +113,7 @@ function renderPairingRegistry(machineResult, historyResult) {
         <div><small>OWNER</small><strong title="${escapeHtml(owner.email || "Belum ada")}">${escapeHtml(owner.email || "Belum ada")}</strong><p>${escapeHtml(owner.adminCode || "Admin code —")}</p></div>
         <div><small>ORGANIZATION</small><strong title="${escapeHtml(machine.organizationId || "Belum dimiliki")}">${escapeHtml(machine.organizationName || "Belum dimiliki")}</strong><p>${escapeHtml(machine.organizationId || "—")}</p></div>
         <div><small>PHOTOBOX</small><strong>${escapeHtml(booth.name || "Belum dibuat")}</strong><p>${escapeHtml(booth.boothCode || "—")} · ${escapeHtml(booth.location || "Lokasi belum diisi")}</p></div>
-        <div><small>PERANGKAT</small><strong>${escapeHtml(machine.platform || "Platform —")}</strong><p>Agent ${escapeHtml(machine.agentVersion || "—")} · ${escapeHtml(formatTime(machine.lastSeenAt))}</p></div>
+        <div><small>PERANGKAT</small><strong>${escapeHtml(machine.platform || "Browser station")}</strong><p>Helper ${escapeHtml(machine.agentVersion || "belum dipasang")} · ${escapeHtml(formatTime(machine.lastSeenAt))}</p></div>
       </div>${actions}
     </article>`;
   }).join("") : '<p class="empty">Belum ada mesin pada registry PostgreSQL.</p>';
@@ -888,7 +888,9 @@ function renderOverview(machines, resetRequests) {
   $("#metric-reset").textContent = resetRequests.filter(request => request.status === "pending").length;
   $("#machine-rows").innerHTML = machines.length ? machines.map(machine => {
     const health = healthLabel(machine.health?.state);
-    const controllerOnline = machine.controllerState === "online";
+    const helper = machine.helper && typeof machine.helper === "object" ? machine.helper : {};
+    const helperInstalled = machine.installationKind === "helper" || helper.available === true || ["online", "offline", "paused", "error"].includes(String(helper.actualState || ""));
+    const controllerOnline = helperInstalled && machine.controllerState === "online";
     const memory = machine.telemetry?.memory;
     const disk = machine.telemetry?.disk;
     const usedMemory = memory?.totalBytes && memory?.availableBytes ? Math.max(0, memory.totalBytes - memory.availableBytes) : 0;
@@ -899,12 +901,14 @@ function renderOverview(machines, resetRequests) {
     const backupDetail = backup?.latestAt ? `${formatTime(backup.latestAt)} · ${Number(backup.count || 0)} salinan` : "Belum ada backup terverifikasi";
     const restoreDetail = backup?.restoreStatus === "completed" ? `Restore selesai ${formatTime(backup.restoreAt)}` : backup?.restoreStatus === "failed" ? `Restore gagal ${formatTime(backup.restoreAt)}` : "Restore belum pernah";
     const update = machine.update || {};
-    const updateState = update.state || "unknown";
+    const updateState = helperInstalled ? (update.state || "unknown") : "not-installed";
     const updateClass = ["current", "restart-required", "rolled-back"].includes(updateState) ? "" : updateState === "ready" ? "warn" : ["failed", "unavailable"].includes(updateState) ? "off" : "warn";
-    const updateLabel = ({ current: "TERBARU", ready: "TERSEDIA", checking: "MEMERIKSA", downloading: "MENGUNDUH", installing: "MEMASANG", "restart-required": "RESTART", "rolled-back": "DIPULIHKAN", failed: "GAGAL", unavailable: "OFFLINE" })[updateState] || "BELUM ADA";
-    const updateDetail = update.availableVersion ? `${update.currentVersion || machine.agentVersion || "—"} → ${update.availableVersion}` : update.currentVersion || machine.agentVersion || "—";
+    const updateLabel = ({ current: "TERBARU", ready: "TERSEDIA", checking: "MEMERIKSA", downloading: "MENGUNDUH", installing: "MEMASANG", "restart-required": "RESTART", "rolled-back": "DIPULIHKAN", failed: "GAGAL", unavailable: "OFFLINE", "not-installed": "OPSIONAL" })[updateState] || "BELUM ADA";
+    const updateDetail = helperInstalled
+      ? (update.availableVersion ? `${update.currentVersion || machine.agentVersion || "—"} → ${update.availableVersion}` : update.currentVersion || machine.agentVersion || "—")
+      : "Photoslive Helper belum dipasang";
     const accessControl = can("platform.access.write") ? `<button class="btn ${machine.enabled ? "danger" : ""}" data-machine="${escapeHtml(machine.machineId)}" data-enabled="${!machine.enabled}">${machine.enabled ? "Matikan" : "Aktifkan"}</button>` : `<span class="pill ${machine.enabled ? "" : "off"}">${machine.enabled ? "AKTIF" : "NONAKTIF"}</span>`;
-    return `<tr><td><b>${escapeHtml(machine.name)}</b><br><small>${escapeHtml(machine.location || "Lokasi belum diisi")} · /${escapeHtml(machine.boothCode)}</small></td><td><span class="pill ${health.className}">${health.label}</span></td><td><span class="pill ${controllerOnline ? "" : "off"}">${controllerOnline ? "ONLINE" : "OFFLINE"}</span></td><td>${escapeHtml(formatTime(machine.lastSeenAt))}</td><td>${system}</td><td><span class="pill ${backupClass}">${backupLabel}</span><br><small>${escapeHtml(backupDetail)}<br>${escapeHtml(restoreDetail)}</small></td><td><span class="pill ${updateClass}">${updateLabel}</span><br><small>${escapeHtml(updateDetail)}<br>${escapeHtml(machine.platform || machine.agentState || "—")}</small></td><td>${accessControl}</td><td><a class="btn" href="/${escapeHtml(machine.boothCode)}/admin">Admin</a></td></tr>`;
+    return `<tr><td><b>${escapeHtml(machine.name)}</b><br><small>${escapeHtml(machine.location || "Lokasi belum diisi")} · /${escapeHtml(machine.boothCode)}</small></td><td><span class="pill ${health.className}">${health.label}</span></td><td><span class="pill ${helperInstalled ? (controllerOnline ? "" : "off") : "warn"}">${helperInstalled ? (controllerOnline ? "ONLINE" : "OFFLINE") : "WEB/PWA"}</span></td><td>${escapeHtml(formatTime(machine.lastSeenAt))}</td><td>${system}</td><td><span class="pill ${backupClass}">${backupLabel}</span><br><small>${escapeHtml(backupDetail)}<br>${escapeHtml(restoreDetail)}</small></td><td><span class="pill ${updateClass}">${updateLabel}</span><br><small>${escapeHtml(updateDetail)}<br>${escapeHtml(machine.platform || "Browser station")}</small></td><td>${accessControl}</td><td><a class="btn" href="/${escapeHtml(machine.boothCode)}/admin">Admin</a></td></tr>`;
   }).join("") : '<tr><td colspan="9" class="empty">Belum ada mesin.</td></tr>';
   const memberships = machines.flatMap(machine => (Array.isArray(machine.members) ? machine.members : []).map(member => ({ ...member, boothCode: machine.boothCode, boothName: machine.name })));
   $("#member-rows").innerHTML = memberships.length ? memberships.map(member => {
@@ -944,9 +948,9 @@ function renderTelemetryHistory(result) {
   const machine = result.machine?.name || "Photobox";
   $("#telemetry-history-summary").textContent = `${machine} · ${summary.samples || 0} snapshot · ${result.rangeHours || 24} jam`;
   if (!records.length) {
-    $("#telemetry-chart").innerHTML = '<div class="empty">Belum ada snapshot pada rentang ini. Agent akan menambahkan data maksimal setiap 5 menit.</div>';
+    $("#telemetry-chart").innerHTML = '<div class="empty">Belum ada snapshot pada rentang ini. Photoslive Helper akan menambahkan data ketika terpasang dan aktif.</div>';
     $("#telemetry-chart").setAttribute("aria-label", `Belum ada histori telemetry untuk ${machine}`);
-    return setStatus("#telemetry-history-status", "Belum ada data. Heartbeat Agent tetap berjalan tanpa menunggu halaman ini.");
+    return setStatus("#telemetry-history-status", "Belum ada data. Heartbeat Photoslive Helper tetap berjalan tanpa menunggu halaman ini.");
   }
   const disk = telemetryPoints(records, "disk");
   const memory = telemetryPoints(records, "memory");
@@ -1020,7 +1024,7 @@ function renderFleetHealth(health) {
     const open = incident.status === "open";
     const status = incident.status === "resolved" ? "PULIH" : incident.status === "acknowledged" ? "DIAKUI" : "BARU";
     const statusClass = incident.status === "resolved" ? "" : incident.status === "acknowledged" ? "warn" : "off";
-    return `<tr><td><b>${escapeHtml(incident.machineName)}</b><br><small>/${escapeHtml(incident.boothCode || "—")}</small></td><td>Agent offline<br><small>Heartbeat terakhir: ${escapeHtml(formatTime(incident.lastSeenAt))}</small></td><td>${escapeHtml(formatTime(incident.openedAt))}</td><td><span class="pill ${statusClass}">${status}</span></td><td>${open && can("platform.fleet.write") ? `<button class="btn" data-incident="${escapeHtml(incident.id)}">Akui</button>` : "—"}</td></tr>`;
+    return `<tr><td><b>${escapeHtml(incident.machineName)}</b><br><small>/${escapeHtml(incident.boothCode || "—")}</small></td><td>Helper offline<br><small>Heartbeat terakhir: ${escapeHtml(formatTime(incident.lastSeenAt))}</small></td><td>${escapeHtml(formatTime(incident.openedAt))}</td><td><span class="pill ${statusClass}">${status}</span></td><td>${open && can("platform.fleet.write") ? `<button class="btn" data-incident="${escapeHtml(incident.id)}">Akui</button>` : "—"}</td></tr>`;
   }).join("") : '<tr><td colspan="5" class="empty">Tidak ada insiden. Semua heartbeat yang diterima berada dalam batas aman.</td></tr>';
   setStatus("#health-status", `Diperiksa ${formatTime(health.checkedAt)}`, true);
 }
@@ -1035,7 +1039,7 @@ async function refreshFleetHealth() {
   if (state.healthLoading) return;
   state.healthLoading = true;
   $("#health-retry").disabled = true;
-  setStatus("#health-status", "Memeriksa heartbeat Agent…");
+  setStatus("#health-status", "Memeriksa heartbeat Photoslive Helper…");
   try { renderFleetHealth(await api("fleet_health")); }
   catch (error) { renderFleetHealthError(error); }
   finally { state.healthLoading = false; $("#health-retry").disabled = false; }
@@ -1059,10 +1063,10 @@ function renderAlertRouting(result) {
   $("#alert-routing-summary").textContent = `${summary.queued || 0} menunggu · ${summary.delivered || 0} terkirim · ${summary.failed || 0} gagal`;
   $("#alert-routing-rows").innerHTML = state.alertDeliveries.length ? state.alertDeliveries.map(delivery => {
     const status = alertDeliveryStatus(delivery.status);
-    const eventLabel = delivery.eventType === "fleet.incident.resolved" ? "Agent pulih" : "Agent offline";
+    const eventLabel = delivery.eventType === "fleet.incident.resolved" ? "Helper pulih" : "Helper offline";
     const retryable = ["failed", "retry", "waiting_configuration"].includes(delivery.status) && can("platform.fleet.write");
     return `<tr><td>${escapeHtml(formatTime(delivery.createdAt))}</td><td><b>${escapeHtml(eventLabel)}</b><br><small>${escapeHtml(delivery.eventType)}</small></td><td><b>${escapeHtml(delivery.machineName)}</b><br><small>/${escapeHtml(delivery.boothCode || "—")}</small></td><td><span class="pill ${status.className}">${status.label}</span></td><td>${escapeHtml(delivery.attempts)}</td><td>${escapeHtml(delivery.lastError || "—")}</td><td>${retryable ? `<button class="btn" type="button" data-retry-alert="${escapeHtml(delivery.id)}">Coba lagi</button>` : "—"}</td></tr>`;
-  }).join("") : '<tr><td colspan="7" class="empty">Belum ada delivery alert. Insiden Agent offline akan masuk otomatis.</td></tr>';
+  }).join("") : '<tr><td colspan="7" class="empty">Belum ada delivery alert. Insiden Helper offline akan masuk otomatis.</td></tr>';
   setStatus("#alert-routing-status", `Diperbarui ${formatTime(result.checkedAt || new Date().toISOString())}`, true);
   $("#alert-routing-process").disabled = state.alertProcessing || !can("platform.fleet.write");
 }
@@ -1179,7 +1183,7 @@ function remoteJobStatus(value) {
 }
 
 function remoteJobLabel(value) {
-  return ({ "devices.refresh": "Periksa perangkat", "service.restart": "Restart Controller", "agent.update.check": "Periksa update Agent", "agent.update.apply": "Pasang update Agent", "agent.update.rollback": "Rollback Agent" })[value] || value;
+  return ({ "devices.refresh": "Periksa perangkat", "service.restart": "Restart Controller", "agent.update.check": "Periksa update Helper", "agent.update.apply": "Pasang update Helper", "agent.update.rollback": "Rollback Helper" })[value] || value;
 }
 
 function renderRemoteJobs(result) {
@@ -2187,8 +2191,8 @@ $("#remote-job-form").addEventListener("submit", async event => {
   const type = $("#remote-job-type").value;
   if (!machineId) return setStatus("#remote-jobs-status", "Pilih photobox terlebih dahulu.");
   if (type === "service.restart" && !confirm("Restart Controller photobox ini? Booth dapat tidak merespons selama beberapa detik.")) return;
-  if (type === "agent.update.apply" && !confirm("Pasang update Agent yang sudah diverifikasi pada photobox ini? Booth lokal tetap berjalan, tetapi Agent perlu restart setelah instalasi.")) return;
-  if (type === "agent.update.rollback" && !confirm("Rollback Agent photobox ini ke backup update terakhir? Foto dan database sesi tidak diubah.")) return;
+  if (type === "agent.update.apply" && !confirm("Pasang update Photoslive Helper yang sudah diverifikasi pada photobox ini? Booth web tetap dapat digunakan saat Helper restart.")) return;
+  if (type === "agent.update.rollback" && !confirm("Rollback Photoslive Helper ke backup update terakhir? Foto dan database sesi tidak diubah.")) return;
   state.remoteJobSending = true;
   syncRemoteJobForm();
   setStatus("#remote-jobs-status", "Mengirim perintah aman ke antrean…");

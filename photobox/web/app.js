@@ -1,11 +1,11 @@
-const state = { settings: null, status: null, authBooth: null, runtimeMode: "agent", assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, platformFrames: [], platformFramePage: 1, platformFrameLoading: false, dirtySections: new Set(), pendingSettingsSave: null, pendingVoucherGenerations: new Map(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, cleanupPreview: null, pendingFrameUpload: null };
+const state = { settings: null, status: null, authBooth: null, runtimeMode: "browser", runtime: { mode: "browser", installationKind: "browser", hardwareBridgeAvailable: false, capabilities: { helper: { installed: false, enabled: false, online: false, active: false } } }, assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, platformFrames: [], platformFramePage: 1, platformFrameLoading: false, dirtySections: new Set(), pendingSettingsSave: null, pendingVoucherGenerations: new Map(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, cleanupPreview: null, pendingFrameUpload: null };
 const adminBoothCode = new URLSearchParams(location.search).get("booth") || location.pathname.split("/").filter(Boolean)[0] || localStorage.getItem("photoslive.boothCode") || "";
 const titles = {
   overview: ["Kondisi photobox", "Mesin / Ringkasan", "Lihat apakah mesin siap dipakai dan periksa jika ada masalah."],
   content: ["Tampilan photobox", "Pengaturan / Tampilan", "Atur logo, background, frame, teks, font, dan warna yang dilihat pelanggan."],
   access: ["Sesi & pembayaran", "Pengaturan / Sesi dan pembayaran", "Atur waktu sesi, harga, QRIS, dan voucher."],
   devices: ["Kamera & printer", "Mesin / Kamera dan printer", "Sambungkan, pilih, dan periksa perangkat yang akan digunakan."],
-  agent: ["Mesin & koneksi", "Mesin / Mesin dan koneksi", "Periksa layanan lokal, perangkat, sinkronisasi, dan kondisi komputer photobox."],
+  agent: ["Photoslive Helper", "Mesin / Photoslive Helper", "Aktifkan fitur tambahan seperti silent print, DSLR, folder lokal, autostart, dan offline penuh."],
   storage: ["Penyimpanan foto", "Mesin / Penyimpanan", "Atur penghapusan foto lokal dan tujuan upload cloud."],
   integrations: ["Integrasi", "Cloud / Integrasi", "Lihat layanan yang terhubung ke photobox dan periksa koneksinya."],
   finance: ["Finance", "Pembayaran / Finance", "Lihat saldo dan ledger photobox tanpa mengubah payout atau fee."],
@@ -139,15 +139,84 @@ async function api(path, options = {}) {
 
 function isCloudDataPath(path) {
   const pathname = String(path).split("?")[0];
-  return pathname === "/api/settings" || pathname.startsWith("/api/settings/") || pathname === "/api/assets" || pathname.startsWith("/api/assets/") || pathname === "/api/vouchers" || pathname === "/api/vouchers/generate" || pathname.startsWith("/api/vouchers/") || pathname === "/api/voucher-events";
+  return pathname === "/api/settings" || pathname.startsWith("/api/settings/") || pathname === "/api/helper/state" || pathname === "/api/assets" || pathname.startsWith("/api/assets/") || pathname === "/api/vouchers" || pathname === "/api/vouchers/generate" || pathname.startsWith("/api/vouchers/") || pathname === "/api/voucher-events";
 }
 
 const isProductionHost = () => location.hostname !== "127.0.0.1" && location.hostname !== "localhost";
-const isWebRuntime = () => state.runtimeMode === "web";
+const isHelperActive = () => state.runtime?.capabilities?.helper?.active === true && state.runtime?.hardwareBridgeAvailable === true;
+const isWebRuntime = () => !isHelperActive();
+function runtimeFromBooth(booth = {}) {
+  const helper = booth.helper && typeof booth.helper === "object" ? booth.helper : {};
+  const helperInstalled = helper.available === true || ["online", "offline", "paused", "error"].includes(String(helper.actualState || ""));
+  const helperActive = helper.desiredState === "enabled" && helper.actualState === "online";
+  return {
+    mode: "browser",
+    installationKind: booth.installationKind === "helper" ? "helper" : "browser",
+    hardwareBridgeAvailable: helperActive,
+    machineId: booth.machineId || "",
+    capabilities: {
+      camera: { source: "browser", available: true, ...(booth.capabilities?.camera || {}) },
+      print: { mode: "dialog", available: true, silent: false, ...(booth.capabilities?.print || {}) },
+      helper: { installed: helperInstalled, enabled: helper.desiredState === "enabled", online: helper.actualState === "online", active: helperActive, actualState: helper.actualState || "not_installed" },
+    },
+  };
+}
 const directObjectUploadEnabled = () => state.settings?.featureFlags?.direct_object_upload?.enabled !== false;
 const assetUploadLimit = () => isProductionHost() ? Number(state.settings?.capabilities?.cloudStorage?.available && directObjectUploadEnabled() ? 25_000_000 : 2_000_000) : 10 * 1024 * 1024;
 const assetUploadLimitLabel = () => `${Math.round(assetUploadLimit() / 1_000_000)} MB`;
 const isUploadedAssetUrl = url => String(url || "").startsWith("/uploads/") || String(url || "").includes("action=cloud_asset");
+
+function renderHelperControls() {
+  const helper = state.runtime?.capabilities?.helper || {};
+  const toggle = $("#helper-enabled-toggle");
+  if (toggle) {
+    toggle.checked = helper.enabled === true;
+    toggle.disabled = false;
+  }
+  const labels = {
+    online: "HELPER SIAP",
+    offline: "HELPER OFFLINE",
+    paused: "HELPER DIJEDA",
+    error: "PERLU DIPERIKSA",
+    not_installed: helper.enabled ? "BELUM TERPASANG" : "WEB/PWA",
+  };
+  setText("#helper-capability-state", labels[helper.actualState] || (helper.active ? "HELPER SIAP" : "WEB/PWA"));
+  setText("#helper-toggle-detail", helper.active
+    ? "Helper aktif. Silent print, perangkat lokal, dan offline penuh tersedia."
+    : helper.enabled
+      ? "Helper diaktifkan, tetapi belum online. Photobox tetap berjalan lewat web."
+      : "Photobox tetap berjalan lewat web bila dinonaktifkan.");
+  document.body.dataset.helperActive = String(helper.active === true);
+}
+
+async function setHelperEnabled(event) {
+  const toggle = event.currentTarget;
+  const enabled = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const result = await api("/api/helper/state", {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    });
+    state.runtime = result.runtime || runtimeFromBooth({ helper: result.helper });
+    document.body.dataset.runtimeMode = isHelperActive() ? "helper" : "browser";
+    renderHelperControls();
+    applyCapabilityGates();
+    if (enabled && !state.runtime?.capabilities?.helper?.installed) {
+      $("#helper-enable-card").open = true;
+      toast("Helper diaktifkan. Pilih installer sesuai komputer photobox.");
+      showView("agent");
+    } else {
+      toast(enabled ? "Photoslive Helper diaktifkan" : "Photobox kembali memakai fitur browser");
+    }
+  } catch (error) {
+    toggle.checked = !enabled;
+    toast(`Status Helper belum dapat diubah: ${error.message}`, "error");
+  } finally {
+    toggle.disabled = false;
+  }
+}
 
 async function cloudDataApi(path, options = {}) {
   let data = {};
@@ -212,8 +281,8 @@ async function cloudControllerApi(path, options = {}) {
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
   }
   if (!machineId) throw new Error("Mesin photobox belum terdaftar. Selesaikan setup dari komputer photobox.");
-  if (String(machineId).startsWith("web_")) {
-    throw new Error("Aksi ini memerlukan Photoslive Agent. Photobox tetap dapat dipakai dalam mode web tanpa menunggu mesin.");
+  if (!isHelperActive()) {
+    throw new Error("Aksi ini memerlukan Photoslive Helper aktif. Photobox tetap dapat dipakai melalui kamera dan dialog cetak browser.");
   }
   let requestBody = null;
   let bodyBase64 = null;
@@ -344,6 +413,45 @@ async function platformApi(action, options = {}) {
     throw error;
   }
   return payload;
+}
+
+function helperInstallerSource(os, bootstrapToken) {
+  const token = String(bootstrapToken || "").replace(/[^A-Za-z0-9]/g, "");
+  if (!token) throw new Error("Token pemasangan Helper tidak tersedia");
+  if (os === "windows") return `$ErrorActionPreference = "Stop"\n$env:PHOTOSLIVE_HELPER_BOOTSTRAP = "${token}"\n$installer = Join-Path $env:TEMP "photoslive-helper-installer.ps1"\nInvoke-WebRequest -Uri "https://photoslive.vercel.app/downloads/install-windows.ps1" -OutFile $installer\n& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer\nif ($LASTEXITCODE -ne 0) { throw "Pemasangan Photoslive Helper gagal." }\n`;
+  const installer = os === "macos" ? "install-macos.sh" : "install-linux.sh";
+  return `#!/usr/bin/env bash\nset -euo pipefail\nexport PHOTOSLIVE_HELPER_BOOTSTRAP='${token}'\ncurl --fail --location --retry 5 --retry-delay 3 --retry-all-errors 'https://photoslive.vercel.app/downloads/${installer}' | bash\n`;
+}
+
+async function downloadHelperInstaller(button) {
+  const os = button.dataset.helperInstaller;
+  const allButtons = $$('[data-helper-installer]');
+  allButtons.forEach(item => { item.disabled = true; });
+  setText("#helper-installer-status", "Menyiapkan installer aman untuk photobox ini…");
+  try {
+    const result = await platformApi("create_helper_bootstrap", {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({ booth: adminBoothCode }),
+    });
+    const source = helperInstallerSource(os, result.bootstrapToken);
+    const extension = os === "windows" ? "ps1" : os === "macos" ? "command" : "sh";
+    const blob = new Blob([source], { type: "text/plain;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `install-photoslive-helper-${adminBoothCode}.${extension}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    setText("#helper-installer-status", `Installer ${os === "macos" ? "macOS" : os === "windows" ? "Windows" : "Linux"} siap. Jalankan pada komputer photobox ini dalam 15 menit.`);
+    toast("Installer Helper berhasil dibuat untuk photobox ini");
+  } catch (error) {
+    setText("#helper-installer-status", `Installer belum dapat dibuat: ${error.message}`);
+    toast(error.message, "error");
+  } finally {
+    allButtons.forEach(item => { item.disabled = false; });
+  }
 }
 
 const PLATFORM_FRAME_PAGE_SIZE = 10;
@@ -739,6 +847,7 @@ function hydrateSettings() {
   updatePreview();
   updateAdminSettingSummaries();
   updateDependentControls();
+  renderHelperControls();
   simplifyAdminLayout();
 }
 
@@ -1521,7 +1630,7 @@ function renderStatus(status) {
 async function refreshStatus(notify = false) {
   if (isWebRuntime()) {
     renderWebRuntimeStatus();
-    if (notify) toast("Mode web aktif. Tidak ada koneksi Agent yang perlu diperiksa.");
+    if (notify) toast("Photobox web siap. Photoslive Helper tidak diperlukan untuk operasi dasar.");
     return;
   }
   try { renderStatus(await api("/api/overview")); if ($("#storage-view")?.classList.contains("active")) await loadStorageData(notify); if (notify) toast("Data mesin berhasil diperbarui"); }
@@ -1533,28 +1642,32 @@ function renderWebRuntimeStatus() {
   if (banner) {
     banner.classList.remove("attention");
     $(".readiness-mark img", banner).src = "/icons/circle-check.svg";
-    $("strong", banner).textContent = "Photobox mode web siap";
+    $("strong", banner).textContent = "Photobox web siap";
     $("p", banner).textContent = "Pengaturan cloud aktif. Kamera diperiksa saat layar booth dibuka; cetak menggunakan dialog browser.";
   }
-  setText("#overall-status", "MODE WEB");
-  setText("#last-refresh", "Tidak memerlukan koneksi Agent");
-  setText("#sidebar-uptime", "Mode web");
-  setText("#system-uptime-summary", "Mode web");
+  setText("#overall-status", "WEB SIAP");
+  setText("#last-refresh", "Helper opsional");
+  setText("#sidebar-uptime", "Web siap");
+  setText("#system-uptime-summary", "Web/PWA");
   setText("#system-network-summary", navigator.onLine ? "Online" : "Offline");
   setText("#system-network-detail", navigator.onLine ? "Website terhubung ke cloud" : "Sambungkan internet untuk sinkronisasi cloud");
-  const agentDetail = "Install Photoslive Agent hanya jika membutuhkan silent print, kamera profesional, folder lokal, atau monitoring perangkat.";
-  setViewCapabilityState("agent", false, {
-    icon: "monitor",
-    title: "Photobox berjalan dalam mode web",
-    detail: agentDetail,
-  });
-  setViewCapabilityState("storage", false, {
-    icon: "hard-drive",
-    title: "Penyimpanan dikelola browser dan cloud",
-    detail: "Folder lokal dan antrean upload terkelola tersedia setelah Photoslive Agent diaktifkan.",
-  });
+  setViewCapabilityState("agent", true);
+  setViewCapabilityState("storage", true);
   const operationStatus = $("#agent-operation-status");
-  if (operationStatus) operationStatus.textContent = "Mode web aktif. Admin tidak mengirim perintah atau polling ke Agent.";
+  if (operationStatus) operationStatus.textContent = "Web/PWA aktif. Tidak ada polling perangkat sampai Photoslive Helper diaktifkan.";
+  setText("#device-camera-status", "Kamera web");
+  setText("#device-camera-name", "Diperiksa saat layar booth dibuka");
+  setText("#device-printer-status", "Dialog browser");
+  setText("#device-printer-name", "Pemilihan printer dilakukan saat mencetak");
+  setText("#device-connected-count", "WEB/PWA");
+  const scan = $("#scan-devices");
+  if (scan) { scan.disabled = true; scan.title = "Browser memeriksa kamera saat booth dibuka. Deteksi printer penuh memerlukan Helper."; }
+  ["#test-camera", "#toggle-camera-preview", "#test-printer", "#print-test-page"].forEach(selector => {
+    const button = $(selector);
+    if (button) { button.disabled = true; button.title = "Tes ini dijalankan dari komputer photobox atau melalui Photoslive Helper."; }
+  });
+  $$('[data-agent-job]').forEach(button => { button.disabled = true; });
+  renderHelperControls();
 }
 
 function renderStorageData(overview, sessions) {
@@ -1866,6 +1979,8 @@ function bindEvents() {
   document.addEventListener("input", event => { if (event.target.matches("[data-setting]")) markSetting(event.target); });
   document.addEventListener("change", event => { if (event.target.matches("[data-setting]")) markSetting(event.target); });
   $("#save-button").addEventListener("click", saveSettings);
+  $("#helper-enabled-toggle").addEventListener("change", setHelperEnabled);
+  $$('[data-helper-installer]').forEach(button => button.addEventListener("click", () => downloadHelperInstaller(button)));
   $("#pick-storage-folder").addEventListener("click", pickStorageFolder);
   $("#refresh-button").addEventListener("click", () => refreshStatus(true));
   $("#refresh-audit").addEventListener("click", loadAuditLog);
@@ -2094,7 +2209,8 @@ async function boot() {
   }
   state.authBooth = ownedBooth || legacyBooth || auth.booth || null;
   const routeMachineId = state.authBooth?.machineId || "";
-  state.runtimeMode = String(routeMachineId).startsWith("web_") ? "web" : "agent";
+  state.runtime = runtimeFromBooth(state.authBooth || {});
+  state.runtimeMode = "browser";
   document.body.dataset.runtimeMode = state.runtimeMode;
   // Render the truthful web-only state before any optional cloud section
   // loads. A voucher/assets failure must never leave the dashboard stuck on
@@ -2111,6 +2227,8 @@ async function boot() {
   if (requestedView && titles[requestedView]) showView(requestedView);
   try {
     state.settings = await api("/api/settings");
+    if (state.settings.runtime) state.runtime = state.settings.runtime;
+    document.body.dataset.runtimeMode = isHelperActive() ? "helper" : "browser";
     hydrateSettings();
     applyCapabilityGates();
     updatePreview();

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "photoslive-shell-v6";
+const CACHE_VERSION = "photoslive-shell-v8";
 const APP_SHELL = [
   "/booth.html",
   "/booth.css?v=2",
@@ -27,10 +27,10 @@ self.addEventListener("activate", event => {
 });
 
 function offlineNavigation(pathname) {
-  if (pathname === "/setup") return "/setup.html";
+  if (pathname === "/setup" || pathname === "/station") return "/setup.html";
   if (pathname === "/booth" || pathname === "/kiosk") return "/booth.html";
   const segments = pathname.split("/").filter(Boolean);
-  if (segments.length === 1 && !["superadmin", "local-agent", "session"].includes(segments[0])) return "/booth.html";
+  if (segments.length === 1 && !["setup", "station", "admin", "account-admin", "superadmin", "local-agent", "session"].includes(segments[0])) return "/booth.html";
   return null;
 }
 

@@ -155,6 +155,11 @@
 .qr-refresh-button img { width: 16px; height: 16px; filter: invert(1); }
 
 .station-ready-state { display: grid; gap: 18px; }
+.station-ready-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.station-ready-actions .btn { min-height: 48px; }
+.station-ready-actions .btn img { width: 17px; height: 17px; }
+.station-ready-actions .btn.primary img { filter: invert(1); }
+.station-ready-help { margin: 0; padding: 12px 14px; border: 1px solid #dfe2e9; border-radius: 7px; background: #f8f9fc; color: #626976; font-size: 12px; line-height: 1.5; }
 .station-mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .station-mode-card {
   position: relative;

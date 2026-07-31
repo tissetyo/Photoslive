@@ -31,7 +31,7 @@ import { expirePostgresSession, persistPostgresSession, postgresSessionStatus, r
 import { deletePostgresAsset, persistPostgresAsset, postgresAssetStatus, readPostgresAssets, requestPostgresAssetDeletion } from "./_postgres_assets.mjs";
 import { markPostgresMachinePaired, postgresMachineStatus, readPostgresPairing } from "./_postgres_machines.mjs";
 import { listPostgresAdminUsers, persistPostgresAdminUser, postgresUsersStatus, readPostgresAdminUserByEmail, readPostgresAdminUserById } from "./_postgres_users.mjs";
-import { bootstrapPostgresAccount, listPostgresFleet, listPostgresPairingHistory, postgresAccountsStatus, readPostgresAccount, reassignPostgresMachine, revokePostgresMachine } from "./_postgres_accounts.mjs";
+import { bootstrapPostgresAccount, createPostgresHelperBootstrap, listPostgresFleet, listPostgresPairingHistory, postgresAccountsStatus, readPostgresAccount, readPostgresMachineRuntime, reassignPostgresMachine, revokePostgresMachine, setPostgresHelperDesiredState } from "./_postgres_accounts.mjs";
 import { loginSupabaseUser, logoutSupabaseUser, refreshSupabaseSession, registerSupabaseUser, supabaseAuthStatus, updateSupabaseUser } from "./_supabase_auth.mjs";
 
 const encoder = new TextEncoder();
@@ -50,6 +50,14 @@ async function bestEffortRedis(operation, fallback = null) {
   } catch (error) {
     if (!isUpstashMaxRequestsError(error)) throw error;
     return fallback;
+  }
+}
+
+function optionalRedis() {
+  try {
+    return getRedis();
+  } catch {
+    return null;
   }
 }
 
@@ -78,6 +86,41 @@ async function deploymentCapabilitiesForBooth(redis, booth) {
     if (!isUpstashMaxRequestsError(error)) throw error;
   }
   return deploymentCapabilities({ ...process.env, ...(storage?.environment || {}), ...(qris?.environment || {}) });
+}
+
+function runtimeForBooth(booth) {
+  const helper = booth?.helper && typeof booth.helper === "object"
+    ? booth.helper
+    : { desiredState: "disabled", actualState: "not_installed", available: false };
+  const helperInstalled = helper.available === true || ["online", "offline", "paused", "error"].includes(String(helper.actualState || ""));
+  const helperActive = helper.desiredState === "enabled" && helper.actualState === "online";
+  const reported = booth?.capabilities && typeof booth.capabilities === "object" ? booth.capabilities : {};
+  const helperCamera = helperActive && reported.camera?.source === "helper"
+    ? { ...reported.camera, source: "helper", available: reported.camera.available !== false }
+    : { source: "browser", available: true };
+  const helperPrint = helperActive && reported.print?.mode === "helper"
+    ? { ...reported.print, mode: "helper", available: reported.print.available !== false, silent: reported.print.silent === true }
+    : { mode: "dialog", available: true, silent: false };
+  return {
+    mode: "browser",
+    installationKind: booth?.installationKind === "helper" ? "helper" : "browser",
+    hardwareBridgeAvailable: helperActive,
+    machineId: booth?.machineId || "",
+    capabilities: {
+      camera: helperCamera,
+      print: helperPrint,
+      helper: {
+        installed: helperInstalled,
+        enabled: helper.desiredState === "enabled",
+        online: helper.actualState === "online",
+        active: helperActive,
+        actualState: helper.actualState || "not_installed",
+      },
+      dslr: { ...(reported.dslr || {}), available: helperActive && reported.dslr?.available === true },
+      managedLocalStorage: { ...(reported.managedLocalStorage || {}), available: helperActive && reported.managedLocalStorage?.available === true },
+      fullOffline: { ...(reported.fullOffline || {}), available: helperActive && reported.fullOffline?.available === true },
+    },
+  };
 }
 
 function cookieMap(request) {
@@ -233,6 +276,7 @@ async function authenticate(redis, request) {
   }
   const [id, supplied] = token.split(".");
   if (!id || !supplied || supplied !== await signature(id)) return null;
+  if (!redis) return null;
   let session = null;
   try {
     session = await redis.get(sessionKey(id));
@@ -264,7 +308,7 @@ export async function logout(redis, request) {
   if (auth?.authProvider === "supabase" && auth.accessToken) {
     await logoutSupabaseUser(auth.accessToken).catch(() => null);
   }
-  if (auth?.id) {
+  if (redis && auth?.id) {
     await redisBestEffort(() => redis.del(sessionKey(auth.id)));
     if (auth.userId) await redisBestEffort(() => redis.srem(userSessionIndexKey(auth.userId), auth.id));
   }
@@ -458,6 +502,55 @@ async function requireBoothAdmin(redis, request, requestedCode) {
     };
   }
   return null;
+}
+
+async function requirePostgresBoothAdmin(request, requestedCode) {
+  const auth = await authenticate(null, request);
+  if (!auth?.authUserId || auth.authProvider !== "supabase") return null;
+  const account = await readPostgresAccount(auth.authUserId);
+  const boothCode = normalizeCode(requestedCode);
+  const booth = account?.booths?.find(item => normalizeCode(item.boothCode) === boothCode);
+  if (!account || !booth?.machineId) return null;
+  const runtime = await readPostgresMachineRuntime(booth.machineId);
+  return {
+    auth: { ...auth, role: account.role, boothCode, organizationId: account.organizationId },
+    account,
+    booth: {
+      ...booth,
+      boothCode,
+      machineId: booth.machineId,
+      organizationId: account.organizationId,
+      helper: runtime?.helper || null,
+      installationKind: runtime?.installationKind || "browser",
+    },
+  };
+}
+
+async function createHelperBootstrapControl(request, payload = {}, correlationId = "") {
+  if (request.method !== "POST") return json({ error: "Metode bootstrap Helper tidak didukung" }, 405);
+  const access = await requirePostgresBoothAdmin(request, payload.booth);
+  if (!access || !["owner", "admin"].includes(access.auth.role)) {
+    return json({ error: "Hanya owner atau admin booth yang dapat memasang Photoslive Helper" }, 403);
+  }
+  const token = `${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+  const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+  const result = await createPostgresHelperBootstrap({
+    machineId: access.booth.machineId,
+    organizationId: access.account.organizationId,
+    tokenHash: await sha256(token),
+    expiresAt,
+  });
+  if (!result.ok) return json({ error: result.reason || "Bootstrap Photoslive Helper gagal dibuat" }, Number(result.status || 503));
+  await appendAudit(optionalRedis(), access.auth, access.booth.boothCode, "helper.bootstrap_created", access.booth.machineId, {
+    expiresAt,
+    installationKind: "helper",
+  }, correlationId);
+  return json({
+    bootstrapToken: token,
+    expiresAt,
+    boothCode: access.booth.boothCode,
+    machineId: access.booth.machineId,
+  }, 201);
 }
 
 async function appendAudit(redis, auth, boothCode, action, target = "", detail = {}, correlationId = "") {
@@ -1676,7 +1769,11 @@ async function hydratePostgresBoothDirectory(redis, code) {
   if (!postgresDirectoryStatus().primary) return null;
   const directory = await readPostgresBoothDirectory(code);
   if (!directory) return null;
-  const cached = await redisBestEffort(() => redis.get(machineKey(directory.machineId)), {}) || {};
+  const [cachedValue, runtime] = await Promise.all([
+    redisBestEffort(() => redis.get(machineKey(directory.machineId)), {}),
+    readPostgresMachineRuntime(directory.machineId).catch(() => null),
+  ]);
+  const cached = cachedValue || {};
   const machine = {
     ...cached,
     id: directory.machineId,
@@ -1689,6 +1786,11 @@ async function hydratePostgresBoothDirectory(redis, code) {
     status: cached.status || "offline",
     agentState: cached.agentState || "unknown",
     controllerState: cached.controllerState || "unknown",
+    installationKind: runtime?.installationKind || cached.installationKind || "browser",
+    capabilities: runtime?.capabilities && typeof runtime.capabilities === "object" ? runtime.capabilities : (cached.capabilities || {}),
+    helper: runtime?.helper && typeof runtime.helper === "object" ? runtime.helper : (cached.helper || { desiredState: "disabled", actualState: "not_installed", available: false }),
+    configVersion: Number(runtime?.configVersion || cached.configVersion || 1),
+    lastSyncAt: runtime?.lastSyncAt || cached.lastSyncAt || null,
     updatedAt: directory.updatedAt || cached.updatedAt || now(),
   };
   await redisBestEffort(async () => {
@@ -1742,11 +1844,18 @@ function postgresCanServeActionWithoutRedis(action) {
   if (normalized === "setup") return postgresMachineStatus().primary && postgresDirectoryStatus().primary && postgresUsersStatus().primary;
   if (normalized === "register") return postgresDirectoryStatus().primary && postgresUsersStatus().primary;
   if (["login", "me", "logout", "profile", "users", "revoke_sessions"].includes(normalized)) return postgresUsersStatus().primary && postgresDirectoryStatus().primary;
+  if (normalized === "create_helper_bootstrap") return postgresAccountsStatus().primary;
   if (["cloud_data", "qris_create"].includes(normalized)) return postgresDirectoryStatus().primary;
   return false;
 }
 
 async function consumeRateLimitBestEffort(redis, request, action, rule, identity = "") {
+  // Rate limiting is an optional abuse-control layer. It may degrade open
+  // while PostgreSQL/Supabase is authoritative, but it must never make signup
+  // or login unavailable solely because Redis is unconfigured or exhausted.
+  if (!redis && postgresCanServeActionWithoutRedis(action)) {
+    return { allowed: true, remaining: null, retryAfter: 0, limit: rule?.limit || null, degraded: true };
+  }
   try {
     return await consumeRateLimit(redis, request, action, rule, identity);
   } catch (error) {
@@ -1830,6 +1939,11 @@ export async function resolveBooth(redis, code) {
     lastSeenAt: machine.lastSeenAt || null, agentVersion: machine.agentVersion,
     agentState: machine.agentState || "unknown", controllerState: machine.controllerState || "unknown",
     platform: machine.platform || "",
+    installationKind: machine.installationKind === "helper" ? "helper" : "browser",
+    capabilities: machine.capabilities && typeof machine.capabilities === "object" ? machine.capabilities : {},
+    helper: machine.helper && typeof machine.helper === "object" ? machine.helper : { desiredState: "disabled", actualState: "not_installed", available: false },
+    configVersion: Number(machine.configVersion || 1),
+    lastSyncAt: machine.lastSyncAt || null,
     update: machine.update && typeof machine.update === "object" ? {
       state: String(machine.update.state || machine.update.status || "unknown").slice(0, 40),
       currentVersion: String(machine.update.currentVersion || machine.agentVersion || "").slice(0, 40),
@@ -2108,6 +2222,40 @@ function accountResponse(account) {
   };
 }
 
+async function accountResponseWithRuntime(account) {
+  const response = accountResponse(account);
+  if (!account?.machines?.length) return response;
+  const runtimeEntries = await Promise.all(account.machines.map(async machine => {
+    const machineId = String(machine.machineId || machine.machine_id || machine.id || "");
+    if (!machineId) return [machineId, null];
+    return [machineId, await readPostgresMachineRuntime(machineId).catch(() => null)];
+  }));
+  const runtimes = new Map(runtimeEntries);
+  response.machines = response.machines.map(machine => {
+    const machineId = String(machine.machineId || machine.machine_id || machine.id || "");
+    const runtime = runtimes.get(machineId);
+    if (!runtime) return machine;
+    return {
+      ...machine,
+      installationKind: runtime.installationKind || "browser",
+      capabilities: runtime.capabilities || {},
+      helper: runtime.helper || { desiredState: "disabled", actualState: "not_installed", available: false },
+      configVersion: Number(runtime.configVersion || 1),
+      lastSyncAt: runtime.lastSyncAt || null,
+    };
+  });
+  response.booths = response.booths.map(booth => {
+    const runtime = runtimes.get(String(booth.machineId || ""));
+    return runtime ? {
+      ...booth,
+      installationKind: runtime.installationKind || "browser",
+      helper: runtime.helper || { desiredState: "disabled", actualState: "not_installed", available: false },
+      capabilities: runtime.capabilities || {},
+    } : booth;
+  });
+  return response;
+}
+
 async function createSupabaseApplicationSession(redis, authPayload, account) {
   const token = await createSession(redis, {
     userId: account.userId,
@@ -2266,7 +2414,7 @@ export async function currentUser(redis, request) {
   if (auth.role === "superadmin") return json({ user: safePlatformIdentity(auth, await platformIdentityEmail(redis, auth)) });
   if (auth.authProvider === "supabase" && auth.authUserId) {
     const account = await readPostgresAccount(auth.authUserId);
-    return account ? json(accountResponse(account)) : json({ user: null, error: "Akun tidak ditemukan" }, 404);
+    return account ? json(await accountResponseWithRuntime(account)) : json({ user: null, error: "Akun tidak ditemukan" }, 404);
   }
   const user = await readAdminUserById(redis, auth.userId);
   return json({ user: user ? { id: user.id, email: user.email, name: user.name, role: user.role, boothCode: user.boothCode, hasRemotePassword: Boolean(user.passwordHash) } : null, booth: await resolveBooth(redis, auth.boothCode) });
@@ -3245,6 +3393,40 @@ export async function xenditWebhookControl(redis, request, payload, correlationI
 async function cloudData(redis, request, payload, correlationId = "") {
   const target = new URL(String(payload.path || "/"), "https://photoslive.local");
   const path = target.pathname;
+
+  // Helper preference is account data, not hardware telemetry. Keep this path
+  // entirely on PostgreSQL so an exhausted or disconnected Redis cache never
+  // blocks an Admin from enabling/disabling the optional Helper enhancement.
+  if (path === "/api/helper/state") {
+    const access = await requirePostgresBoothAdmin(request, payload.booth);
+    if (!access) return json({ error: "Login admin photobox diperlukan" }, 401);
+    if (request.method === "GET") {
+      const runtime = await readPostgresMachineRuntime(access.booth.machineId);
+      const helper = runtime?.helper || {
+        desiredState: "disabled",
+        actualState: "not_installed",
+        available: false,
+      };
+      return json({ helper, runtime: runtimeForBooth({ ...access.booth, ...runtime, helper }) });
+    }
+    if (request.method !== "PATCH") return json({ error: "Metode status Helper tidak didukung" }, 405);
+    if (!["owner", "admin"].includes(access.auth.role)) {
+      return json({ error: "Hanya owner atau admin booth yang dapat mengubah Photoslive Helper" }, 403);
+    }
+    const enabled = payload.data?.enabled === true;
+    const helper = await setPostgresHelperDesiredState({
+      machineId: access.booth.machineId,
+      organizationId: access.auth.organizationId,
+      enabled,
+    });
+    if (!helper) return json({ error: "Status Photoslive Helper belum dapat disimpan" }, 503);
+    await appendAudit(optionalRedis(), access.auth, access.booth.boothCode, enabled ? "helper.enabled" : "helper.disabled", access.booth.machineId, {
+      desiredState: helper.desiredState,
+      actualState: helper.actualState,
+    }, correlationId);
+    return json({ helper, runtime: runtimeForBooth({ ...access.booth, helper }) });
+  }
+
   const booth = await resolveBooth(redis, payload.booth);
   if (!booth || !booth.enabled) return json({ error: "Photobox tidak ditemukan atau aksesnya dinonaktifkan" }, 404);
 
@@ -3260,11 +3442,7 @@ async function cloudData(redis, request, payload, correlationId = "") {
       assets,
       capabilities,
       featureFlags,
-      runtime: {
-        mode: String(booth.machineId || "").startsWith("web_") ? "web" : "agent",
-        hardwareBridgeAvailable: !String(booth.machineId || "").startsWith("web_"),
-        machineId: booth.machineId,
-      },
+      runtime: runtimeForBooth(booth),
       bridgeToken: await signScopedToken({ scope: "booth.hardware", boothCode: booth.boothCode, machineId: booth.machineId, exp: Date.now() + 30 * 60_000 }),
     });
   }
@@ -3428,7 +3606,7 @@ async function cloudData(redis, request, payload, correlationId = "") {
 
   if (request.method === "GET" && path === "/api/settings") {
     const [settings, featureFlags] = await Promise.all([cloudSettings(redis, booth), resolveFeatureFlags(redis, booth)]);
-    return json({ ...settings, capabilities: await deploymentCapabilitiesForBooth(redis, booth), featureFlags });
+    return json({ ...settings, capabilities: await deploymentCapabilitiesForBooth(redis, booth), featureFlags, runtime: runtimeForBooth(booth) });
   }
   if (request.method === "PATCH" && (path === "/api/settings" || path.startsWith("/api/settings/"))) {
     const section = path === "/api/settings" ? "" : path.slice("/api/settings/".length);
@@ -3808,7 +3986,16 @@ async function dispatch(request, context) {
     if (!csrf.allowed) return json({ error: "Permintaan lintas situs ditolak" }, 403);
     const payload = { ...Object.fromEntries(url.searchParams), ...await requestBody(request) };
     if (action === "health") return json({ status: "ok", time: now() });
-    const redis = getRedis();
+    const accountFirstLogin = action !== "login"
+      || (!normalizeCode(payload.boothCode) && !payload.pin);
+    const postgresHelperState = action === "cloud_data"
+      && String(payload.path || "").split("?", 1)[0] === "/api/helper/state";
+    const redisOptionalAction = ["register", "refresh", "me", "profile", "logout", "create_helper_bootstrap"].includes(action)
+      || (action === "login" && accountFirstLogin)
+      || postgresHelperState;
+    const redis = redisOptionalAction && postgresCanServeActionWithoutRedis(action)
+      ? optionalRedis()
+      : getRedis();
     const rateRule = PLATFORM_RATE_LIMITS[action];
     if (rateRule && request.method === "POST") {
       const identity = payload.boothCode || payload.booth || payload.email || "";
@@ -3836,6 +4023,7 @@ async function dispatch(request, context) {
     if (action === "users" && request.method === "POST") return addUser(redis, request, payload);
     if (action === "revoke_sessions" && request.method === "POST") return revokeUserSessions(redis, request, payload);
     if (action === "profile" && request.method === "POST") return updateProfile(redis, request, payload);
+    if (action === "create_helper_bootstrap") return createHelperBootstrapControl(request, payload, context?.id || "");
     if (action === "audit" && request.method === "GET") return auditLog(redis, request, payload);
     if (action === "backend_health" && request.method === "GET") return backendHealthControl(redis, request);
     if (action === "webhook_events") return webhookEventsControl(redis, request, payload);
@@ -3880,6 +4068,7 @@ async function dispatch(request, context) {
     if (action === "public_session_file" && request.method === "GET") return publicPhotoSessionFile(redis, payload);
     if (action === "delete_public_session" && request.method === "POST") return deletePublicPhotoSession(redis, payload);
     if (action === "cloud_data") {
+      if (postgresHelperState) return cloudData(redis, request, payload, context?.id || "");
       return request.method === "GET"
         ? cloudData(redis, request, payload, context?.id || "")
         : withCloudIdempotency(redis, request, payload, () => cloudData(redis, request, payload, context?.id || ""));

@@ -61,7 +61,6 @@ EOF
 launchctl bootout "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.controller.plist" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.controller.plist"
-launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist"
 
 CONTROLLER_READY=0
 for _ in $(seq 1 30); do
@@ -81,7 +80,14 @@ if [ "${CONTROLLER_READY}" -ne 1 ]; then
   echo "Buka log lengkap: ${LOG_DIR}/controller.stderr.log" >&2
   exit 1
 fi
-echo "Photoslive Agent diperbarui dan service sudah direstart."
-"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-link --open-setup
+if [ -n "${PHOTOSLIVE_HELPER_BOOTSTRAP:-}" ]; then
+  "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --helper-bootstrap "${PHOTOSLIVE_HELPER_BOOTSTRAP}"
+  launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist"
+  echo "Photoslive Helper terpasang dan akan hidup otomatis bersama komputer."
+else
+  launchctl bootstrap "gui/$(id -u)" "${LAUNCH_DIR}/app.photoslive.agent.plist"
+  echo "Photoslive Helper terpasang tanpa booth aktif. Hubungkan dari Admin sebelum digunakan."
+  "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-link --open-setup
+fi
 echo "Status lokal terakhir:"
 "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --status || true

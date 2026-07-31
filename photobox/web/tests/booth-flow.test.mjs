@@ -15,19 +15,22 @@ test("booth shell runs without loading the admin bundle", async () => {
 test("welcome waits for cached or fresh configuration before it becomes actionable", async () => {
   const [html, booth] = await Promise.all([read("booth.html"), read("booth.js")]);
   assert.match(html, /id="welcome-start" disabled aria-busy="true"/);
-  assert.match(booth, /setWelcomeButtonState\("loading"\);[\s\S]*?localStorage\.getItem\(boothConfigCacheKey\(\)\)/);
+  assert.match(booth, /setWelcomeButtonState\("loading"\);[\s\S]*?readCachedBoothConfig\(\)/);
+  assert.match(booth, /localStorage\.getItem\(boothConfigCacheKey\(\)\)/);
   assert.match(booth, /boothState\.config = cached;[\s\S]*?resetBooth\(\{ preserveRecovery: true \}\);[\s\S]*?setWelcomeButtonState/);
   const openGate = booth.slice(booth.indexOf("async function openAccessGate"), booth.indexOf("async function retryBoothConfig"));
   assert.doesNotMatch(openGate, /boothApi\("\/api\/booth\/config"/);
 });
 
-test("web-only booth sessions never wait for an Agent hardware job", async () => {
+test("web-only booth sessions never wait for a Helper hardware job", async () => {
   const [booth, platform] = await Promise.all([read("booth.js"), read("api/platform.mjs")]);
-  assert.match(booth, /boothState\.config\?\.runtime\?\.mode === "web"\) return boothWebRuntimeApi/);
+  assert.match(booth, /if \(helperRuntimeActive\(\)\) return boothCloudControllerApi/);
+  assert.match(booth, /return boothWebRuntimeApi\(path, options\)/);
   assert.match(booth, /async function boothWebRuntimeApi/);
   assert.match(booth, /pathname === "\/api\/booth\/sessions"/);
   assert.match(booth, /pathname === "\/api\/booth\/print"[\s\S]*?window\.print\(\)/);
-  assert.match(platform, /mode: String\(booth\.machineId \|\| ""\)\.startsWith\("web_"\) \? "web" : "agent"/);
+  assert.match(platform, /mode: "browser"/);
+  assert.match(platform, /const helperActive = helper\.desiredState === "enabled" && helper\.actualState === "online"/);
 });
 
 test("customer continuation records versioned photo-processing consent", async () => {

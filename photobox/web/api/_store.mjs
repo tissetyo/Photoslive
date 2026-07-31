@@ -92,6 +92,10 @@ export async function authenticateWebSession(redis, request) {
   }
   const [id, supplied] = token.split(".");
   if (!id || !supplied || supplied !== await hmacHex(id)) return null;
+  // Legacy Redis-backed sessions are supported only when a cache client is
+  // available. Supabase account sessions above are stateless and intentionally
+  // keep login and browser pairing independent from Redis.
+  if (!redis) return null;
   let record = null;
   try {
     record = await redis.get(sessionKey(id));

@@ -22,13 +22,17 @@ const onboarding = {
   pairingScannerTimer: null,
   webPairing: null,
   webPairingTimer: null,
+  webPairingSocket: null,
+  webPairingHeartbeat: null,
 };
 
 let deferredTabletInstallPrompt = null;
+let deferredStationInstallPrompt = null;
 
 const SETUP_DRAFT_KEY = "photoslive.setupDraft.v2";
 const SETUP_SESSION_TOKEN_KEY = "photoslive.setupSessionToken";
 const WEB_PAIRING_STORAGE_KEY = "photoslive.webPairing.v1";
+const STATION_STORAGE_KEY = "photoslive.station.v1";
 const PENDING_PAIRING_KEY = "photoslive.pendingPairing.v1";
 const SETUP_QUERY = new URLSearchParams(location.search);
 const IS_LOOPBACK_HOST = ["127.0.0.1", "localhost", "::1"].includes(location.hostname);
@@ -181,7 +185,7 @@ async function bridgeApi(action, payload = {}, method = "POST") {
     body: method === "GET" ? undefined : JSON.stringify(payload),
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || `Agent tidak merespons (${response.status})`);
+  if (!response.ok) throw new Error(result.error || `Layanan Photoslive tidak merespons (${response.status})`);
   return result;
 }
 
@@ -241,9 +245,9 @@ async function controllerRequest(path, method = "GET", body = null, options = {}
     await new Promise(resolve => setTimeout(resolve, 650));
     const current = await bridgeApi("job_status", { machineId: onboarding.machine.id, jobId: job.id }, "GET");
     if (current.job.status === "completed") return current.job.result || {};
-    if (current.job.status === "failed") throw new Error(current.job.error || "Perintah Agent gagal");
+    if (current.job.status === "failed") throw new Error(current.job.error || "Perintah Photoslive Helper gagal");
   }
-  throw new Error("Agent belum merespons. Anda dapat melewati langkah ini.");
+  throw new Error("Photoslive Helper belum merespons. Anda dapat melewati langkah ini.");
 }
 
 const status = (message, success = false) => {
@@ -284,7 +288,7 @@ function updateRecoveryVisibility(activeMode) {
   const showPairingQr = activeMode === "local"
     || (!IS_LOCAL_SETUP
       && !IS_PHONE_PAIRING_FLOW
-      && ["register", "login"].includes(activeMode));
+      && ["register", "login", "station"].includes(activeMode));
   $("#local-qr-side").classList.toggle("hidden", !showPairingQr);
   $(".auth-layout").classList.toggle("web-pairing-layout", showPairingQr && activeMode !== "local");
 }
@@ -325,7 +329,7 @@ function mode(name) {
     pairing: ["Hubungkan photobox", "Scan QR atau masukkan kode dari layar mesin photobox."],
     ready: ["Photobox siap", "Pairing selesai dan tersimpan permanen."],
     local: ["Hubungkan mesin", "Pindai QR ini dari akun Admin Photoslive Anda."],
-    station: ["Pilih cara menjalankan", "Photobox sudah terhubung. Pilih mode yang paling sesuai."],
+    station: ["Photobox siap", "Komputer ini sudah terhubung dan siap digunakan."],
   };
   $("#setup-title").textContent = labels[name][0];
   $("#setup-copy").textContent = labels[name][1];
@@ -350,9 +354,28 @@ function persistWebPairing(value) {
   localStorage.setItem(WEB_PAIRING_STORAGE_KEY, JSON.stringify(value));
 }
 
+function readStationIdentity() {
+  try {
+    const value = JSON.parse(localStorage.getItem(STATION_STORAGE_KEY) || "null");
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    localStorage.removeItem(STATION_STORAGE_KEY);
+    return null;
+  }
+}
+
+function persistStationIdentity(value) {
+  localStorage.setItem(STATION_STORAGE_KEY, JSON.stringify(value));
+  if (value?.boothCode) localStorage.setItem("photoslive.boothCode", value.boothCode);
+}
+
 function stopWebPairingPoll() {
   if (onboarding.webPairingTimer) clearInterval(onboarding.webPairingTimer);
   onboarding.webPairingTimer = null;
+  if (onboarding.webPairingHeartbeat) clearInterval(onboarding.webPairingHeartbeat);
+  onboarding.webPairingHeartbeat = null;
+  if (onboarding.webPairingSocket) onboarding.webPairingSocket.close();
+  onboarding.webPairingSocket = null;
 }
 
 function setWebPairingSide(pairing, message = "") {
@@ -371,14 +394,38 @@ function setWebPairingSide(pairing, message = "") {
     : "Scan dari ponsel yang sudah masuk ke Admin Photoslive.");
 }
 
-function showClaimedWebStation(claim = {}) {
+async function bootstrapStation(pairing) {
+  const result = await bridgeApi("station_bootstrap", {
+    machineId: pairing.machineId || pairing.installationId,
+  });
+  const station = result.station || {};
+  persistStationIdentity({
+    machineId: station.machineId || pairing.machineId || pairing.installationId,
+    boothCode: station.boothCode,
+    boothName: station.boothName,
+    machineCode: station.machineCode,
+    installationKind: "browser",
+    capabilities: station.capabilities || pairing.capabilities || {},
+    updatedAt: Date.now(),
+  });
+  return station;
+}
+
+async function showClaimedWebStation(claim = {}) {
   stopWebPairingPoll();
   const current = { ...(onboarding.webPairing || readWebPairing() || {}), paired: true, claim };
+  let station;
+  try {
+    station = await bootstrapStation(current);
+  } catch (error) {
+    setWebPairingSide(current, `Pairing berhasil, tetapi station belum siap: ${error.message}`);
+    throw error;
+  }
   persistWebPairing(current);
-  setWebPairingSide(current, "Berhasil terhubung. Lanjutkan pilihan di sebelah kanan.");
-  $("#station-booth-name").textContent = claim.boothName || claim.name || "Photoslive Booth";
-  $("#station-booth-code").textContent = claim.boothCode ? `/${claim.boothCode}` : "Tersimpan di akun Admin";
-  $("#station-ready-copy").textContent = "Pilih versi web sekarang atau pasang Agent untuk kemampuan hardware lanjutan.";
+  setWebPairingSide(current, "Berhasil terhubung. Komputer ini akan mengingat photobox Anda.");
+  $("#station-booth-name").textContent = station.boothName || claim.boothName || claim.name || "Photoslive Booth";
+  $("#station-booth-code").textContent = station.boothCode ? `/${station.boothCode}` : "Tersimpan di akun Admin";
+  $("#station-ready-copy").textContent = "Buka photobox sekarang. Photoslive Helper dapat diaktifkan nanti dari Admin bila diperlukan.";
   mode("station");
 }
 
@@ -390,7 +437,7 @@ async function inspectWebPairing() {
     const result = await bridgeApi("pairing_status", { token: pairing.pairingToken }, "GET");
     const claim = result.claim || {};
     if (claim.status === "claimed") {
-      showClaimedWebStation(claim);
+      await showClaimedWebStation(claim);
       return;
     }
     if (claim.status === "expired") {
@@ -405,9 +452,44 @@ async function inspectWebPairing() {
   }
 }
 
+function startWebPairingRealtime(pairing) {
+  const realtime = pairing?.realtime || {};
+  if (!realtime.url || !realtime.publishableKey || !realtime.topic || document.hidden) return false;
+  try {
+    const endpoint = `${realtime.url.replace(/^http/i, "ws")}/realtime/v1/websocket?apikey=${encodeURIComponent(realtime.publishableKey)}&vsn=1.0.0`;
+    const socket = new WebSocket(endpoint);
+    onboarding.webPairingSocket = socket;
+    let ref = 1;
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({
+        topic: `realtime:${realtime.topic}`,
+        event: "phx_join",
+        payload: { config: { broadcast: { self: false, ack: false }, presence: { enabled: false }, postgres_changes: [], private: false } },
+        ref: String(ref++),
+      }));
+      onboarding.webPairingHeartbeat = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ topic: "phoenix", event: "heartbeat", payload: {}, ref: String(ref++) }));
+      }, 25_000);
+    });
+    socket.addEventListener("message", event => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.event === "broadcast" && message.payload?.event === "claimed") inspectWebPairing();
+      } catch {
+        // The bounded polling fallback below remains authoritative.
+      }
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function startWebPairingPoll() {
   stopWebPairingPoll();
-  onboarding.webPairingTimer = setInterval(inspectWebPairing, 10_000);
+  const pairing = onboarding.webPairing || readWebPairing();
+  startWebPairingRealtime(pairing);
+  onboarding.webPairingTimer = setInterval(inspectWebPairing, 30_000);
 }
 
 async function createWebPairing({ force = false } = {}) {
@@ -415,7 +497,7 @@ async function createWebPairing({ force = false } = {}) {
   const cached = readWebPairing();
   const validUntil = Date.parse(cached?.expiresAt || "");
   if (!force && cached?.paired && cached.claim) {
-    showClaimedWebStation(cached.claim);
+    await showClaimedWebStation(cached.claim);
     return cached;
   }
   if (!force && cached?.pairingToken && Number.isFinite(validUntil) && validUntil > Date.now()) {
@@ -444,6 +526,42 @@ async function createWebPairing({ force = false } = {}) {
     setButtonBusy(button, false);
   }
 }
+
+async function openRememberedStation() {
+  const station = readStationIdentity() || {};
+  try {
+    const result = await bridgeApi("station_bootstrap", {
+      machineId: station.machineId || "",
+    });
+    const refreshed = { ...station, ...(result.station || {}), updatedAt: Date.now() };
+    persistStationIdentity(refreshed);
+    if (refreshed.boothCode) {
+      location.replace(`/${encodeURIComponent(refreshed.boothCode)}`);
+      return true;
+    }
+  } catch (error) {
+    if (/credential invalid|identitas station/i.test(error.message)) {
+      localStorage.removeItem(STATION_STORAGE_KEY);
+      localStorage.removeItem(WEB_PAIRING_STORAGE_KEY);
+    } else {
+      setWebPairingSide(readWebPairing(), `Station tersimpan, tetapi koneksi belum siap: ${error.message}`);
+      return false;
+    }
+  }
+  return false;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopWebPairingPoll();
+    return;
+  }
+  const pairing = onboarding.webPairing || readWebPairing();
+  if (pairing?.pairingToken && !pairing.paired) {
+    startWebPairingPoll();
+    inspectWebPairing();
+  }
+});
 
 function pendingPairingIdentity() {
   try {
@@ -777,12 +895,12 @@ function renderMachineSummary(machine, storage = null) {
   const memory = storage?.memory || telemetry.memory || {};
   const disk = storage?.disk || telemetry.disk || {};
   $("#setup-machine-summary").hidden = !machine;
-  $("#setup-machine-name").textContent = telemetry.hostname || machine?.name || "Komputer Agent";
+  $("#setup-machine-name").textContent = telemetry.hostname || machine?.name || "Komputer photobox";
   $("#setup-machine-platform").textContent = machine?.platform || "Sistem belum dilaporkan";
   $("#setup-machine-memory").textContent = memory.totalBytes ? formatBytes(memory.totalBytes) : "Belum tersedia";
-  $("#setup-machine-memory-detail").textContent = memory.usedBytes != null ? `${formatBytes(memory.usedBytes)} digunakan` : "Menunggu Agent";
+  $("#setup-machine-memory-detail").textContent = memory.usedBytes != null ? `${formatBytes(memory.usedBytes)} digunakan` : "Menunggu Photoslive Helper";
   $("#setup-machine-disk").textContent = disk.freeBytes ? `${formatBytes(disk.freeBytes)} bebas` : "Belum tersedia";
-  $("#setup-machine-disk-detail").textContent = disk.totalBytes ? `dari ${formatBytes(disk.totalBytes)}` : "Menunggu Agent";
+  $("#setup-machine-disk-detail").textContent = disk.totalBytes ? `dari ${formatBytes(disk.totalBytes)}` : "Menunggu Photoslive Helper";
   if (storage?.localPath && !$("#setup-storage-path").value) $("#setup-storage-path").value = storage.localPath;
 }
 
@@ -847,7 +965,7 @@ async function refreshOnboardingDevices(requestBrowserPermission = false) {
       const result = await bridgeApi("machine_status", { machineId: onboarding.machine.id }, "GET");
       machine = result.machine || machine;
       onboarding.machine = { ...onboarding.machine, ...machine };
-      if (!machine?.online) throw new Error("Agent offline");
+      if (!machine?.online) throw new Error("Photoslive Helper offline");
     }
     const [refreshed, storage] = await Promise.all([
       controllerRequest("/api/devices/refresh", "POST"),
@@ -870,7 +988,7 @@ async function refreshOnboardingDevices(requestBrowserPermission = false) {
     renderMachineSummary(onboarding.machine);
     renderDevicePicker("camera", connectedDevices("camera"));
     renderDevicePicker("printer", []);
-    message.textContent = connectedDevices("camera").length ? `Webcam browser terdeteksi. ${error.message}.` : `${error.message}. Periksa Agent atau izin kamera browser.`;
+    message.textContent = connectedDevices("camera").length ? `Webcam browser terdeteksi. ${error.message}.` : `${error.message}. Periksa Photoslive Helper atau izin kamera browser.`;
   }
 }
 
@@ -1123,8 +1241,8 @@ async function saveStarterFrame() {
     message.textContent = IS_LOCAL_SETUP
       ? "Frame tersimpan di komputer ini. Sinkronisasi cloud berjalan terpisah."
       : onboarding.machine?.online
-        ? "Frame siap dan akan disinkronkan ke Agent."
-        : "Frame tersimpan di cloud dan akan disinkronkan saat Agent online.";
+        ? "Frame siap dan akan disinkronkan ke Photoslive Helper."
+        : "Frame tersimpan di cloud dan akan disinkronkan saat Photoslive Helper online.";
     setSetupStep(6);
     renderReadyChecklist();
   } catch (error) {
@@ -1137,7 +1255,7 @@ function renderReadyChecklist() {
   const hasPrinter = connectedDevices("printer").length > 0;
   const items = [
     [true, "Akun pemilik", $("#owner-email").value],
-    [IS_LOCAL_SETUP || Boolean(onboarding.machine?.online), IS_LOCAL_SETUP ? "Controller lokal" : "Photoslive Agent", IS_LOCAL_SETUP ? "Siap" : onboarding.machine?.online ? "Online" : "Perlu dinyalakan"],
+    [IS_LOCAL_SETUP || Boolean(onboarding.machine?.online), IS_LOCAL_SETUP ? "Controller lokal" : "Photoslive Helper", IS_LOCAL_SETUP ? "Siap" : onboarding.machine?.online ? "Online" : "Perlu dinyalakan"],
     [hasCamera, "Kamera", hasCamera ? "Terdeteksi" : "Atur nanti di admin"],
     [hasPrinter, "Printer", hasPrinter ? "Terdeteksi" : "Atur nanti di admin"],
     [true, "Frame awal", onboarding.frameFile ? onboarding.frameFile.name : onboarding.selectedFrame === "party-night" ? "Party night" : "Clean white"],
@@ -1202,18 +1320,17 @@ $("#refresh-web-pairing").addEventListener("click", () => {
   localStorage.removeItem(WEB_PAIRING_STORAGE_KEY);
   createWebPairing({ force: true });
 });
-$("#use-web-mode").addEventListener("click", () => {
-  const pairing = onboarding.webPairing || readWebPairing() || {};
-  const boothCode = pairing.claim?.boothCode || "";
-  localStorage.setItem("photoslive.stationMode", "web");
-  if (boothCode) location.href = `/${encodeURIComponent(boothCode)}`;
-  else location.href = "/account-admin";
+$("#open-station-booth").addEventListener("click", () => {
+  const station = readStationIdentity();
+  if (station?.boothCode) location.href = `/${encodeURIComponent(station.boothCode)}`;
+  else location.href = "/station";
 });
-$("#show-agent-install").addEventListener("click", () => {
-  const details = $("#station-agent-install");
-  details.open = !details.open;
-  $("#show-agent-install").setAttribute("aria-expanded", String(details.open));
-  if (details.open) details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+$("#install-station-pwa").addEventListener("click", async () => {
+  if (!deferredStationInstallPrompt) return;
+  deferredStationInstallPrompt.prompt();
+  await deferredStationInstallPrompt.userChoice.catch(() => null);
+  deferredStationInstallPrompt = null;
+  $("#install-station-pwa").classList.add("hidden");
 });
 $("#copy-local-pairing-code").addEventListener("click", async () => {
   const code = $("#local-pairing-code").value;
@@ -1340,6 +1457,8 @@ async function installTabletPwa() {
 window.addEventListener("beforeinstallprompt", event => {
   event.preventDefault();
   deferredTabletInstallPrompt = event;
+  deferredStationInstallPrompt = event;
+  $("#install-station-pwa")?.classList.remove("hidden");
   if (!$("[data-agent-panel='tablet']").classList.contains("hidden")) refreshTabletCapabilities("Photoslive siap di-install pada perangkat ini.");
 });
 window.addEventListener("appinstalled", () => refreshTabletCapabilities("Photoslive berhasil di-install."));
@@ -1389,24 +1508,7 @@ function agentOperatingSystem(name) {
 }
 document.querySelectorAll("[data-agent-platform]").forEach(button => button.addEventListener("click", () => agentPlatform(button.dataset.agentPlatform)));
 document.querySelectorAll("[data-agent-os]").forEach(button => button.addEventListener("click", () => agentOperatingSystem(button.dataset.agentOs)));
-document.querySelectorAll("[data-station-agent-os]").forEach(button => button.addEventListener("click", () => setStationAgentOperatingSystem(button.dataset.stationAgentOs)));
 $("#primary-agent-download").addEventListener("click", () => { $("#copy-feedback").textContent = "Installer diunduh. Jalankan sekali; setelah selesai layar QR setup mesin terbuka otomatis."; });
-$("#copy-station-agent-command").addEventListener("click", async () => {
-  const command = $("#station-agent-command");
-  const feedback = $("#station-agent-copy-status");
-  if (!command || !feedback) return;
-  try {
-    await navigator.clipboard.writeText(command.textContent.trim());
-    feedback.textContent = "Perintah disalin. Tempel lalu jalankan sekali.";
-  } catch {
-    const range = document.createRange();
-    range.selectNodeContents(command);
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    feedback.textContent = "Perintah dipilih. Tekan salin pada perangkat Anda.";
-  }
-});
 $("#use-companion-agent").addEventListener("click", event => {
   const help = $("#companion-setup-help");
   const expanded = event.currentTarget.getAttribute("aria-expanded") !== "true";
@@ -1550,7 +1652,7 @@ $("#test-setup-printer").addEventListener("click", () => testOnboardingDevice("p
 $("#pick-setup-storage-folder").addEventListener("click", async () => {
   const button = $("#pick-setup-storage-folder");
   button.disabled = true;
-  $("#device-onboarding-status").textContent = "Dialog folder dibuka di komputer Agent…";
+  $("#device-onboarding-status").textContent = "Dialog folder dibuka di komputer Photoslive Helper…";
   try {
     const result = await controllerRequest("/api/storage/pick-folder", "POST", {}, { timeoutMs: 305_000 });
     $("#setup-storage-path").value = result.path || "";
@@ -1580,8 +1682,8 @@ $("#save-device-onboarding").addEventListener("click", async () => {
     $("#device-onboarding-status").textContent = IS_LOCAL_SETUP
       ? "Tersimpan di komputer ini."
       : onboarding.machine?.online
-        ? "Tersimpan. Agent akan menerapkan pilihan di background."
-        : "Tersimpan di cloud. Agent akan menerapkannya saat online.";
+        ? "Tersimpan. Photoslive Helper akan menerapkan pilihan di background."
+        : "Tersimpan di cloud. Photoslive Helper akan menerapkannya saat online.";
     setSetupStep(5);
   } catch (error) {
     $("#device-onboarding-status").textContent = error.message;
@@ -1903,12 +2005,14 @@ if (IS_LOCAL_SETUP) {
   }
 } else if (requestedMode === "station") {
   const pairing = readWebPairing();
-  if (pairing?.paired && pairing.claim) {
-    showClaimedWebStation(pairing.claim);
-  } else {
-    mode("register");
-    createWebPairing();
-  }
+  openRememberedStation().then(opened => {
+    if (opened) return;
+    if (pairing?.paired && pairing.claim) showClaimedWebStation(pairing.claim).catch(error => status(error.message));
+    else {
+      mode("register");
+      createWebPairing();
+    }
+  });
 } else {
   onboarding.step = 1;
   mode(requestedMode);

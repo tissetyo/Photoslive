@@ -114,7 +114,7 @@ test("account admin exposes persistent account settings without hiding booth use
   assert.match(auth, /export async function updateSupabaseUser/);
 });
 
-test("cloud setup keeps a reusable web pairing QR separate from Agent installation", () => {
+test("cloud setup keeps a reusable web pairing QR separate from optional Helper installation", () => {
   const [html, script, bridge] = [
     "setup.html",
     "setup.js",
@@ -123,16 +123,18 @@ test("cloud setup keeps a reusable web pairing QR separate from Agent installati
   assert.match(html, /id="local-qr-side"/);
   assert.match(html, /id="refresh-web-pairing"/);
   assert.match(html, /id="station-form"/);
-  assert.match(html, /Gunakan versi web/);
-  assert.match(html, /Install Photoslive Agent/);
-  assert.match(html, /<details class="station-agent-install"/);
-  assert.match(html, /id="station-agent-command"/);
-  assert.match(html, /curl -fsSL https:\/\/photoslive\.vercel\.app\/downloads\/install-linux\.sh \| bash/);
-  assert.match(script, /copy-station-agent-command/);
+  assert.match(html, /Buka photobox/);
+  assert.match(html, /Tambahkan ke desktop/);
+  assert.match(html, /dapat diaktifkan nanti dari Admin melalui Photoslive Helper/);
+  assert.doesNotMatch(html, /<details class="station-agent-install"/);
   assert.match(script, /create_web_pairing/);
   assert.match(script, /WEB_PAIRING_STORAGE_KEY/);
-  assert.match(script, /setInterval\(inspectWebPairing, 10_000\)/);
+  assert.match(script, /setInterval\(inspectWebPairing, 30_000\)/);
   assert.match(bridge, /async function createWebPairing/);
+  assert.match(bridge, /HttpOnly; SameSite=Lax/);
+  assert.match(bridge, /const \{ _stationCredential, \.\.\.publicPairing \} = pairing/);
+  assert.match(bridge, /"set-cookie": stationCookie/);
+  assert.doesNotMatch(script, /stationCredential/);
 });
 
 test("local setup creates the first pairing QR automatically", () => {

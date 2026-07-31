@@ -99,7 +99,8 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable photoslive-controller.service photoslive-agent.service
-systemctl --user restart photoslive-controller.service photoslive-agent.service
+systemctl --user stop photoslive-agent.service 2>/dev/null || true
+systemctl --user restart photoslive-controller.service
 
 CONTROLLER_READY=0
 for _ in $(seq 1 30); do
@@ -118,7 +119,14 @@ if [ "${CONTROLLER_READY}" -ne 1 ]; then
   journalctl --user -u photoslive-controller.service -n 30 --no-pager >&2 || true
   exit 1
 fi
-echo "Photoslive Agent diperbarui dan service sudah direstart."
-"${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-link --open-setup
+if [ -n "${PHOTOSLIVE_HELPER_BOOTSTRAP:-}" ]; then
+  "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --helper-bootstrap "${PHOTOSLIVE_HELPER_BOOTSTRAP}"
+  systemctl --user restart photoslive-agent.service
+  echo "Photoslive Helper terpasang dan akan hidup otomatis bersama komputer."
+else
+  systemctl --user restart photoslive-agent.service
+  echo "Photoslive Helper terpasang tanpa booth aktif. Hubungkan dari Admin sebelum digunakan."
+  "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --setup-link --open-setup
+fi
 echo "Status lokal terakhir:"
 "${RUNTIME_PYTHON}" "${SOURCE_DIR}/agent.py" --status || true

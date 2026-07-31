@@ -134,7 +134,6 @@ Register-ScheduledTask `
   -Trigger $Trigger -Principal $Principal -Settings $Settings | Out-Null
 
 Start-ScheduledTask -TaskName "Photoslive Controller"
-Start-ScheduledTask -TaskName "Photoslive Agent"
 
 $ControllerReady = $false
 for ($Attempt = 1; $Attempt -le 30; $Attempt++) {
@@ -155,7 +154,15 @@ if (-not $ControllerReady) {
   if ($null -ne $Task) { $Task | Format-List | Out-Host }
   throw "Photoslive Controller atau halaman setup lokal gagal dijalankan. Browser tidak akan dibuka."
 }
-Write-Host "Photoslive Agent diperbarui. Windows akan menjalankannya saat login dan mengulang otomatis setelah gagal."
-& $RuntimePython "$SourceDir\agent.py" --setup-link --open-setup
+if ($env:PHOTOSLIVE_HELPER_BOOTSTRAP) {
+  & $RuntimePython "$SourceDir\agent.py" --helper-bootstrap $env:PHOTOSLIVE_HELPER_BOOTSTRAP
+  if ($LASTEXITCODE -ne 0) { throw "Photoslive Helper gagal dihubungkan ke photobox." }
+  Start-ScheduledTask -TaskName "Photoslive Agent"
+  Write-Host "Photoslive Helper terpasang dan akan hidup otomatis bersama komputer."
+} else {
+  Start-ScheduledTask -TaskName "Photoslive Agent"
+  Write-Host "Photoslive Helper terpasang tanpa booth aktif. Hubungkan dari Admin sebelum digunakan."
+  & $RuntimePython "$SourceDir\agent.py" --setup-link --open-setup
+}
 Write-Host "Status lokal terakhir:"
 try { & $RuntimePython "$SourceDir\agent.py" --status } catch { Write-Warning $_.Exception.Message }

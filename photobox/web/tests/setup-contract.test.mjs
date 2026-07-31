@@ -96,13 +96,14 @@ test("setup and booth register an API-safe offline PWA shell", async () => {
   ]);
   const manifest = JSON.parse(manifestText);
   assert.equal(manifest.display, "standalone");
-  assert.equal(manifest.start_url, "/booth");
+  assert.equal(manifest.start_url, "/station");
   assert.match(setupHtml, /rel="manifest" href="\/app\.webmanifest"/);
   assert.match(boothHtml, /rel="manifest" href="\/app\.webmanifest"/);
   assert.match(setup, /serviceWorker\.register\("\/sw\.js"/);
   assert.match(booth, /serviceWorker\.register\("\/sw\.js"/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(serviceWorker, /pathname === "\/setup"/);
+  assert.match(serviceWorker, /pathname === "\/setup" \|\| pathname === "\/station"/);
   assert.match(serviceWorker, /return "\/booth\.html"/);
 });
 
@@ -148,7 +149,7 @@ test("cloud account registration is real and does not require an installer", asy
   assert.match(html, /id="register-email"/);
   assert.match(html, /id="register-password"/);
   assert.match(html, /id="register-password-confirm"/);
-  assert.match(html, /Mulai tanpa installer/);
+  assert.match(html, /Buat akun dari perangkat apa pun/);
   assert.match(setup, /api\("register"/);
   assert.match(setup, /const IS_LOOPBACK_HOST = \["127\.0\.0\.1", "localhost", "::1"\]/);
   assert.match(setup, /const CLOUD_PLATFORM_ORIGIN = "https:\/\/photoslive\.vercel\.app"/);

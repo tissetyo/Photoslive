@@ -108,6 +108,85 @@ export async function createPostgresMachineClaim(input = {}, options = {}) {
   }, input.machineId, options);
 }
 
+export async function registerPostgresBrowserInstallation(input = {}, options = {}) {
+  return accountRpc("photoslive_register_browser_installation", {
+    p_machine_id: clean(input.machineId),
+    p_credential_hash: clean(input.credentialHash, 64).toLowerCase(),
+    p_capability_snapshot: input.capabilities && typeof input.capabilities === "object"
+      ? input.capabilities
+      : {},
+  }, input.machineId, options);
+}
+
+export async function bootstrapPostgresBrowserStation(input = {}, options = {}) {
+  return accountRpc("photoslive_station_bootstrap", {
+    p_machine_id: clean(input.machineId),
+    p_credential_hash: clean(input.credentialHash, 64).toLowerCase(),
+  }, input.machineId, options);
+}
+
+export async function updatePostgresBrowserCapabilities(input = {}, options = {}) {
+  return accountRpc("photoslive_update_station_capabilities", {
+    p_machine_id: clean(input.machineId),
+    p_credential_hash: clean(input.credentialHash, 64).toLowerCase(),
+    p_capability_snapshot: input.capabilities && typeof input.capabilities === "object"
+      ? input.capabilities
+      : {},
+  }, input.machineId, options);
+}
+
+export async function readPostgresMachineRuntime(machineId, options = {}) {
+  const result = await accountRpc("photoslive_machine_runtime", {
+    p_machine_id: clean(machineId),
+  }, machineId, options);
+  return result.ok && result.payload && typeof result.payload === "object"
+    ? result.payload
+    : null;
+}
+
+export async function setPostgresHelperDesiredState(input = {}, options = {}) {
+  const result = await accountRpc("photoslive_set_helper_desired_state", {
+    p_machine_id: clean(input.machineId),
+    p_organization_id: clean(input.organizationId),
+    p_enabled: input.enabled === true,
+  }, input.machineId, options);
+  return result.ok && result.payload && typeof result.payload === "object"
+    ? result.payload
+    : null;
+}
+
+export async function createPostgresHelperBootstrap(input = {}, options = {}) {
+  return accountRpc("photoslive_create_helper_bootstrap", {
+    p_machine_id: clean(input.machineId),
+    p_organization_id: clean(input.organizationId),
+    p_token_hash: clean(input.tokenHash, 64).toLowerCase(),
+    p_expires_at: input.expiresAt,
+  }, input.machineId, options);
+}
+
+export async function activatePostgresHelper(input = {}, options = {}) {
+  return accountRpc("photoslive_activate_helper", {
+    p_token_hash: clean(input.tokenHash, 64).toLowerCase(),
+    p_agent_token_hash: clean(input.agentTokenHash, 64).toLowerCase(),
+    p_command_key: clean(input.commandKey, 160),
+    p_platform: clean(input.platform, 240),
+    p_agent_version: clean(input.agentVersion, 40),
+  }, input.tokenHash, options);
+}
+
+export async function updatePostgresHelperRuntime(input = {}, options = {}) {
+  const result = await accountRpc("photoslive_update_helper_runtime", {
+    p_machine_id: clean(input.machineId),
+    p_actual_state: clean(input.actualState || "online", 40),
+    p_capability_snapshot: input.capabilities && typeof input.capabilities === "object"
+      ? input.capabilities
+      : {},
+  }, input.machineId, options);
+  return result.ok && result.payload && typeof result.payload === "object"
+    ? result.payload
+    : null;
+}
+
 export async function inspectPostgresMachineClaim(input = {}, options = {}) {
   const result = await accountRpc("photoslive_machine_claim_snapshot", {
     p_token_hash: clean(input.tokenHash, 64).toLowerCase() || null,

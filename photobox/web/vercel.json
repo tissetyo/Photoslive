@@ -10,6 +10,7 @@
     { "source": "/admin", "destination": "/account-admin", "permanent": false }
   ],
   "rewrites": [
+    { "source": "/station", "destination": "/setup?mode=station" },
     { "source": "/pair/:token", "destination": "/setup?mode=pairing&pairToken=:token" },
     { "source": "/:booth/admin", "destination": "/admin?booth=:booth" },
     { "source": "/:booth/sesi/:session", "destination": "/session?booth=:booth&session=:session" },
