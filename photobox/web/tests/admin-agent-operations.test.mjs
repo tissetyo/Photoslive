@@ -125,3 +125,11 @@ test("admin presents a simple machine-first UI while preserving technical contro
   assert.match(app, /setupGuide\.hidden = true/);
   assert.match(app, /setTimeout\(loadAgentStatus, 60000\)/);
 });
+
+test("web-only photobox never enters the Agent polling or remote-job path", () => {
+  assert.match(app, /state\.runtimeMode = String\(routeMachineId\)\.startsWith\("web_"\) \? "web" : "agent"/);
+  assert.match(app, /if \(String\(machineId\)\.startsWith\("web_"\)\) \{/);
+  assert.match(app, /if \(!isWebRuntime\(\)\) setInterval\(\(\) => refreshStatus/);
+  assert.match(app, /if \(isWebRuntime\(\)\) \{\s*renderWebRuntimeStatus\(\)/);
+  assert.match(app, /Mode web aktif\. Admin tidak mengirim perintah atau polling ke Agent\./);
+});

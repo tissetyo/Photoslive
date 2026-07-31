@@ -1,4 +1,4 @@
-const state = { settings: null, status: null, authBooth: null, assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, platformFrames: [], platformFramePage: 1, platformFrameLoading: false, dirtySections: new Set(), pendingSettingsSave: null, pendingVoucherGenerations: new Map(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, cleanupPreview: null, pendingFrameUpload: null };
+const state = { settings: null, status: null, authBooth: null, runtimeMode: "agent", assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, platformFrames: [], platformFramePage: 1, platformFrameLoading: false, dirtySections: new Set(), pendingSettingsSave: null, pendingVoucherGenerations: new Map(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, cleanupPreview: null, pendingFrameUpload: null };
 const adminBoothCode = new URLSearchParams(location.search).get("booth") || location.pathname.split("/").filter(Boolean)[0] || localStorage.getItem("photoslive.boothCode") || "";
 const titles = {
   overview: ["Kondisi photobox", "Mesin / Ringkasan", "Lihat apakah mesin siap dipakai dan periksa jika ada masalah."],
@@ -143,6 +143,7 @@ function isCloudDataPath(path) {
 }
 
 const isProductionHost = () => location.hostname !== "127.0.0.1" && location.hostname !== "localhost";
+const isWebRuntime = () => state.runtimeMode === "web";
 const directObjectUploadEnabled = () => state.settings?.featureFlags?.direct_object_upload?.enabled !== false;
 const assetUploadLimit = () => isProductionHost() ? Number(state.settings?.capabilities?.cloudStorage?.available && directObjectUploadEnabled() ? 25_000_000 : 2_000_000) : 10 * 1024 * 1024;
 const assetUploadLimitLabel = () => `${Math.round(assetUploadLimit() / 1_000_000)} MB`;
@@ -211,6 +212,9 @@ async function cloudControllerApi(path, options = {}) {
     localStorage.setItem("photoslive.boothCode", result.booth.boothCode);
   }
   if (!machineId) throw new Error("Mesin photobox belum terdaftar. Selesaikan setup dari komputer photobox.");
+  if (String(machineId).startsWith("web_")) {
+    throw new Error("Aksi ini memerlukan Photoslive Agent. Photobox tetap dapat dipakai dalam mode web tanpa menunggu mesin.");
+  }
   let requestBody = null;
   let bodyBase64 = null;
   if (typeof options.body === "string" && options.body) {
@@ -316,8 +320,11 @@ function showView(name) {
   const currentUrl = new URL(window.location.href);
   currentUrl.searchParams.set("view", name);
   window.history.replaceState(null, "", currentUrl);
-  if (name === "storage" && state.settings) loadStorageData(false);
-  if (name === "agent") loadAgentStatus();
+  if (name === "storage" && state.settings && !isWebRuntime()) loadStorageData(false);
+  if (name === "agent") {
+    if (isWebRuntime()) renderWebRuntimeStatus();
+    else loadAgentStatus();
+  }
   if (name === "users") loadUsers();
   if (name === "system") loadAuditLog();
   if (name === "integrations") loadBoothIntegrations();
@@ -1512,8 +1519,42 @@ function renderStatus(status) {
 }
 
 async function refreshStatus(notify = false) {
+  if (isWebRuntime()) {
+    renderWebRuntimeStatus();
+    if (notify) toast("Mode web aktif. Tidak ada koneksi Agent yang perlu diperiksa.");
+    return;
+  }
   try { renderStatus(await api("/api/overview")); if ($("#storage-view")?.classList.contains("active")) await loadStorageData(notify); if (notify) toast("Data mesin berhasil diperbarui"); }
   catch (error) { toast(`Tidak dapat membaca kondisi mesin: ${error.message}`, "error"); }
+}
+
+function renderWebRuntimeStatus() {
+  const banner = $("#health-banner");
+  if (banner) {
+    banner.classList.remove("attention");
+    $(".readiness-mark img", banner).src = "/icons/circle-check.svg";
+    $("strong", banner).textContent = "Photobox mode web siap";
+    $("p", banner).textContent = "Pengaturan cloud aktif. Kamera diperiksa saat layar booth dibuka; cetak menggunakan dialog browser.";
+  }
+  setText("#overall-status", "MODE WEB");
+  setText("#last-refresh", "Tidak memerlukan koneksi Agent");
+  setText("#sidebar-uptime", "Mode web");
+  setText("#system-uptime-summary", "Mode web");
+  setText("#system-network-summary", navigator.onLine ? "Online" : "Offline");
+  setText("#system-network-detail", navigator.onLine ? "Website terhubung ke cloud" : "Sambungkan internet untuk sinkronisasi cloud");
+  const agentDetail = "Install Photoslive Agent hanya jika membutuhkan silent print, kamera profesional, folder lokal, atau monitoring perangkat.";
+  setViewCapabilityState("agent", false, {
+    icon: "monitor",
+    title: "Photobox berjalan dalam mode web",
+    detail: agentDetail,
+  });
+  setViewCapabilityState("storage", false, {
+    icon: "hard-drive",
+    title: "Penyimpanan dikelola browser dan cloud",
+    detail: "Folder lokal dan antrean upload terkelola tersedia setelah Photoslive Agent diaktifkan.",
+  });
+  const operationStatus = $("#agent-operation-status");
+  if (operationStatus) operationStatus.textContent = "Mode web aktif. Admin tidak mengirim perintah atau polling ke Agent.";
 }
 
 function renderStorageData(overview, sessions) {
@@ -2052,10 +2093,13 @@ async function boot() {
     $$('[data-view="integrations"], [data-view="finance"]').forEach(item => { item.hidden = true; });
   }
   state.authBooth = ownedBooth || legacyBooth || auth.booth || null;
+  const routeMachineId = state.authBooth?.machineId || "";
+  state.runtimeMode = String(routeMachineId).startsWith("web_") ? "web" : "agent";
+  document.body.dataset.runtimeMode = state.runtimeMode;
   localStorage.setItem("photoslive.boothCode", adminBoothCode);
-  if (auth.booth?.machineId) {
-    agentState.machineId = auth.booth.machineId;
-    localStorage.setItem("photoslive.machineId", auth.booth.machineId);
+  if (routeMachineId) {
+    agentState.machineId = routeMachineId;
+    localStorage.setItem("photoslive.machineId", routeMachineId);
   }
   $("#customer-screen-link").href = `/${adminBoothCode}`;
   bindEvents();
@@ -2072,8 +2116,8 @@ async function boot() {
     // be offline without blocking cloud settings, vouchers, or navigation.
     api("/api/assets", { timeoutMs: 5000 }).then(assets => { state.assets = assets; renderAssets(); updatePreview(); }).catch(() => {});
     refreshStatus(false).catch(() => {});
-    if ($("#storage-view").classList.contains("active")) loadStorageData(false).catch(() => {});
-    setInterval(() => refreshStatus(false).catch(() => {}), 60000);
+    if (!isWebRuntime() && $("#storage-view").classList.contains("active")) loadStorageData(false).catch(() => {});
+    if (!isWebRuntime()) setInterval(() => refreshStatus(false).catch(() => {}), 60000);
   } catch (error) { toast(`Data admin tidak dapat dimuat: ${error.message}`, "error"); }
 }
 
