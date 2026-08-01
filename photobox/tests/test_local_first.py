@@ -20,6 +20,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from PIL import Image as PILImage
+from PIL import ImageChops
 
 import sys
 
@@ -817,6 +818,37 @@ class LocalFirstTests(unittest.TestCase):
         command.assert_called_once()
         self.assertEqual(command.call_args.args[0][:3], ["lp", "-d", "Canon_CP1500"])
         self.assertTrue(command.call_args.args[0][-1].endswith("result-print-sheet.jpg"))
+
+    def test_print_quality_is_frozen_and_applied_to_render_and_cups(self):
+        server.save_settings({
+            "booth": {"photoSlotsPerSession": 1},
+            "appearance": {"framePhotoSlots": {"clean-white": 1}},
+            "devices": {"printQuality": "high"},
+        })
+        with mock.patch.object(server, "storage_safety", return_value={"blocked": False, "warning": False, "message": "Penyimpanan siap"}):
+            session = server.create_photo_session()
+        self.assertEqual(session["rules"]["printQuality"], "high")
+        self.register_selected_capture(session, color="#1a8f75")
+        server.complete_photo_session(session["id"])
+        with sqlite3.connect(server.DB_PATH) as db:
+            frame_config = json.loads(db.execute("SELECT frame_config_json FROM photo_sessions WHERE id = ?", (session["id"],)).fetchone()[0])
+        self.assertEqual(frame_config["printQuality"], "high")
+        server.queue_session_print(session["id"])
+        printer = server.Device("cups-Canon_CP1500", "Canon SELPHY CP1500", "printer", "connected", "CUPS")
+        with mock.patch.object(server, "detect_devices", return_value=[printer]), \
+                mock.patch.object(server, "command_output", return_value=(True, "request id is Canon_CP1500-2")) as command:
+            result = server.process_next_print_job()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(command.call_args.args[0][0:5], ["lp", "-d", "Canon_CP1500", "-o", "print-quality=5"])
+
+        server.save_settings({"devices": {"printQuality": "grayscale"}})
+        with mock.patch.object(server, "storage_safety", return_value={"blocked": False, "warning": False, "message": "Penyimpanan siap"}):
+            grayscale_session = server.create_photo_session()
+        self.register_selected_capture(grayscale_session, color="#1a8f75")
+        server.complete_photo_session(grayscale_session["id"])
+        with PILImage.open(server.photo_root() / grayscale_session["id"] / "result-print-sheet.jpg").convert("RGB") as sheet:
+            self.assertIsNone(ImageChops.difference(sheet.getchannel("R"), sheet.getchannel("G")).getbbox())
+            self.assertIsNone(ImageChops.difference(sheet.getchannel("G"), sheet.getchannel("B")).getbbox())
 
     def test_print_queue_list_and_scoped_retry_preserve_operator_context(self):
         now = server.utc_now()

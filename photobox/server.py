@@ -212,11 +212,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "paperSize": "4x6",
         "printLayout": "photo-strip-vertical",
         "stripsPerSheet": 2,
+        "printQuality": "standard",
         "borderless": True,
         "cameraMirror": False,
         "cameraRotation": "0",
     },
 }
+
+PRINT_QUALITY_VALUES = {"standard", "high", "grayscale"}
+
+
+def normalized_print_quality(value: Any) -> str:
+    quality = str(value or "standard").strip().lower()
+    return quality if quality in PRINT_QUALITY_VALUES else "standard"
 
 
 @dataclass
@@ -1335,6 +1343,7 @@ def load_settings() -> dict[str, Any]:
         settings["appearance"]["frameFormat"] = "photo-strip-vertical"
     if settings["devices"].get("printLayout") == "polaroid-vertical":
         settings["devices"]["printLayout"] = "photo-strip-vertical"
+    settings["devices"]["printQuality"] = normalized_print_quality(settings["devices"].get("printQuality"))
     return settings
 
 
@@ -1519,6 +1528,7 @@ def deep_merge(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]
 def save_settings(incoming: dict[str, Any]) -> dict[str, Any]:
     current = load_settings()
     updated = deep_merge(current, incoming)
+    updated["devices"]["printQuality"] = normalized_print_quality(updated["devices"].get("printQuality"))
     old_root = photo_root(current)
     new_root = validate_photo_root(updated)
     migrate_photo_root(old_root, new_root)
@@ -1755,7 +1765,11 @@ def print_test_page() -> tuple[bool, str]:
         return True, "Lembar tes masuk antrean printer simulator"
     printer_name = printer.id.removeprefix("cups-")
     test_file = build_photo_strip_test_page(settings)
-    ok, output = command_output(["lp", "-d", printer_name, str(test_file)], timeout=8)
+    print_command = ["lp", "-d", printer_name]
+    if normalized_print_quality(settings["devices"].get("printQuality")) == "high":
+        print_command.extend(["-o", "print-quality=5"])
+    print_command.append(str(test_file))
+    ok, output = command_output(print_command, timeout=8)
     return ok, output or ("Lembar tes photo strip masuk antrean printer" if ok else "Gagal mengirim lembar tes photo strip")
 
 
@@ -1890,6 +1904,7 @@ def frame_config_snapshot(settings: dict[str, Any], frame_id: str) -> dict[str, 
         "paperSize": str(devices.get("paperSize") or "4x6"),
         "printLayout": str(devices.get("printLayout") or "photo-strip-vertical"),
         "stripsPerSheet": max(1, min(4, int(devices.get("stripsPerSheet") or 1))),
+        "printQuality": normalized_print_quality(devices.get("printQuality")),
     }
 
 
@@ -2032,13 +2047,17 @@ def render_session_outputs(session_id: str, frame_config: dict[str, Any], captur
     temporary.mkdir(parents=True, exist_ok=True)
     composite_temp = temporary / f"{session_id}-frame.tmp"
     print_temp = temporary / f"{session_id}-print.tmp"
+    quality = normalized_print_quality(frame_config.get("printQuality"))
+    jpeg_quality = 95 if quality == "high" else 88
     canvas.convert("RGB").save(composite_temp, "JPEG", quality=88, optimize=True, progressive=True)
     composite_temp.replace(composite_path)
     sheet = Image.new("RGB", (paper_width, paper_height), "white")
     strip_rgb = canvas.convert("RGB")
+    if quality == "grayscale":
+        strip_rgb = ImageOps.grayscale(strip_rgb).convert("RGB")
     for index in range(strips):
         sheet.paste(strip_rgb, (index * strip_width, 0))
-    sheet.save(print_temp, "JPEG", quality=88, optimize=True, progressive=True)
+    sheet.save(print_temp, "JPEG", quality=jpeg_quality, optimize=True, progressive=True)
     print_temp.replace(print_path)
     return [
         {"id": f"{session_id}:composite", "path": str(composite_path.relative_to(root)), "kind": "composite", "selected": True, "contentType": "image/jpeg"},
@@ -2496,6 +2515,7 @@ def create_photo_session(frame_id: str | None = None, consent: dict[str, Any] | 
             "maxAttemptsPerSlot": None if unlimited_retakes else retake_limit + 1, "timeoutSeconds": timeout_seconds,
             "countdownSeconds": int(booth["countdownSeconds"]), "prints": int(booth["printsPerSession"]),
             "stripsPerSheet": int(devices["stripsPerSheet"]), "printLayout": devices["printLayout"],
+            "printQuality": normalized_print_quality(devices.get("printQuality")),
         },
         "slots": [{"index": index, "status": "pending", "attempts": [], "selectedFileId": None} for index in range(1, photo_slots + 1)],
     }
@@ -3424,6 +3444,7 @@ def booth_config() -> dict[str, Any]:
             "cameraRotation": str(settings["devices"]["cameraRotation"]),
             "paperSize": settings["devices"]["paperSize"],
             "stripsPerSheet": int(settings["devices"]["stripsPerSheet"]),
+            "printQuality": normalized_print_quality(settings["devices"].get("printQuality")),
         },
         "assets": list_assets(),
         "capabilities": {"renderer": renderer_capability()},
@@ -3667,6 +3688,10 @@ def process_next_print_job() -> dict[str, Any] | None:
                 "SELECT path FROM photo_files WHERE session_id = ? AND file_kind = 'print-sheet'",
                 (session_id,),
             ).fetchone()
+            session_row = db.execute(
+                "SELECT frame_config_json FROM photo_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
         if not file_row:
             raise ValueError("File siap cetak tidak ditemukan")
         root = photo_root()
@@ -3680,7 +3705,19 @@ def process_next_print_job() -> dict[str, Any] | None:
         preferred = str(settings["devices"].get("preferredPrinter") or "auto")
         printer = next((device for device in printers if device.id == preferred), printers[0])
         printer_name = printer.id.removeprefix("cups-")
-        ok, output = command_output(["lp", "-d", printer_name, str(print_path)], timeout=12)
+        quality = "standard"
+        if session_row and session_row[0]:
+            try:
+                quality = normalized_print_quality(json.loads(session_row[0]).get("printQuality"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                quality = "standard"
+        print_command = ["lp", "-d", printer_name]
+        if quality == "high":
+            # CUPS understands print-quality=5 as high quality. Drivers may
+            # still override it, so the UI describes this as a request.
+            print_command.extend(["-o", "print-quality=5"])
+        print_command.append(str(print_path))
+        ok, output = command_output(print_command, timeout=12)
         if not ok:
             raise ValueError(output or "Printer menolak file")
         finished = utc_now()

@@ -3,9 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const read = path => readFile(new URL(path, import.meta.url), "utf8");
-const [html, app, agent, bridge, platform] = await Promise.all([
+const [html, app, styles, agent, bridge, platform] = await Promise.all([
   read("../admin.html"),
   read("../app.js"),
+  read("../styles.css"),
   read("../../agent.py"),
   read("../api/bridge.mjs"),
   read("../api/platform.mjs"),
@@ -127,13 +128,31 @@ test("admin presents browser-first operation while preserving optional Helper co
   assert.match(html, /id="helper-enabled-toggle"/);
   assert.match(html, /data-helper-installer="windows"/);
   assert.match(html, /class="agent-technician-command"/);
-  assert.match(html, />Teknisi \/ Lanjutan</);
+  assert.match(html, />Pasang lewat Terminal</);
+  for (const os of ["windows", "macos", "linux"]) {
+    assert.match(html, new RegExp(`data-helper-terminal="${os}"`));
+  }
+  assert.match(html, /id="copy-helper-terminal"[^>]*disabled/);
   assert.match(html, />Sinkronkan sekarang</);
   assert.match(html, /Kondisi mesin diperiksa otomatis setiap 60 detik/);
   assert.doesNotMatch(html, /Kondisi mesin diperiksa otomatis setiap 30 detik/);
   assert.doesNotMatch(html, />Photoslive Agent</);
   assert.match(app, /create_helper_bootstrap/);
+  assert.match(app, /function helperTerminalCommandSource/);
+  assert.match(app, /PHOTOSLIVE_HELPER_BOOTSTRAP/);
+  assert.match(app, /navigator\.clipboard\?\.writeText/);
   assert.match(app, /setTimeout\(loadAgentStatus, 60000\)/);
+});
+
+test("Helper page keeps heading actions separated and Terminal controls responsive", () => {
+  assert.match(styles, /\.page-heading \{[^}]*margin-bottom: var\(--space-5\)/);
+  assert.match(styles, /#agent-view > \.panel \+ \.panel \{[^}]*margin-top: var\(--space-5\)/);
+  assert.match(styles, /\.agent-technician-command > summary \{[^}]*min-height: 48px/);
+  assert.match(styles, /\.helper-terminal-os \{[^}]*grid-template-columns: repeat\(3/);
+  assert.match(styles, /@media \(max-width: 800px\)[\s\S]*\.helper-terminal-os \{ grid-template-columns: 1fr; \}/);
+  assert.match(styles, /\.page-heading \.top-actions \{ width: min\(100%, 220px\); \}/);
+  assert.match(styles, /\.page-heading \.top-actions \.button \{ width: 100%; \}/);
+  assert.match(styles, /\.agent-command code \{[^}]*overflow-wrap: anywhere/);
 });
 
 test("web-only photobox never enters the Helper polling or remote-job path", () => {

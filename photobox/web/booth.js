@@ -288,8 +288,17 @@ async function boothWebRuntimeApi(path, options = {}) {
     return { session: webRuntimeSessionProjection(boothState.session) };
   }
   if (method === "POST" && pathname === "/api/booth/print") {
+    const quality = boothState.config?.devices?.printQuality || "standard";
+    const clearPrintQuality = () => {
+      document.body.classList.remove("print-quality-grayscale");
+      document.body.removeAttribute("data-print-quality");
+    };
+    document.body.dataset.printQuality = quality;
+    document.body.classList.toggle("print-quality-grayscale", quality === "grayscale");
+    window.addEventListener("afterprint", clearPrintQuality, { once: true });
     window.print();
-    return { queued: true, mode: "browser" };
+    window.setTimeout(clearPrintQuality, 1500);
+    return { queued: true, mode: "browser", quality };
   }
   if (method === "GET" && /^\/api\/sessions\/[^/]+$/.test(pathname) && boothState.session) {
     return { session: webRuntimeSessionProjection(boothState.session) };
@@ -553,6 +562,12 @@ function applyConfiguration() {
   $("#welcome-title").textContent = appearance.welcomeTitle || "Abadikan momenmu";
   $("#welcome-prompt").textContent = appearance.touchPrompt || "Sentuh layar untuk memulai";
   $("#welcome-button-label").textContent = appearance.startButtonLabel || "Mulai foto";
+  [["#welcome-title", appearance.showWelcomeTitle !== false], ["#welcome-prompt", appearance.showTouchPrompt !== false], ["#welcome-start", appearance.showStartButton !== false]].forEach(([selector, visible]) => {
+    const element = $(selector);
+    if (!element) return;
+    element.hidden = !visible;
+    element.setAttribute("aria-hidden", String(!visible));
+  });
   const background = BUILTIN_BACKGROUNDS[appearance.activeBackground];
   $("#welcome-background").style.backgroundImage = background || `url("${appearance.activeBackground}")`;
   applyLogo(appearance.activeLogo);
@@ -1077,6 +1092,10 @@ function resetBooth({ preserveRecovery = false } = {}) {
 
 function bindEvents() {
   $("#welcome-start").addEventListener("click", openAccessGate);
+  $(".welcome-screen").addEventListener("click", event => {
+    if (boothState.config?.appearance?.showStartButton !== false || event.target.closest("button, a, input")) return;
+    openAccessGate();
+  });
   $("#frame-list").addEventListener("click", event => { const option = event.target.closest(".frame-option"); if (!option) return; boothState.selectedFrame = boothState.frames.find(frame => frame.url === option.dataset.frameUrl); updateFrameSelection(); });
   $("#frame-page-prev").addEventListener("click", () => { boothState.framePage -= 1; renderFrames(); });
   $("#frame-page-next").addEventListener("click", () => { boothState.framePage += 1; renderFrames(); });

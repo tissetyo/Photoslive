@@ -11,6 +11,13 @@
 @media(max-width:720px),(orientation:portrait){.session-bar{height:78px;grid-template-columns:1fr auto;padding:0 18px}.session-step{display:none}.mini-brand b{font-size:10px}.booth-screen:not(.welcome-screen){padding-top:78px}.frame-picker-content{padding:110px 18px 24px;gap:22px}.frame-intro h1{font-size:42px}.frame-intro>p:last-child{font-size:14px}.frame-picker-panel{padding:16px;border-radius:22px}.frame-list{grid-template-columns:repeat(3,minmax(92px,1fr));max-height:38vh}.frame-option:nth-child(n+7){display:none}.frame-continue{min-height:58px}.capture-ready-overlay{padding-top:100px}.ready-card{padding:30px 24px}.ready-card h1{font-size:44px}.capture-hud{left:14px;right:14px;bottom:18px;display:block}.slot-progress{min-width:0;width:100%}.capture-instruction{display:none}.photo-review{grid-template-columns:1fr;gap:20px;align-content:center;padding:96px 20px 24px}.review-photo{height:min(48vh,520px);border-width:7px}.review-copy{text-align:center}.review-copy h2{font-size:42px}.review-copy>p:not(.eyebrow){margin:12px 0 20px;font-size:14px}.result-layout{grid-template-columns:1fr;align-content:center;gap:28px;padding:28px 22px;text-align:center}.result-copy{order:2}.result-copy h1{font-size:54px}.result-copy>p:not(.eyebrow){margin:16px auto;font-size:14px}.result-actions{justify-content:center;margin-top:24px}.final-photo-wrap{order:1}.final-frame{width:min(42vw,260px);border-width:7px}.result-note{justify-content:center}.customer-dialog{border-radius:24px}.dialog-body{padding:34px 24px}}
 @media(max-height:680px) and (orientation:landscape){.session-bar{height:70px}.frame-picker-content{padding-top:90px;padding-bottom:20px}.frame-intro h1{font-size:44px}.frame-list{max-height:38vh}.frame-thumb{aspect-ratio:1/1.65}.frame-continue{min-height:54px}.ready-card{padding:28px}.ready-icon{display:none}.photo-review{padding-top:90px}.review-photo{height:62vh}.result-screen{padding-top:70px}.result-layout{padding-block:24px}.final-frame{width:min(28vw,280px)}}
 
+@media print {
+  body.print-quality-grayscale .final-frame,
+  body.print-quality-grayscale .final-frame img {
+    filter: grayscale(1);
+  }
+}
+
 /* The HUD is dimmed only while the ready overlay is actually visible. */
 .capture-ready-overlay[hidden]~.capture-hud{opacity:1}
 body [hidden]{display:none!important}

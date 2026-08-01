@@ -424,17 +424,37 @@ function helperInstallerSource(os, bootstrapToken) {
   return `#!/usr/bin/env bash\nset -euo pipefail\nexport PHOTOSLIVE_HELPER_BOOTSTRAP='${token}'\ncurl --fail --location --retry 5 --retry-delay 3 --retry-all-errors 'https://photoslive.vercel.app/downloads/${installer}' | bash\n`;
 }
 
+function helperOperatingSystemLabel(os) {
+  if (os === "windows") return "WINDOWS POWERSHELL";
+  if (os === "macos") return "MACOS TERMINAL";
+  return "LINUX TERMINAL";
+}
+
+function helperTerminalCommandSource(os, bootstrapToken) {
+  const token = String(bootstrapToken || "").replace(/[^A-Za-z0-9]/g, "");
+  if (!token) throw new Error("Token pemasangan Helper tidak tersedia");
+  if (os === "windows") {
+    return `$ErrorActionPreference='Stop'; $env:PHOTOSLIVE_HELPER_BOOTSTRAP='${token}'; $installer=Join-Path $env:TEMP 'photoslive-helper-installer.ps1'; Invoke-WebRequest -UseBasicParsing -Uri 'https://photoslive.vercel.app/downloads/install-windows.ps1' -OutFile $installer; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer`;
+  }
+  const installer = os === "macos" ? "install-macos.sh" : "install-linux.sh";
+  return `export PHOTOSLIVE_HELPER_BOOTSTRAP='${token}'; curl --fail --location --retry 5 --retry-delay 3 --retry-all-errors 'https://photoslive.vercel.app/downloads/${installer}' | bash`;
+}
+
+async function createHelperBootstrap() {
+  return platformApi("create_helper_bootstrap", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ booth: adminBoothCode }),
+  });
+}
+
 async function downloadHelperInstaller(button) {
   const os = button.dataset.helperInstaller;
   const allButtons = $$('[data-helper-installer]');
   allButtons.forEach(item => { item.disabled = true; });
   setText("#helper-installer-status", "Menyiapkan installer aman untuk photobox ini…");
   try {
-    const result = await platformApi("create_helper_bootstrap", {
-      method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify({ booth: adminBoothCode }),
-    });
+    const result = await createHelperBootstrap();
     const source = helperInstallerSource(os, result.bootstrapToken);
     const extension = os === "windows" ? "ps1" : os === "macos" ? "command" : "sh";
     const blob = new Blob([source], { type: "text/plain;charset=utf-8" });
@@ -452,6 +472,53 @@ async function downloadHelperInstaller(button) {
     toast(error.message, "error");
   } finally {
     allButtons.forEach(item => { item.disabled = false; });
+  }
+}
+
+async function prepareHelperTerminalCommand(button) {
+  const os = button.dataset.helperTerminal;
+  const buttons = $$('[data-helper-terminal]');
+  const copyButton = $("#copy-helper-terminal");
+  buttons.forEach(item => { item.disabled = true; item.classList.toggle("active", item === button); });
+  copyButton.disabled = true;
+  setText("#helper-terminal-label", helperOperatingSystemLabel(os));
+  setText("#helper-terminal-command", "Menyiapkan perintah aman…");
+  setText("#helper-terminal-status", "Membuat token pemasangan untuk photobox ini…");
+  try {
+    const result = await createHelperBootstrap();
+    setText("#helper-terminal-command", helperTerminalCommandSource(os, result.bootstrapToken));
+    setText("#helper-terminal-status", "Perintah siap. Salin dan jalankan dalam 15 menit pada komputer photobox.");
+    copyButton.disabled = false;
+  } catch (error) {
+    setText("#helper-terminal-command", "Perintah belum dapat dibuat.");
+    setText("#helper-terminal-status", `Gagal membuat perintah: ${error.message}`);
+    toast(error.message, "error");
+  } finally {
+    buttons.forEach(item => { item.disabled = false; });
+  }
+}
+
+async function copyHelperTerminalCommand() {
+  const command = $("#helper-terminal-command").textContent.trim();
+  if (!command || $("#copy-helper-terminal").disabled) return;
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(command);
+    else {
+      const temporary = document.createElement("textarea");
+      temporary.value = command;
+      temporary.setAttribute("readonly", "");
+      temporary.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+      document.body.appendChild(temporary);
+      temporary.select();
+      const copied = document.execCommand("copy");
+      temporary.remove();
+      if (!copied) throw new Error("Copy tidak didukung");
+    }
+    $("#copy-helper-terminal span").textContent = "Tersalin";
+    setText("#helper-terminal-status", "Perintah tersalin. Tempel dan jalankan pada Terminal komputer photobox.");
+    setTimeout(() => { $("#copy-helper-terminal span").textContent = "Salin"; }, 3000);
+  } catch {
+    setText("#helper-terminal-status", "Tidak dapat menyalin otomatis. Pilih teks perintah lalu salin manual.");
   }
 }
 
@@ -827,6 +894,9 @@ function hydrateSettings() {
   appearance.headingFontSize ||= 48;
   appearance.helperFontSize ||= 18;
   appearance.buttonFontSize ||= 16;
+  appearance.showWelcomeTitle ??= true;
+  appearance.showTouchPrompt ??= true;
+  appearance.showStartButton ??= true;
   $$('[data-setting]').forEach(input => {
     const value = getPath(state.settings, input.dataset.setting);
     if (input.tagName === "SELECT" && value != null && ![...input.options].some(option => option.value === String(value))) {
@@ -930,6 +1000,8 @@ function markSetting(input) {
   }
   updateDependentControls();
   renderSaveState();
+  if (input.dataset.setting === "devices.stripsPerSheet" || input.dataset.setting === "devices.printLayout") renderAssets();
+  if (input.dataset.setting?.startsWith("devices.")) updateDevicePreviews();
   updatePreview();
 }
 
@@ -1006,6 +1078,17 @@ function frameTemplateMarkup(frameUrl, options = {}) {
   const cells = Array.from({ length: frame.slots }, (_, index) => `<span style="${slotTransformStyle(frame.slotTransforms[index] || defaultSlotTransforms(frame.slots)[index])}"><b>${index + 1}</b><img src="/icons/image.svg" alt="Slot foto ${index + 1}" /></span>`).join("");
   const stickers = frame.stickers.map(item => `<img class="frame-sticker" src="${item.url}" alt="Dekorasi frame" style="left:${item.x}%;top:${item.y}%;width:${item.size || 30}%;opacity:${Number(item.opacity ?? 100) / 100};z-index:${Number(item.z || 10)};transform:translate(-50%,-50%) rotate(${item.rotation || 0}deg)" />`).join("");
   return `<div class="photo-strip frame-layout-${frame.layout}" style="--frame-art:${frame.asset.style};--frame-ratio:${canvas.width} / ${canvas.height};--photo-width:${photoWidth}%"><div class="photo-strip-slots" data-slots="${frame.slots}">${cells}</div>${stickers}</div>`;
+}
+
+function framePreviewStripCount() {
+  const devices = state.settings?.devices || {};
+  return devices.printLayout === "full-photo" ? 1 : Math.max(1, Math.min(4, Number(devices.stripsPerSheet || 2)));
+}
+
+function frameSheetMarkup(frameUrl, options = {}) {
+  const count = framePreviewStripCount();
+  const copies = Array.from({ length: count }, () => frameTemplateMarkup(frameUrl, options)).join("");
+  return `<div class="frame-preview-sheet" style="--strip-count:${count}" aria-label="Preview ${count} ${count === 1 ? "strip" : "strip identik"}">${copies}</div>`;
 }
 
 function applyCapabilityGates() {
@@ -1133,6 +1216,12 @@ function updatePreview() {
   $("#preview-prompt").style.color = appearance.helperTextColor;
   $("#preview-start-button").style.backgroundColor = appearance.buttonBackgroundColor;
   $("#preview-start-button").style.color = appearance.buttonTextColor;
+  const visibility = [
+    ["#preview-title", appearance.showWelcomeTitle !== false],
+    ["#preview-prompt", appearance.showTouchPrompt !== false],
+    ["#preview-start-button", appearance.showStartButton !== false],
+  ];
+  visibility.forEach(([selector, visible]) => { const element = $(selector); if (element) { element.hidden = !visible; element.setAttribute("aria-hidden", String(!visible)); } });
   const usesImageLogo = appearance.activeLogo && appearance.activeLogo !== "text-logo";
   const logoSize = Math.max(10, Math.min(60, Number(appearance.logoSizePercent || 28)));
   $(".preview-logo").style.width = `${logoSize}%`;
@@ -1153,9 +1242,11 @@ function updateAdminSettingSummaries() {
   setText("#content-frame-count", String(defaults.frame.length + state.assets.frame.length));
   setText("#content-frame-format", activeCanvas.ratio);
   const outputCount = devices.printLayout === "full-photo" ? 1 : Number(devices.stripsPerSheet || 2);
+  const printQualityLabels = { standard: "Standar", high: "Tinggi", grayscale: "Hitam putih" };
+  const printQualityLabel = printQualityLabels[devices.printQuality] || printQualityLabels.standard;
   setText("#content-canvas-size", devices.paperSize);
   setText("#content-canvas-detail", `${outputCount} ${devices.printLayout === "full-photo" ? "foto" : "strip"} per lembar`);
-  setText("#frame-printer-summary", `Kertas ${devices.paperSize} · ${outputCount} ${devices.printLayout === "full-photo" ? "foto" : "strip"} per lembar`);
+  setText("#frame-printer-summary", `Kertas ${devices.paperSize} · ${outputCount} ${devices.printLayout === "full-photo" ? "foto" : "strip"} per lembar · ${printQualityLabel}`);
   const photoSlots = Number(appearance.framePhotoSlots?.[appearance.activeFrame] || booth.photoSlotsPerSession || 1);
   const framePresentation = getFramePresentation();
   const retakeLimit = Number(booth.retakeLimit || 0);
@@ -1169,7 +1260,8 @@ function updateAdminSettingSummaries() {
   if ($("#frame-layout-mode")) $("#frame-layout-mode").value = framePresentation.mode;
   if ($("#active-frame-preview")) {
     $("#active-frame-preview").style.aspectRatio = `${activeCanvas.width} / ${activeCanvas.height}`;
-    $("#active-frame-preview").innerHTML = frameTemplateMarkup(appearance.activeFrame);
+    $("#active-frame-preview").innerHTML = frameSheetMarkup(appearance.activeFrame);
+    $("#active-frame-preview").style.aspectRatio = `${activeCanvas.width * framePreviewStripCount()} / ${activeCanvas.height}`;
   }
   setText("#session-flow-title", `1 sesi → ${photoSlots} slot foto → 1 photo strip`);
   const totalStrips = Number(booth.printsPerSession || 0) * Number(devices.stripsPerSheet || 1);
@@ -1185,7 +1277,7 @@ function updateAdminSettingSummaries() {
   setText("#access-method-count", `${methods} aktif`);
   setText("#access-method-detail", [payment.qrisEnabled ? "QRIS" : "", payment.voucherEnabled ? "Voucher" : ""].filter(Boolean).join(" + ") || "Semua metode dimatikan");
   setText("#device-layout-status", devices.printLayout === "full-photo" ? "Foto penuh" : "Photo strip");
-  setText("#device-paper-status", `Kertas ${devices.paperSize}${devices.borderless ? " · sampai tepi" : ""}`);
+  setText("#device-paper-status", `Kertas ${devices.paperSize}${devices.borderless ? " · sampai tepi" : ""} · ${printQualityLabel}`);
 }
 
 function updateStorageScenario() {
@@ -1224,6 +1316,8 @@ function updateDevicePreviews() {
     ? `Setiap strip berisi foto slot 1–${photoSlots} dari atas ke bawah. ${stripsPerSheet} strip identik dicetak pada satu lembar dan dapat dipotong setelah keluar dari printer.`
     : "Satu foto memenuhi seluruh area kertas tanpa susunan photo strip.");
   if ($("#print-paper-summary")) $("#print-paper-summary").textContent = devices.paperSize;
+  const printQualityLabels = { standard: "Standar", high: "Tinggi (foto)", grayscale: "Hitam putih" };
+  if ($("#print-quality-summary")) $("#print-quality-summary").textContent = printQualityLabels[devices.printQuality] || printQualityLabels.standard;
   if ($("#print-border-summary")) $("#print-border-summary").textContent = devices.borderless ? "Sampai tepi" : "Dengan garis putih";
   const image = $("#camera-preview-image");
   if (image) image.style.transform = `rotate(${Number(devices.cameraRotation || 0)}deg) scaleX(${devices.cameraMirror ? -1 : 1})`;
@@ -1303,7 +1397,7 @@ function renderAssets() {
     const visibleAssets = kind === "background" ? all.slice((page - 1) * pageSize, page * pageSize) : all;
     grid.innerHTML = visibleAssets.map(asset => {
       const preview = kind === "frame"
-        ? `<span class="asset-preview frame-preview-card"><img class="frame-preview-image" data-frame-url="${asset.url}" alt="Preview desain ${asset.name}" /></span>`
+        ? `<span class="asset-preview frame-preview-card"><span class="frame-preview-sheet" style="--strip-count:${framePreviewStripCount()}" aria-label="Preview ${framePreviewStripCount()} strip">${Array.from({ length: framePreviewStripCount() }, () => `<img class="frame-preview-image" data-frame-url="${asset.url}" alt="Preview desain ${asset.name}" />`).join("")}</span></span>`
         : `<span class="asset-preview" style="background:${asset.style}"></span>`;
       return `
       <div class="asset-card ${state.settings.appearance[setting] === asset.url ? "selected" : ""}" data-asset-kind="${kind}" data-asset-url="${asset.url}">
@@ -1381,11 +1475,13 @@ function updateFrameUploadPreview() {
   const pending = state.pendingFrameUpload;
   const canvas = frameCanvas();
   const preview = $("#frame-upload-preview");
-  preview.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
+  const stripsPerSheet = framePreviewStripCount();
+  preview.style.aspectRatio = `${canvas.width * stripsPerSheet} / ${canvas.height}`;
   const artworkStyle = `background:${pending.backgroundCss};transform:scale(${pending.zoom / 100});transform-origin:${pending.x}% ${pending.y}%`;
   const slots = pending.slotTransforms.map((transform, index) => `<span class="frame-editor-element ${(pending.selected?.type === "slot" && pending.selected.index === index) || pending.selected?.type === "all-slots" ? "selected" : ""}" data-editor-type="slot" data-editor-index="${index}" style="${slotTransformStyle(transform)}"><b>${index + 1}</b><img src="/icons/image.svg" alt="Slot foto ${index + 1}" /></span>`).join("");
   const stickers = pending.stickers.map((item, index) => `<span class="frame-editor-sticker frame-editor-element ${pending.selected?.type === "sticker" && pending.selected.index === index ? "selected" : ""}" data-editor-type="sticker" data-editor-index="${index}" style="left:${item.x}%;top:${item.y}%;width:${item.size || 30}%;opacity:${Number(item.opacity ?? 100) / 100};z-index:${Number(item.z || 10 + index)};transform:translate(-50%,-50%) rotate(${item.rotation || 0}deg)"><img src="${item.url}" alt="Logo atau stiker ${index + 1}" /></span>`).join("");
-  preview.innerHTML = `<div class="frame-editor-artwork" style="${artworkStyle}"></div><div class="photo-strip-slots modal-frame-slots" data-slots="${pending.slots}">${slots}</div>${stickers}`;
+  const editorStrip = `<div class="frame-editor-artwork" style="${artworkStyle}"></div><div class="photo-strip-slots modal-frame-slots" data-slots="${pending.slots}">${slots}</div>${stickers}`;
+  preview.innerHTML = `<div class="frame-editor-sheet" style="--strip-count:${stripsPerSheet}">${Array.from({ length: stripsPerSheet }, (_, index) => `<div class="frame-editor-strip ${index === 0 ? "interactive" : "copy"}" ${index ? "aria-hidden=\"true\"" : ""}>${editorStrip}</div>`).join("")}</div>`;
   $("#frame-crop-stage").style.setProperty("--editor-stage-art", pending.backgroundCss);
   setText("#frame-upload-zoom-value", `${pending.zoom}%`);
   setText("#frame-upload-paper", `Hasil: ${state.settings.devices.paperSize} · ${state.settings.devices.printLayout === "full-photo" ? 1 : state.settings.devices.stripsPerSheet} strip`);
@@ -1982,6 +2078,8 @@ function bindEvents() {
   $("#save-button").addEventListener("click", saveSettings);
   $("#helper-enabled-toggle").addEventListener("change", setHelperEnabled);
   $$('[data-helper-installer]').forEach(button => button.addEventListener("click", () => downloadHelperInstaller(button)));
+  $$('[data-helper-terminal]').forEach(button => button.addEventListener("click", () => prepareHelperTerminalCommand(button)));
+  $("#copy-helper-terminal").addEventListener("click", copyHelperTerminalCommand);
   $("#pick-storage-folder").addEventListener("click", pickStorageFolder);
   $("#refresh-button").addEventListener("click", () => refreshStatus(true));
   $("#refresh-audit").addEventListener("click", loadAuditLog);
@@ -2062,7 +2160,7 @@ function bindEvents() {
   });
   cropPreview.addEventListener("pointermove", event => {
     if (!cropDrag || !state.pendingFrameUpload) return;
-    const bounds = cropPreview.getBoundingClientRect();
+    const bounds = cropPreview.querySelector(".frame-editor-strip.interactive")?.getBoundingClientRect() || cropPreview.getBoundingClientRect();
     const direction = cropDrag.kind === "element" ? 1 : -1;
     const x = Math.max(0, Math.min(100, cropDrag.x + direction * ((event.clientX - cropDrag.clientX) / bounds.width) * 100));
     const y = Math.max(0, Math.min(100, cropDrag.y + direction * ((event.clientY - cropDrag.clientY) / bounds.height) * 100));

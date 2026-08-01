@@ -22,6 +22,15 @@ test("welcome waits for cached or fresh configuration before it becomes actionab
   assert.doesNotMatch(openGate, /boothApi\("\/api\/booth\/config"/);
 });
 
+test("welcome visibility settings are applied without dead-ending the customer flow", async () => {
+  const [html, booth] = await Promise.all([read("booth.html"), read("booth.js")]);
+  for (const id of ["welcome-title", "welcome-prompt", "welcome-start"]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(booth, /appearance\.showWelcomeTitle !== false/);
+  assert.match(booth, /appearance\.showTouchPrompt !== false/);
+  assert.match(booth, /appearance\.showStartButton !== false/);
+  assert.match(booth, /welcome-screen"\)\.addEventListener\("click"[\s\S]*?openAccessGate\(\)/);
+});
+
 test("web-only booth sessions never wait for a Helper hardware job", async () => {
   const [booth, platform] = await Promise.all([read("booth.js"), read("api/platform.mjs")]);
   assert.match(booth, /if \(helperRuntimeActive\(\)\) return boothCloudControllerApi/);

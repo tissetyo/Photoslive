@@ -16,7 +16,8 @@ const setting = path => new RegExp(`data-setting="${path.replaceAll(".", "\\.")}
 test("admin appearance, session, payment, device, storage and maintenance controls are real settings", () => {
   for (const path of [
     "appearance.screenPreset", "appearance.logoSizePercent", "appearance.headingFontSize",
-    "appearance.helperFontSize", "appearance.buttonFontSize", "booth.photoSlotsPerSession",
+    "appearance.helperFontSize", "appearance.buttonFontSize", "appearance.showWelcomeTitle",
+    "appearance.showTouchPrompt", "appearance.showStartButton", "booth.photoSlotsPerSession",
     "booth.countdownSeconds", "booth.sessionTimeoutSeconds", "booth.unlimitedRetakes",
     "payment.qrisEnabled", "payment.voucherEnabled", "payment.paidPrintEnabled",
     "storage.localPhotoPath", "storage.cloudEnabled", "booth.cloudRetentionDays",
@@ -46,20 +47,24 @@ test("admin libraries and frame editor use persistent asset APIs instead of deco
 
 test("frame editor and printer preview render through the same canonical template", () => {
   assert.match(app, /function frameTemplateMarkup\(frameUrl, options = \{\}\)/);
-  assert.match(app, /#active-frame-preview"\)\.innerHTML = frameTemplateMarkup\(appearance\.activeFrame\)/);
+  assert.match(app, /function frameSheetMarkup\(frameUrl, options = \{\}\)/);
+  assert.match(app, /#active-frame-preview"\)\.innerHTML = frameSheetMarkup\(appearance\.activeFrame\)/);
+  assert.match(app, /framePreviewStripCount\(\)/);
   assert.match(app, /#print-sheet-strips"\)\.innerHTML = Array\.from\([\s\S]*?frameTemplateMarkup\(appearance\.activeFrame\)/);
 });
 
 test("voucher, event, device test and user role actions have cloud or hardware operations", () => {
   for (const id of [
     "create-voucher", "generate-vouchers", "create-voucher-event", "camera-select",
-    "printer-select", "test-camera", "test-printer", "add-user-form", "user-rows",
+    "printer-select", "print-quality", "test-camera", "test-printer", "add-user-form", "user-rows",
   ]) assert.match(html, new RegExp(`id="${id}"`), `${id} is missing`);
   assert.match(app, /async function generateVouchers/);
   assert.match(app, /\/api\/vouchers\/generate/);
   assert.match(platform, /path === "\/api\/voucher-events"/);
   assert.match(app, /api\(`\/api\/devices\/\$\{kind\}\/test`/);
   assert.match(app, /\/api\/devices\/printer\/test-page/);
+  assert.match(app, /print-quality-summary/);
+  assert.match(platform, /printQuality: "standard"/);
   assert.match(app, /platformApi\("users", \{ method: "POST"/);
   assert.match(platform, /Peran Operator tidak dapat mengubah pembayaran atau voucher/);
   assert.match(bridge, /HARDWARE_JOB_TYPES/);

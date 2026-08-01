@@ -36,7 +36,7 @@ test("interaction inventory has no active control with unknown wiring", () => {
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const summary = JSON.parse(result.stdout);
-  assert.equal(summary.controls, 468);
+  assert.equal(summary.controls, 476);
   assert.equal(summary.unknownControls.length, 0);
   assert.equal(summary.classifications.unknown, 0);
   assert.equal(summary.classifications.wired + summary.classifications.unavailable, summary.controls);
