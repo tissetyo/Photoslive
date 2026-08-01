@@ -114,10 +114,11 @@ test("admin session recovery uses a bounded secret-free heartbeat projection and
   assert.match(app, /queueAgentJob\("session\.recover", \{ sessionId:/);
 });
 
-test("hardware actions expose pending state and become unavailable while the machine is offline", () => {
+test("hardware actions stay actionable and enter the durable queue while the machine is offline", () => {
   assert.match(app, /\[data-agent-job\]:not\(#agent-connection-control\)/);
-  assert.match(app, /button\.disabled = !online/);
-  assert.match(app, /button\.dataset\.availability = online \? "ready" : "unavailable"/);
+  assert.doesNotMatch(app, /button\.disabled = !online/);
+  assert.match(app, /button\.dataset\.availability = online \? "ready" : "queued"/);
+  assert.match(app, /Perintah sudah masuk antrean\. Photoslive Helper akan menjalankannya saat mesin tersambung/);
   assert.match(app, /button\.dataset\.jobState = "pending"/);
   assert.match(app, /button\.dataset\.jobState = String\(result\.job\.status/);
   assert.match(app, /Mesin offline\. Pengaturan cloud tetap dapat disimpan/);
@@ -155,7 +156,7 @@ test("Helper page keeps heading actions separated and Terminal controls responsi
   assert.match(styles, /\.agent-command code \{[^}]*overflow-wrap: anywhere/);
 });
 
-test("web-only photobox never enters the Helper polling or remote-job path", () => {
+test("web-only photobox avoids automatic Helper polling while keeping browser and queued actions available", () => {
   assert.match(app, /state\.runtimeMode = "browser"/);
   assert.match(app, /const isHelperActive = \(\) => state\.runtime\?\.capabilities\?\.helper\?\.active === true/);
   assert.match(app, /if \(!isHelperActive\(\)\) \{[\s\S]{0,180}Photoslive Helper aktif/);
@@ -163,4 +164,9 @@ test("web-only photobox never enters the Helper polling or remote-job path", () 
   assert.match(app, /if \(name === "agent"\) loadAgentStatus\(\)/);
   assert.doesNotMatch(app, /if \(name === "agent"\) \{\s*if \(isWebRuntime\(\)\) renderWebRuntimeStatus\(\)/);
   assert.match(app, /Web\/PWA aktif\. Tidak ada polling perangkat sampai Photoslive Helper diaktifkan\./);
+  assert.match(app, /navigator\.mediaDevices\.getUserMedia/);
+  assert.match(app, /navigator\.mediaDevices\.enumerateDevices/);
+  assert.match(app, /function printBrowserTest\(\)/);
+  assert.match(app, /button\.dataset\.availability = "browser-or-queued"/);
+  assert.doesNotMatch(app, /\$\$\('\[data-agent-job\]'\)\.forEach\(button => \{ button\.disabled = true; \}\)/);
 });

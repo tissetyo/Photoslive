@@ -1,4 +1,5 @@
-const state = { settings: null, status: null, authBooth: null, runtimeMode: "browser", runtime: { mode: "browser", installationKind: "browser", hardwareBridgeAvailable: false, capabilities: { helper: { installed: false, enabled: false, online: false, active: false } } }, assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, platformFrames: [], platformFramePage: 1, platformFrameLoading: false, dirtySections: new Set(), pendingSettingsSave: null, pendingVoucherGenerations: new Map(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, storageLoadedAt: 0, storageLoading: false, cleanupPreview: null, pendingFrameUpload: null };
+const state = { settings: null, status: null, authBooth: null, runtimeMode: "browser", runtime: { mode: "browser", installationKind: "browser", hardwareBridgeAvailable: false, capabilities: { helper: { installed: false, enabled: false, online: false, active: false } } }, assets: { background: [], frame: [], logo: [], sticker: [] }, assetPages: { background: 1 }, platformFrames: [], platformFramePage: 1, platformFrameLoading: false, dirtySections: new Set(), pendingSettingsSave: null, pendingVoucherGenerations: new Map(), cameraPreviewEnabled: false, cameraPreviewTimer: null, cameraPreviewUrl: null, cameraPreviewStream: null, storageLoadedAt: 0, storageLoading: false, cleanupPreview: null, pendingFrameUpload: null };
+let deferredAdminInstallPrompt = null;
 const adminBoothCode = new URLSearchParams(location.search).get("booth") || location.pathname.split("/").filter(Boolean)[0] || localStorage.getItem("photoslive.boothCode") || "";
 const titles = {
   overview: ["Kondisi photobox", "Mesin / Ringkasan", "Lihat apakah mesin siap dipakai dan periksa jika ada masalah."],
@@ -61,6 +62,44 @@ const formatSyncMoment = value => {
 };
 const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const isLocalAdmin = () => ["127.0.0.1", "localhost"].includes(location.hostname);
+
+function adminPwaIsInstalled() {
+  return window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function describeAdminPwaInstallFallback() {
+  const status = $("#admin-pwa-install-status");
+  if (!status) return;
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  status.textContent = isIos
+    ? "Di Safari, tekan Bagikan lalu pilih Tambahkan ke Layar Utama."
+    : "Jika dialog tidak muncul, buka menu browser lalu pilih Install app atau Tambahkan ke layar utama.";
+}
+
+async function installAdminPwa() {
+  const button = $("#install-admin-pwa");
+  const status = $("#admin-pwa-install-status");
+  if (adminPwaIsInstalled()) {
+    if (status) status.textContent = "Photoslive sudah terpasang sebagai aplikasi.";
+    return;
+  }
+  if (!deferredAdminInstallPrompt) {
+    describeAdminPwaInstallFallback();
+    return;
+  }
+  button?.setAttribute("aria-busy", "true");
+  try {
+    deferredAdminInstallPrompt.prompt();
+    const choice = await deferredAdminInstallPrompt.userChoice.catch(() => ({ outcome: "dismissed" }));
+    if (status) status.textContent = choice.outcome === "accepted"
+      ? "Photoslive berhasil ditambahkan ke desktop."
+      : "Pemasangan dibatalkan. Anda dapat mencoba lagi kapan saja.";
+    if (choice.outcome === "accepted" && button) button.hidden = true;
+  } finally {
+    deferredAdminInstallPrompt = null;
+    button?.removeAttribute("aria-busy");
+  }
+}
 
 function describePlatformError(error, featureLabel = "Fitur ini") {
   const status = Number(error?.status || 0);
@@ -133,7 +172,13 @@ async function api(path, options = {}) {
   }
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || payload.message || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(payload.error || payload.message || `Request failed (${response.status})`);
+    error.status = response.status;
+    error.code = payload.code || "";
+    error.data = payload;
+    throw error;
+  }
   return payload;
 }
 
@@ -752,7 +797,7 @@ function renderSessionRecovery(machine) {
     const deadline = session.deadlineAt ? new Date(session.deadlineAt).toLocaleString("id-ID") : "Tidak ada batas waktu";
     return `<article class="admin-job-row">
       <div class="admin-job-copy"><div><b>${escapeHtml(session.id || "Sesi lokal")}</b><span class="device-state ${active ? "connected" : "attention"}">${active ? "AKTIF" : "BERHENTI"}</span></div><p>${escapeHtml(progress)} · batas ${escapeHtml(deadline)}</p></div>
-      <button type="button" class="button secondary compact" data-recover-session="${escapeHtml(session.id)}" ${online ? "" : "disabled"}><img src="/icons/rotate-cw.svg" alt="" />${active ? "Tambah 3 menit" : "Pulihkan 3 menit"}</button>
+      <button type="button" class="button secondary compact" data-recover-session="${escapeHtml(session.id)}" data-availability="${online ? "ready" : "queued"}" title="${online ? "" : "Perintah akan diantrikan sampai Photoslive Helper tersambung."}"><img src="/icons/rotate-cw.svg" alt="" />${active ? "Tambah 3 menit" : "Pulihkan 3 menit"}</button>
     </article>`;
   }).join("");
 }
@@ -760,6 +805,24 @@ function renderSessionRecovery(machine) {
 async function bridgeApi(action, options = {}) {
   const separator = options.query ? `&${new URLSearchParams(options.query)}` : "";
   return api(`/api/bridge?action=${encodeURIComponent(action)}${separator}`, options);
+}
+
+function describeHardwareCommandError(error) {
+  const status = Number(error?.status || 0);
+  const raw = String(error?.message || "").trim();
+  if (status === 404 || /\bnot found\b|request failed \(404\)/i.test(raw)) {
+    return "Perintah belum dikenali oleh backend mesin. Perbarui Photoslive Helper dan Controller, tekan Perbarui status, lalu coba lagi.";
+  }
+  if (status === 401 || status === 403 || /credential|token|tidak diizinkan|forbidden/i.test(raw)) {
+    return "Koneksi mesin tidak memiliki izin yang valid. Buka Photoslive Helper, sambungkan ulang photobox, lalu coba lagi.";
+  }
+  if (/belum terdaftar|machine.*missing|mesin.*tidak ditemukan/i.test(raw)) {
+    return "Mesin belum terdaftar pada photobox ini. Pasang atau sambungkan Photoslive Helper, lalu tekan Perbarui status.";
+  }
+  if (/offline|timeout|timed out|network|failed to fetch|tidak tersambung/i.test(raw)) {
+    return "Perintah belum dapat dikirim karena koneksi mesin atau cloud terputus. Periksa internet dan Photoslive Helper, lalu coba lagi; data photobox tetap aman.";
+  }
+  return raw || "Perintah ditolak oleh sistem. Periksa status Photoslive Helper, lalu coba lagi.";
 }
 
 function renderAgentMachine(machine) {
@@ -817,12 +880,14 @@ function renderAgentMachine(machine) {
   connection.dataset.paused = machine.agentState === "paused" ? "true" : "false";
   connection.querySelector("span").textContent = machine.agentState === "paused" ? "Lanjutkan koneksi" : "Jeda koneksi";
   $$('[data-agent-job]:not(#agent-connection-control)').forEach(button => {
-    button.disabled = !online;
-    button.dataset.availability = online ? "ready" : "unavailable";
-    button.title = online ? "" : "Mesin offline. Nyalakan komputer photobox atau periksa koneksinya.";
+    button.disabled = false;
+    button.dataset.availability = online ? "ready" : "queued";
+    button.title = online ? "" : "Mesin sedang offline. Perintah tetap dikirim dan akan dijalankan saat Photoslive Helper tersambung.";
   });
-  $("#agent-install-update").disabled = !online || updateState !== "ready";
-  $("#agent-rollback-update").disabled = !online || update.rollbackAvailable !== true;
+  $("#agent-install-update").disabled = false;
+  $("#agent-install-update").title = updateState === "ready" ? "Pasang update yang tersedia." : "Perintah tetap dikirim; sistem akan memberi tahu jika belum ada update yang dapat dipasang.";
+  $("#agent-rollback-update").disabled = false;
+  $("#agent-rollback-update").title = update.rollbackAvailable === true ? "Pulihkan versi sebelumnya." : "Perintah tetap dikirim; sistem akan memberi tahu jika tidak ada versi yang dapat dipulihkan.";
   if (!online) {
     $("#agent-operation-status").textContent = "Mesin offline. Pengaturan cloud tetap dapat disimpan; aksi perangkat menunggu mesin kembali online.";
   }
@@ -848,13 +913,19 @@ async function loadAgentStatus(showNotice = false) {
 
 async function queueAgentJob(type, payload = {}, sourceButton = null) {
   if (!agentState.machineId) return toast("Mesin belum terdaftar. Jalankan setup dari komputer photobox.", "error");
-  const button = sourceButton || $$('[data-agent-job]').find(candidate => candidate.dataset.agentJob === type && !candidate.disabled);
-  if (!button || button.dataset.availability === "unavailable") return toast("Mesin offline. Aksi perangkat belum tersedia.", "error");
+  const button = sourceButton || $$('[data-agent-job]').find(candidate => candidate.dataset.agentJob === type);
+  if (!button) return toast("Kontrol untuk perintah ini tidak ditemukan. Muat ulang halaman lalu coba lagi.", "error");
+  const shouldQueue = ["queued", "browser-or-queued"].includes(button.dataset.availability);
   if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
   const status = $("#agent-operation-status");
   try {
     const { job } = await bridgeApi("enqueue_job", { method: "POST", body: JSON.stringify({ machineId: agentState.machineId, type, payload }) });
     button.dataset.jobState = "pending";
+    if (shouldQueue) {
+      status.textContent = "Perintah sudah masuk antrean. Photoslive Helper akan menjalankannya saat mesin tersambung.";
+      toast("Perintah masuk antrean");
+      return;
+    }
     status.textContent = "Perintah dikirim. Menunggu mesin…";
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 750));
@@ -865,7 +936,11 @@ async function queueAgentJob(type, payload = {}, sourceButton = null) {
     }
     status.textContent = "Perintah masih diproses di latar belakang. Status akan diperbarui otomatis.";
     toast("Perintah masih diproses");
-  } catch (error) { status.textContent = error.message; toast(error.message, "error"); }
+  } catch (error) {
+    const message = describeHardwareCommandError(error);
+    status.textContent = message;
+    toast(message, "error");
+  }
   finally { if (button) { button.disabled = false; button.removeAttribute("aria-busy"); delete button.dataset.jobState; } }
 }
 
@@ -987,6 +1062,9 @@ function markSetting(input) {
   let value = input.type === "checkbox" ? input.checked : input.value;
   if (input.type === "number" || input.type === "range") value = Number(value);
   setPath(state.settings, input.dataset.setting, value);
+  if (input.id === "camera-select" && isWebRuntime()) {
+    state.settings.devices.browserCameraId = value === "auto" ? "" : String(value);
+  }
   const colorOutput = $(`[data-color-output="${input.dataset.setting}"]`);
   if (colorOutput) colorOutput.textContent = String(value).toUpperCase();
   if (input.matches("[data-font-select]")) input.style.fontFamily = FONT_FAMILIES[value] || FONT_FAMILIES.system;
@@ -1659,9 +1737,10 @@ function renderDevices(devices) {
   const setHardwareAction = (selector, available, reason) => {
     const button = $(selector);
     if (!button) return;
-    button.disabled = !available;
-    button.setAttribute("aria-disabled", String(!available));
-    button.title = available ? "" : reason;
+    button.disabled = false;
+    button.removeAttribute("aria-disabled");
+    button.dataset.availability = available ? "ready" : "request-anyway";
+    button.title = available ? "" : `${reason}. Tekan untuk mencoba; sistem akan menjelaskan jika permintaan ditolak.`;
   };
   ["#test-camera", "#toggle-camera-preview"].forEach(selector => setHardwareAction(selector, Boolean(camera), "Sambungkan kamera terlebih dahulu"));
   ["#test-printer", "#print-test-page"].forEach(selector => setHardwareAction(selector, Boolean(printer), "Sambungkan printer terlebih dahulu"));
@@ -1672,7 +1751,7 @@ function renderDevices(devices) {
     deviceParent,
     missing.length ? "warning" : "ready",
     missing.length ? `${missing.join(" dan ")} belum tersambung` : "Kamera dan printer siap",
-    missing.length ? "Tombol tes hanya aktif setelah perangkat benar-benar terdeteksi." : "Perangkat dapat diuji sebelum photobox digunakan.",
+    missing.length ? "Anda tetap dapat menekan tombol tes. Sistem akan mencoba lalu menjelaskan izin, sambungan, atau Helper yang diperlukan." : "Perangkat dapat diuji sebelum photobox digunakan.",
     missing.length ? { view: "agent", label: "Periksa mesin" } : null,
   );
   if (state.cameraPreviewEnabled && !devices.some(device => device.kind === "camera" && device.status === "connected")) stopCameraPreview("Kamera terputus. Sambungkan kamera lalu nyalakan preview kembali.");
@@ -1758,12 +1837,22 @@ function renderWebRuntimeStatus() {
   setText("#device-printer-name", "Pemilihan printer dilakukan saat mencetak");
   setText("#device-connected-count", "WEB/PWA");
   const scan = $("#scan-devices");
-  if (scan) { scan.disabled = true; scan.title = "Browser memeriksa kamera saat booth dibuka. Deteksi printer penuh memerlukan Helper."; }
-  ["#test-camera", "#toggle-camera-preview", "#test-printer", "#print-test-page"].forEach(selector => {
+  if (scan) { scan.disabled = false; scan.title = "Cari kamera yang dapat diakses browser. Printer dipilih melalui dialog cetak sistem."; }
+  const browserActions = {
+    "#test-camera": "Minta izin lalu tes kamera melalui browser.",
+    "#toggle-camera-preview": "Tampilkan preview langsung dari kamera browser.",
+    "#test-printer": "Buka lembar tes melalui dialog cetak sistem.",
+    "#print-test-page": "Buka lembar tes melalui dialog cetak sistem.",
+  };
+  Object.entries(browserActions).forEach(([selector, title]) => {
     const button = $(selector);
-    if (button) { button.disabled = true; button.title = "Tes ini dijalankan dari komputer photobox atau melalui Photoslive Helper."; }
+    if (button) { button.disabled = false; button.title = title; }
   });
-  $$('[data-agent-job]').forEach(button => { button.disabled = true; });
+  $$('[data-agent-job]').forEach(button => {
+    button.disabled = false;
+    button.dataset.availability = "browser-or-queued";
+    button.title = "Perintah akan dikirim ke sistem. Jika fitur membutuhkan Helper, hasil atau langkah perbaikannya akan ditampilkan.";
+  });
   renderHelperControls();
 }
 
@@ -1983,7 +2072,107 @@ async function printVouchers(eventId = null) {
   } catch (error) { popup?.close(); toast(`Voucher tidak dapat dibuka: ${error.message}`, "error"); }
 }
 
+function browserCameraErrorMessage(error) {
+  const name = String(error?.name || "");
+  if (name === "NotAllowedError" || name === "SecurityError") return "Akses kamera ditolak. Tekan ikon gembok di address bar, izinkan Kamera, lalu coba lagi.";
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") return "Kamera tidak ditemukan. Sambungkan webcam atau pilih kamera lain, lalu coba lagi.";
+  if (name === "NotReadableError" || name === "TrackStartError") return "Kamera sedang digunakan aplikasi lain. Tutup aplikasi kamera atau video call, lalu coba lagi.";
+  if (!window.isSecureContext) return "Browser hanya mengizinkan kamera melalui HTTPS atau localhost. Buka Photoslive melalui alamat HTTPS.";
+  return error?.message || "Browser tidak dapat membuka kamera. Periksa izin dan sambungan kamera.";
+}
+
+function browserCameraConstraints() {
+  const deviceId = String(state.settings?.devices?.browserCameraId || "").trim();
+  return {
+    audio: false,
+    video: deviceId
+      ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      : { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: { ideal: "user" } },
+  };
+}
+
+async function refreshBrowserDevices(sourceButton = null) {
+  if (!navigator.mediaDevices?.enumerateDevices) throw new Error("Browser ini tidak mendukung pencarian kamera. Gunakan Chrome, Edge, Safari, atau Firefox terbaru.");
+  if (sourceButton) { sourceButton.disabled = true; sourceButton.setAttribute("aria-busy", "true"); }
+  try {
+    let devices = await navigator.mediaDevices.enumerateDevices();
+    let cameras = devices.filter(device => device.kind === "videoinput");
+    if (cameras.length && cameras.every(camera => !camera.label) && navigator.mediaDevices.getUserMedia) {
+      const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      permissionStream.getTracks().forEach(track => track.stop());
+      devices = await navigator.mediaDevices.enumerateDevices();
+      cameras = devices.filter(device => device.kind === "videoinput");
+    }
+    const select = $("#camera-select");
+    if (select) {
+      const selected = String(state.settings?.devices?.browserCameraId || "");
+      select.innerHTML = '<option value="auto">Pilih otomatis</option>' + cameras.map((camera, index) => `<option value="${escapeHtml(camera.deviceId)}">${escapeHtml(camera.label || `Kamera ${index + 1}`)}</option>`).join("");
+      select.value = cameras.some(camera => camera.deviceId === selected) ? selected : "auto";
+    }
+    setText("#device-camera-status", cameras.length ? `${cameras.length} kamera` : "Tidak ditemukan");
+    setText("#device-camera-name", cameras[0]?.label || (cameras.length ? "Kamera browser siap dipilih" : "Sambungkan kamera lalu coba lagi"));
+    setText("#device-printer-status", "Dialog browser");
+    setText("#device-printer-name", "Printer dipilih saat dialog cetak dibuka");
+    setText("#device-connected-count", `${cameras.length} KAMERA`);
+    toast(cameras.length ? `${cameras.length} kamera ditemukan` : "Kamera belum ditemukan. Sambungkan perangkat lalu coba lagi.", cameras.length ? "success" : "error");
+    return cameras;
+  } catch (error) {
+    const message = browserCameraErrorMessage(error);
+    toast(message, "error");
+    throw new Error(message);
+  } finally {
+    if (sourceButton) { sourceButton.disabled = false; sourceButton.removeAttribute("aria-busy"); }
+  }
+}
+
+async function testBrowserCamera(sourceButton = null, keepStream = false) {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("Browser ini tidak mendukung akses kamera. Gunakan Chrome, Edge, Safari, atau Firefox terbaru.");
+  if (sourceButton) { sourceButton.disabled = true; sourceButton.setAttribute("aria-busy", "true"); }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(browserCameraConstraints());
+    const track = stream.getVideoTracks()[0];
+    const label = track?.label || "Kamera browser";
+    setText("#device-camera-status", "Siap");
+    setText("#device-camera-name", label);
+    if (keepStream) {
+      state.cameraPreviewStream?.getTracks().forEach(activeTrack => activeTrack.stop());
+      state.cameraPreviewStream = stream;
+      const video = $("#camera-preview-video");
+      video.srcObject = stream;
+      video.hidden = false;
+      $("#camera-preview-image").hidden = true;
+      $("#camera-preview-placeholder").hidden = true;
+      await video.play().catch(() => {});
+      $("#camera-preview-status").textContent = `Preview aktif · ${label} · langsung dari browser`;
+    } else {
+      stream.getTracks().forEach(activeTrack => activeTrack.stop());
+      toast(`Kamera siap: ${label}`);
+    }
+    return true;
+  } catch (error) {
+    const message = browserCameraErrorMessage(error);
+    if (keepStream) {
+      setCameraPreviewMessage("Preview belum tersedia", message);
+      $("#camera-preview-status").textContent = message;
+    }
+    toast(message, "error");
+    return false;
+  } finally {
+    if (sourceButton) { sourceButton.disabled = false; sourceButton.removeAttribute("aria-busy"); }
+  }
+}
+
+function printBrowserTest() {
+  const popup = window.open("", "_blank", "width=720,height=900");
+  if (!popup) return toast("Popup cetak diblokir. Izinkan popup untuk Photoslive lalu tekan Tes printer lagi.", "error");
+  popup.document.open();
+  popup.document.write(`<!doctype html><html><head><title>Tes printer Photoslive</title><style>@page{size:4in 6in;margin:8mm}*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;color:#111}.sheet{height:calc(6in - 16mm);border:2px solid #111;display:grid;place-items:center;text-align:center;padding:24px}.mark{font-size:42px}.line{width:100%;height:12px;background:linear-gradient(90deg,#000 0 20%,#777 20% 40%,#bbb 40% 60%,#eee 60% 80%,#fff 80%);border:1px solid #111}small{color:#555}</style></head><body><main class="sheet"><div><div class="mark">✓</div><h1>PHOTOSLIVE</h1><h2>Tes cetak browser</h2><p>Jika halaman ini tercetak penuh, dialog cetak browser bekerja.</p><div class="line"></div><p><small>${escapeHtml(new Date().toLocaleString("id-ID"))}</small></p></div></main><script>addEventListener('load',()=>setTimeout(()=>window.print(),100));<\/script></body></html>`);
+  popup.document.close();
+  toast("Dialog cetak dibuka. Pilih printer dan kualitas cetak pada sistem.");
+}
+
 async function testDevice(kind) {
+  if (isWebRuntime()) return kind === "camera" ? testBrowserCamera($("#test-camera")) : printBrowserTest();
   try { const result = await api(`/api/devices/${kind}/test`, { method: "POST" }); toast(result.message || "Perangkat siap digunakan"); await refreshStatus(); }
   catch (error) { toast(`Perangkat belum siap: ${error.message}`, "error"); }
 }
@@ -1994,10 +2183,12 @@ function setCameraPreviewMessage(title, detail) {
   $("b", placeholder).textContent = title;
   $("p", placeholder).textContent = detail;
   $("#camera-preview-image").hidden = true;
+  $("#camera-preview-video").hidden = true;
 }
 
 async function loadCameraPreview() {
   if (!state.cameraPreviewEnabled) return;
+  if (isWebRuntime()) return testBrowserCamera($("#toggle-camera-preview"), true);
   try {
     let url;
     if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
@@ -2029,6 +2220,10 @@ function stopCameraPreview(message = "Preview mati — tidak memakai kamera atau
   state.cameraPreviewTimer = null;
   if (state.cameraPreviewUrl) URL.revokeObjectURL(state.cameraPreviewUrl);
   state.cameraPreviewUrl = null;
+  state.cameraPreviewStream?.getTracks().forEach(track => track.stop());
+  state.cameraPreviewStream = null;
+  const video = $("#camera-preview-video");
+  if (video) { video.srcObject = null; video.hidden = true; }
   $("#toggle-camera-preview span").textContent = "Nyalakan preview";
   setCameraPreviewMessage("Preview belum dinyalakan", "Sambungkan webcam atau kamera foto, lalu tekan Nyalakan preview.");
   $("#camera-preview-status").textContent = message;
@@ -2040,15 +2235,35 @@ async function toggleCameraPreview() {
   $("#toggle-camera-preview span").textContent = "Matikan preview";
   $("#camera-preview-status").textContent = "Menghubungkan ke kamera…";
   await loadCameraPreview();
-  state.cameraPreviewTimer = setInterval(loadCameraPreview, 2000);
+  if (!isWebRuntime()) state.cameraPreviewTimer = setInterval(loadCameraPreview, 2000);
 }
 
 async function printTestPage() {
+  if (isWebRuntime()) return printBrowserTest();
   try {
     const result = await api("/api/devices/printer/test-page", { method: "POST" });
     toast(result.message || "Lembar tes dikirim ke printer");
     await refreshStatus();
   } catch (error) { toast(`Lembar tes tidak dapat dicetak: ${error.message}`, "error"); }
+}
+
+async function runWebAdvancedAction(type, button) {
+  if (type === "devices.refresh") return refreshBrowserDevices(button);
+  if (type === "camera.test") return testBrowserCamera(button);
+  if (type === "printer.test") return printBrowserTest();
+  if (type === "sync.retry") {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    try {
+      await refreshStatus(true);
+      $("#agent-operation-status").textContent = navigator.onLine ? "Data cloud telah diperbarui." : "Internet belum tersedia. Data lokal akan dikirim otomatis setelah tersambung.";
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+    return;
+  }
+  return queueAgentJob(type, {}, button);
 }
 
 async function downloadDiagnostics() {
@@ -2225,10 +2440,14 @@ function bindEvents() {
   $("#print-general-vouchers").addEventListener("click", () => printVouchers());
   $("#create-voucher-event").addEventListener("click", () => { $("#voucher-event-form").reset(); $("#voucher-event-print").checked = true; $("#voucher-event-dialog").showModal(); });
   $("#submit-voucher-event").addEventListener("click", event => { event.preventDefault(); createVoucherEvent(); });
+  $("#install-admin-pwa")?.addEventListener("click", installAdminPwa);
   $("#refresh-agent").addEventListener("click", () => loadAgentStatus(true));
   $("#refresh-agent-queues").addEventListener("click", () => loadAgentStatus(true));
   $("#refresh-session-recovery").addEventListener("click", () => loadAgentStatus(true));
-  $$('[data-agent-job]:not(#agent-connection-control)').forEach(button => button.addEventListener("click", () => queueAgentJob(button.dataset.agentJob)));
+  $$('[data-agent-job]:not(#agent-connection-control)').forEach(button => button.addEventListener("click", () => {
+    if (isWebRuntime()) return runWebAdvancedAction(button.dataset.agentJob, button);
+    return queueAgentJob(button.dataset.agentJob, {}, button);
+  }));
   $("#agent-connection-control").addEventListener("click", setAgentConnection);
   $(".agent-queue-panel").addEventListener("click", event => {
     const syncButton = event.target.closest("[data-retry-sync-job]");
@@ -2240,7 +2459,11 @@ function bindEvents() {
     const button = event.target.closest("[data-recover-session]");
     if (button) queueAgentJob("session.recover", { sessionId: button.dataset.recoverSession, extensionSeconds: 180 }, button);
   });
-  $("#scan-devices").addEventListener("click", async () => { try { const result = await api("/api/devices/refresh", { method: "POST" }); renderDevices(result.devices); toast("Pencarian perangkat selesai"); } catch (error) { toast(error.message, "error"); } });
+  $("#scan-devices").addEventListener("click", async event => {
+    if (isWebRuntime()) return refreshBrowserDevices(event.currentTarget).catch(() => {});
+    try { const result = await api("/api/devices/refresh", { method: "POST" }); renderDevices(result.devices); toast("Pencarian perangkat selesai"); }
+    catch (error) { toast(error.message, "error"); }
+  });
   $("#test-camera").addEventListener("click", () => testDevice("camera"));
   $("#test-printer").addEventListener("click", () => testDevice("printer"));
   $("#toggle-camera-preview").addEventListener("click", toggleCameraPreview);
@@ -2280,6 +2503,20 @@ function bindEvents() {
   });
 }
 
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  deferredAdminInstallPrompt = event;
+  const status = $("#admin-pwa-install-status");
+  if (status) status.textContent = "Photoslive siap dipasang sebagai aplikasi di desktop.";
+});
+window.addEventListener("appinstalled", () => {
+  deferredAdminInstallPrompt = null;
+  const status = $("#admin-pwa-install-status");
+  if (status) status.textContent = "Photoslive berhasil ditambahkan ke desktop.";
+  const button = $("#install-admin-pwa");
+  if (button) { button.hidden = true; button.setAttribute("aria-hidden", "true"); }
+});
+
 async function boot() {
   if (!adminBoothCode || ["setup","superadmin","booth"].includes(adminBoothCode)) { location.replace("/setup?mode=login"); return; }
   const authResponse = await fetch("/api/platform?action=me");
@@ -2305,6 +2542,12 @@ async function boot() {
   }
   if (auth.user?.role === "operator") {
     $$('[data-view="integrations"], [data-view="finance"]').forEach(item => { item.hidden = true; });
+  }
+  if (adminPwaIsInstalled()) {
+    const button = $("#install-admin-pwa");
+    if (button) button.hidden = true;
+    const status = $("#admin-pwa-install-status");
+    if (status) status.textContent = "Photoslive sudah terpasang sebagai aplikasi.";
   }
   state.authBooth = ownedBooth || legacyBooth || auth.booth || null;
   const routeMachineId = state.authBooth?.machineId || "";
@@ -2340,6 +2583,10 @@ async function boot() {
     if (!isWebRuntime() && $("#storage-view").classList.contains("active")) loadStorageData(false).catch(() => {});
     if (!isWebRuntime()) setInterval(() => refreshStatus(false).catch(() => {}), 60000);
   } catch (error) { toast(`Data admin tidak dapat dimuat: ${error.message}`, "error"); }
+}
+
+if ("serviceWorker" in navigator && (window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+  navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
 }
 
 window.addEventListener("beforeunload", event => { stopCameraPreview(); if (state.dirtySections.size) { event.preventDefault(); event.returnValue = ""; } });

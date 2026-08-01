@@ -270,7 +270,7 @@ main { width: 100%; max-width: 1560px; margin: 0 auto; padding: var(--space-8) v
 .device-column { display: grid; gap: var(--space-5); align-content: start; }
 .camera-workbench, .print-workbench { min-height: 410px; }
 .camera-preview-stage { position: relative; min-height: 230px; overflow: hidden; display: grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #171a20; }
-.camera-preview-stage > img { width: 100%; height: 280px; object-fit: contain; transition: transform .2s ease; }
+.camera-preview-stage > img, .camera-preview-stage > video { width: 100%; height: 280px; object-fit: contain; transition: transform .2s ease; }
 .preview-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 230px; padding: var(--space-6); color: #fff; text-align: center; }
 .preview-placeholder .panel-icon { border-color: #444953; background: #252931; }
 .preview-placeholder .panel-icon img { filter: invert(1); }
