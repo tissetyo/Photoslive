@@ -20,6 +20,7 @@ const boothState = {
   previewUrl: null,
   cameraStream: null,
   cameraMode: null,
+  cameraMirrored: false,
   cameraLabels: [],
   sessionTimer: null,
   goodbyeTimer: null,
@@ -533,6 +534,7 @@ async function readCachedBoothConfig() {
 
 function setScreen(name) {
   $("#booth-app").dataset.screen = name;
+  $("#booth-admin-entry").hidden = name !== "welcome";
   $$('[data-booth-screen]').forEach(screen => screen.classList.toggle("is-active", screen.dataset.boothScreen === name));
   const hasSessionHeader = name !== "welcome";
   $("#session-bar").hidden = !hasSessionHeader;
@@ -573,6 +575,7 @@ function applyConfiguration() {
   applyLogo(appearance.activeLogo);
   boothState.frames = [...BUILTIN_FRAMES, ...(boothState.config.assets.frame || []).map(asset => ({ ...asset, builtin: false }))];
   boothState.selectedFrame = boothState.frames.find(frame => frame.url === appearance.activeFrame) || boothState.frames[0];
+  boothState.cameraMirrored = Boolean(boothState.config.devices?.cameraMirror);
   boothState.framePage = Math.max(0, Math.floor(boothState.frames.indexOf(boothState.selectedFrame) / framePageSize()));
   renderFrames();
 }
@@ -593,12 +596,42 @@ function frameBackground(frame) {
   return frame.builtin ? frame.style : `url("${frame.url}")`;
 }
 
+function createFrameStrip(frame, className = "frame-thumb") {
+  const strip = document.createElement("span");
+  strip.className = className;
+  strip.style.backgroundImage = frameBackground(frame);
+  const slots = document.createElement("span");
+  slots.className = className === "selected-frame-strip" ? "selected-frame-slots" : "frame-thumb-slots";
+  slots.style.gridTemplateRows = `repeat(${frameSlots(frame.url)},1fr)`;
+  for (let index = 0; index < frameSlots(frame.url); index += 1) {
+    const slot = document.createElement("span");
+    if (className === "selected-frame-strip") {
+      slot.className = "selected-frame-slot";
+      const video = document.createElement("video");
+      video.className = "selected-frame-camera-video";
+      video.autoplay = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.setAttribute("aria-hidden", "true");
+      const image = document.createElement("img");
+      image.className = "selected-frame-camera-image";
+      image.alt = "";
+      const placeholder = document.createElement("span");
+      placeholder.className = "selected-frame-camera-placeholder";
+      slot.append(video, image, placeholder);
+    }
+    slots.append(slot);
+  }
+  strip.append(slots);
+  return strip;
+}
+
 function frameDisplayName(frame) {
   return frame.name.replace(/^\d+-/, "").replace(/\.(png|jpe?g|webp)$/i, "").replace(/[_-]+/g, " ").trim();
 }
 
 function framePageSize() {
-  return window.matchMedia("(orientation: portrait)").matches ? 4 : 8;
+  return window.matchMedia("(orientation: portrait)").matches ? 4 : 6;
 }
 
 function renderFrames() {
@@ -624,13 +657,12 @@ function renderFrames() {
     button.type = "button";
     button.className = `frame-option ${frame.url === boothState.selectedFrame?.url ? "is-selected" : ""}`;
     button.dataset.frameUrl = frame.url;
-    const thumb = document.createElement("span"); thumb.className = "frame-thumb"; thumb.style.backgroundImage = frameBackground(frame);
-    const slots = document.createElement("span"); slots.className = "frame-thumb-slots"; slots.style.gridTemplateRows = `repeat(${frameSlots(frame.url)},1fr)`;
-    for (let index = 0; index < frameSlots(frame.url); index += 1) slots.append(document.createElement("span"));
+    const thumb = document.createElement("span"); thumb.className = "frame-thumb-sheet";
+    thumb.append(createFrameStrip(frame), createFrameStrip(frame));
     const check = document.createElement("span"); check.className = "frame-check"; check.innerHTML = '<img src="/icons/circle-check.svg" alt="Dipilih" />';
     const title = document.createElement("strong"); title.textContent = frameDisplayName(frame);
     const meta = document.createElement("small"); meta.textContent = `${frameSlots(frame.url)} foto`;
-    thumb.append(slots, check); button.append(thumb, title, meta); list.append(button);
+    thumb.append(check); button.append(thumb, title, meta); list.append(button);
   });
   $("#frame-page-count").textContent = `${boothState.framePage + 1} dari ${pageCount}`;
   $("#frame-page-prev").disabled = !filteredFrames.length || boothState.framePage === 0;
@@ -642,6 +674,58 @@ function updateFrameSelection() {
   $$(".frame-option").forEach(option => option.classList.toggle("is-selected", option.dataset.frameUrl === boothState.selectedFrame?.url));
   $("#frame-choice-label").textContent = boothState.selectedFrame ? `${frameDisplayName(boothState.selectedFrame)} · ${frameSlots(boothState.selectedFrame.url)} foto` : "Pilih satu frame";
   $("#frame-continue").disabled = !boothState.selectedFrame;
+  renderSelectedFramePreview();
+}
+
+function cameraTransform() {
+  const rotation = Number(boothState.config?.devices?.cameraRotation || 0);
+  return `rotate(${rotation}deg) scaleX(${boothState.cameraMirrored ? -1 : 1})`;
+}
+
+function applyCameraTransform() {
+  const transform = cameraTransform();
+  [$("#frame-camera-video"), $("#capture-camera-video"), $("#frame-camera-image"), $("#capture-camera-image"), ...$$(".selected-frame-camera-video"), ...$$(".selected-frame-camera-image")]
+    .filter(Boolean)
+    .forEach(media => { media.style.transform = transform; });
+  const button = $("#frame-mirror-toggle");
+  if (button) {
+    button.setAttribute("aria-pressed", String(boothState.cameraMirrored));
+    button.classList.toggle("is-active", boothState.cameraMirrored);
+    const label = $("span", button);
+    if (label) label.textContent = boothState.cameraMirrored ? "Cermin aktif" : "Cerminkan";
+  }
+}
+
+function syncSelectedFramePreviewCamera() {
+  const videos = $$(".selected-frame-camera-video");
+  const images = $$(".selected-frame-camera-image");
+  const placeholders = $$(".selected-frame-camera-placeholder");
+  const hasStream = Boolean(boothState.cameraStream);
+  const hasImage = Boolean(boothState.previewUrl);
+  videos.forEach(video => {
+    video.srcObject = hasStream ? boothState.cameraStream : null;
+    video.classList.toggle("has-image", hasStream);
+    if (hasStream) video.play().catch(() => {});
+  });
+  images.forEach(image => {
+    if (hasImage) image.src = boothState.previewUrl;
+    else image.removeAttribute("src");
+    image.classList.toggle("has-image", !hasStream && hasImage);
+  });
+  placeholders.forEach(placeholder => { placeholder.hidden = hasStream || hasImage; });
+  applyCameraTransform();
+}
+
+function renderSelectedFramePreview() {
+  const sheet = $("#selected-frame-preview-sheet");
+  if (!sheet) return;
+  sheet.innerHTML = "";
+  if (!boothState.selectedFrame) {
+    sheet.innerHTML = '<div class="selected-frame-empty">Pilih frame untuk melihat hasil cetak.</div>';
+    return;
+  }
+  sheet.append(createFrameStrip(boothState.selectedFrame, "selected-frame-strip"), createFrameStrip(boothState.selectedFrame, "selected-frame-strip"));
+  syncSelectedFramePreviewCamera();
 }
 
 async function refreshCameraPreview() {
@@ -653,16 +737,12 @@ async function refreshCameraPreview() {
       if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || "Kamera belum tersedia"); }
       url = URL.createObjectURL(await response.blob());
     }
-    [$("#frame-camera-image"), $("#capture-camera-image")].forEach(image => {
-      image.src = url; image.classList.add("has-image");
-      const rotation = Number(boothState.config.devices.cameraRotation || 0);
-      const mirror = boothState.config.devices.cameraMirror ? -1 : 1;
-      image.style.transform = `rotate(${rotation}deg) scaleX(${mirror})`;
-    });
+    [$("#frame-camera-image"), $("#capture-camera-image")].forEach(image => { image.src = url; image.classList.add("has-image"); });
     $("#frame-camera-fallback").hidden = true; $("#capture-camera-fallback").hidden = true;
     $("#camera-live-pill").classList.remove("is-offline"); $("#camera-live-label").textContent = "KAMERA AKTIF";
     if (boothState.previewUrl) URL.revokeObjectURL(boothState.previewUrl);
     boothState.previewUrl = url;
+    syncSelectedFramePreviewCamera();
     return true;
   } catch (error) {
     $("#frame-camera-fallback").hidden = false; $("#capture-camera-fallback").hidden = false;
@@ -725,6 +805,7 @@ async function startBrowserCamera() {
   $("#frame-camera-fallback").hidden = true; $("#capture-camera-fallback").hidden = true;
   $("#camera-live-pill").classList.remove("is-offline"); $("#camera-live-label").textContent = "KAMERA PERANGKAT AKTIF";
   boothState.cameraMode = "browser";
+  syncSelectedFramePreviewCamera();
   const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
   boothState.cameraLabels = devices.filter(device => device.kind === "videoinput").map(device => device.label || "Kamera perangkat");
   reportClientCapabilities(boothState.cameraLabels);
@@ -756,6 +837,7 @@ function stopCameraPreview() {
   if (boothState.cameraStream) boothState.cameraStream.getTracks().forEach(track => track.stop());
   boothState.cameraStream = null; boothState.cameraMode = null;
   [$("#frame-camera-video"), $("#capture-camera-video")].forEach(video => { video.srcObject = null; video.classList.remove("has-image"); });
+  syncSelectedFramePreviewCamera();
 }
 
 async function captureBrowserFrame() {
@@ -763,7 +845,7 @@ async function captureBrowserFrame() {
   if (!boothState.cameraStream || !video.videoWidth || !video.videoHeight) throw new Error("Frame kamera perangkat belum siap");
   const canvas = document.createElement("canvas"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   const context = canvas.getContext("2d");
-  if (boothState.config.devices.cameraMirror) { context.translate(canvas.width, 0); context.scale(-1, 1); }
+  if (boothState.cameraMirrored) { context.translate(canvas.width, 0); context.scale(-1, 1); }
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .92));
   if (!blob) throw new Error("Browser gagal membuat file foto");
@@ -778,6 +860,8 @@ function formatTimer(seconds) {
 
 function startSessionTimer() {
   clearInterval(boothState.sessionTimer);
+  $("#session-time-label").textContent = "WAKTU SESI";
+  $("#session-time").classList.remove("is-pending");
   const tick = () => {
     if (!boothState.session || boothState.expired) return;
     const remaining = (new Date(boothState.session.deadlineAt).getTime() - Date.now()) / 1000;
@@ -807,14 +891,14 @@ async function createSession() {
     const { session } = await boothApi("/api/booth/sessions", { method: "POST", body: JSON.stringify({ frameId: boothState.selectedFrame.url, consent: boothState.consent }) });
     boothState.session = session; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false; rememberSession(session);
     setScreen("capture"); $(".capture-screen").classList.add("is-waiting"); $("#capture-ready-overlay").hidden = false;
-    $("#camera-start").firstChild.textContent = "Ketuk untuk mulai ";
+    $("#camera-start").firstChild.textContent = "Mulai foto ";
     renderSlotStrip(); startSessionTimer(); startCameraPreview();
   } catch (error) { notice(error.message, "error"); $("#frame-continue").disabled = false; }
 }
 
 async function runShotCountdown() {
   if (!boothState.session || boothState.expired) return;
-  $("#capture-ready-overlay").hidden = true; $(".capture-screen").classList.remove("is-waiting"); $("#photo-review").hidden = true;
+  $("#capture-ready-overlay").hidden = true; $(".capture-screen").classList.remove("is-waiting"); setPhotoReviewVisible(false);
   const overlay = $("#countdown-overlay"); overlay.hidden = false;
   const total = boothState.session.rules.photoSlots;
   $("#countdown-slot-label").textContent = `Foto ${boothState.currentSlot} dari ${total}`;
@@ -827,8 +911,13 @@ async function runShotCountdown() {
   overlay.hidden = true; await captureCurrentSlot();
 }
 
+function setPhotoReviewVisible(visible) {
+  $("#photo-review").hidden = !visible;
+  $("#capture-hud").hidden = visible;
+  $(".capture-screen").classList.toggle("is-reviewing", visible);
+}
+
 async function captureCurrentSlot() {
-  $("#capture-instruction b").textContent = "Mengambil foto…"; $("#capture-instruction small").textContent = "Tetap diam sebentar.";
   try {
     if (!boothState.cameraMode) {
       throw new Error("Kamera browser belum siap. Izinkan akses kamera, pastikan kamera tidak dipakai aplikasi lain, lalu coba lagi.");
@@ -846,10 +935,10 @@ async function captureCurrentSlot() {
       $("#review-attempt-detail").textContent = remainingRetakes > 0 ? `Kamu masih punya ${remainingRetakes} kesempatan retake untuk foto ini.` : "Batas retake sudah tercapai. Gunakan foto ini untuk melanjutkan.";
       $("#retake-photo").hidden = remainingRetakes <= 0;
     }
-    $("#photo-review").hidden = false;
+    setPhotoReviewVisible(true);
   } catch (error) {
     notice(error.message, "error");
-    $("#capture-heading").textContent = "Kamera belum siap"; $(".ready-card>p:not(.eyebrow)").textContent = error.message;
+    $("#capture-heading").textContent = "Kamera belum siap"; $("#capture-ready-help").textContent = error.message;
     $("#camera-start").firstChild.textContent = "Coba lagi "; $("#capture-ready-overlay").hidden = false; $(".capture-screen").classList.add("is-waiting");
   }
 }
@@ -858,10 +947,9 @@ async function acceptCurrentPhoto() {
   if (!boothState.currentPhoto) return;
   try {
     await boothApi(`/api/sessions/${boothState.session.id}/select`, { method: "POST", body: JSON.stringify({ fileId: boothState.currentPhoto.id }) });
-    $("#photo-review").hidden = true;
+    setPhotoReviewVisible(false);
     if (boothState.currentSlot < boothState.session.rules.photoSlots) {
       boothState.currentSlot += 1; boothState.currentPhoto = null; renderSlotStrip();
-      $("#capture-instruction b").textContent = `Bersiap untuk foto ${boothState.currentSlot}`; $("#capture-instruction small").textContent = "Hitung mundur berikutnya akan dimulai.";
       await wait(450); runShotCountdown();
     } else {
       const completed = await boothApi(`/api/sessions/${boothState.session.id}/complete`, { method: "POST", body: "{}" });
@@ -879,16 +967,31 @@ async function acceptCurrentPhoto() {
 
 function showResult(compositeUrl = "") {
   stopCameraPreview(); setScreen("result");
-  const frame = boothState.selectedFrame; const finalFrame = $("#final-frame"); finalFrame.style.backgroundImage = frameBackground(frame);
-  const slots = $("#final-slots"); slots.innerHTML = ""; slots.style.gridTemplateRows = `repeat(${boothState.session.rules.photoSlots},1fr)`;
-  finalFrame.classList.toggle("has-rendered-output", Boolean(compositeUrl));
-  if (compositeUrl) {
-    finalFrame.style.backgroundImage = "none";
-    slots.style.gridTemplateRows = "1fr";
-    const image = document.createElement("img"); image.className = "rendered-output"; image.src = compositeUrl; image.alt = "Hasil foto dengan frame"; slots.append(image);
-  } else {
-    Object.keys(boothState.photos).sort((a,b) => a-b).forEach(index => { const image = document.createElement("img"); image.src = boothState.photos[index].url; image.alt = `Foto final ${index}`; slots.append(image); });
-  }
+  const frame = boothState.selectedFrame;
+  const finalFrames = Array.from(document.querySelectorAll(".final-frame"));
+  const finalSlotGroups = Array.from(document.querySelectorAll(".final-slots"));
+  finalFrames.forEach(finalFrame => {
+    finalFrame.style.backgroundImage = compositeUrl ? "none" : frameBackground(frame);
+    finalFrame.classList.toggle("has-rendered-output", Boolean(compositeUrl));
+  });
+  finalSlotGroups.forEach((slots, stripIndex) => {
+    slots.innerHTML = "";
+    slots.style.gridTemplateRows = compositeUrl ? "1fr" : `repeat(${boothState.session.rules.photoSlots},1fr)`;
+    if (compositeUrl) {
+      const image = document.createElement("img");
+      image.className = "rendered-output";
+      image.src = compositeUrl;
+      image.alt = stripIndex === 0 ? "Strip hasil foto pertama" : "Strip hasil foto kedua";
+      slots.append(image);
+      return;
+    }
+    Object.keys(boothState.photos).sort((a,b) => a-b).forEach(index => {
+      const image = document.createElement("img");
+      image.src = boothState.photos[index].url;
+      image.alt = `Foto ${index} pada strip ${stripIndex + 1}`;
+      slots.append(image);
+    });
+  });
   $("#result-frame-name").textContent = frame.name.replace(/^\d+-/, "");
   $("#print-result").hidden = Number(boothState.config.booth.printsPerSession || 0) < 1;
 }
@@ -896,7 +999,9 @@ function showResult(compositeUrl = "") {
 function enterFrameSelection() {
   stopPaymentPolling();
   setScreen("frames");
-  $("#session-countdown").textContent = formatTimer(boothState.config.booth.sessionTimeoutSeconds);
+  $("#session-time-label").textContent = "MULAI SETELAH FRAME";
+  $("#session-countdown").textContent = "--:--";
+  $("#session-time").classList.add("is-pending");
   startCameraPreview();
 }
 
@@ -1077,9 +1182,9 @@ function resetBooth({ preserveRecovery = false } = {}) {
     boothDbDelete("state", browserSessionStorageKey()).catch(() => {});
     boothState.captureBlobs = {};
   }
-  $("#capture-heading").textContent = "Sudah siap?"; $(".ready-card>p:not(.eyebrow)").textContent = "Pastikan semua orang terlihat. Setelah ditekan, hitung mundur akan langsung dimulai."; $("#camera-start").firstChild.textContent = "Ketuk untuk mulai ";
-  $("#session-countdown").textContent = formatTimer(boothState.config.booth.sessionTimeoutSeconds); $("#session-time").classList.remove("urgent");
-  $("#photo-review").hidden = true; $("#countdown-overlay").hidden = true; $("#capture-ready-overlay").hidden = false; $(".capture-screen").classList.remove("is-waiting");
+  $("#capture-heading").textContent = "Siap foto?"; $("#capture-ready-help").textContent = "Pastikan semua terlihat."; $("#camera-start").firstChild.textContent = "Mulai foto ";
+  $("#session-time-label").textContent = "MULAI SETELAH FRAME"; $("#session-countdown").textContent = "--:--"; $("#session-time").classList.remove("urgent"); $("#session-time").classList.add("is-pending");
+  setPhotoReviewVisible(false); $("#countdown-overlay").hidden = true; $("#capture-ready-overlay").hidden = false; $(".capture-screen").classList.remove("is-waiting");
   updateFrameSelection(); setScreen("welcome");
   if (routeBoothCode) history.replaceState(null, "", `/${routeBoothCode}`);
   if (boothState.pendingConfig) {
@@ -1100,9 +1205,10 @@ function bindEvents() {
   $("#frame-page-prev").addEventListener("click", () => { boothState.framePage -= 1; renderFrames(); });
   $("#frame-page-next").addEventListener("click", () => { boothState.framePage += 1; renderFrames(); });
   $("#frame-search").addEventListener("input", event => { boothState.frameQuery = event.target.value; boothState.framePage = 0; renderFrames(); });
+  $("#frame-mirror-toggle").addEventListener("click", () => { boothState.cameraMirrored = !boothState.cameraMirrored; applyCameraTransform(); });
   $("#frame-continue").addEventListener("click", createSession);
   $("#camera-start").addEventListener("click", runShotCountdown);
-  $("#retake-photo").addEventListener("click", () => { $("#photo-review").hidden = true; runShotCountdown(); });
+  $("#retake-photo").addEventListener("click", () => { setPhotoReviewVisible(false); runShotCountdown(); });
   $("#accept-photo").addEventListener("click", acceptCurrentPhoto);
   $("#print-result").addEventListener("click", openPrintDialog);
   $("#finish-session").addEventListener("click", () => startGoodbye());
