@@ -178,7 +178,7 @@ export const boothControllerPathAllowed = value => {
     || path === "/api/devices/camera/preview.jpg"
     || path === "/api/booth/sessions"
     || path === "/api/booth/print"
-    || /^\/api\/sessions\/[^/]+\/(capture|capture-upload|select|complete)$/.test(path);
+    || /^\/api\/sessions\/[^/]+\/(frame|capture|capture-upload|select|complete)$/.test(path);
 };
 
 async function authorizeOperator(redis, request, machineId, payload = null) {

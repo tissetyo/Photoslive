@@ -46,7 +46,7 @@ test("customer continuation records versioned photo-processing consent", async (
   const [html, booth] = await Promise.all([read("booth.html"), read("booth.js")]);
   assert.match(html, /Dengan melanjutkan, kamu menyetujui foto diproses untuk sesi ini/);
   assert.match(booth, /boothState\.consent = \{ accepted: true, version: "2026-07-21", method: "welcome_continue" \}/);
-  assert.match(booth, /frameId: boothState\.selectedFrame\.url, consent: boothState\.consent/);
+  assert.match(booth, /frameId: boothState\.selectedFrame\.url,[\s\S]*?consent: boothState\.consent/);
   assert.match(booth, /boothState\.consent = null/);
 });
 
@@ -73,42 +73,79 @@ test("booth markup has unique element ids", async () => {
 
 test("camera and goodbye flow reuse real handlers", async () => {
   const booth = await read("booth.js");
-  assert.match(booth, /function enterFrameSelection\(\) \{[\s\S]*?startCameraPreview\(\)/);
+  assert.match(booth, /function enterFrameSelection\(\) \{[\s\S]*?setScreen\("frames"\)/);
+  assert.doesNotMatch(booth, /function enterFrameSelection\(\) \{[\s\S]*?startCameraPreview\(\)/);
   assert.match(booth, /if \(boothState\.cameraStream\) return startBrowserCamera\(\)/);
   assert.match(booth, /let remaining = 15/);
   assert.match(booth, /#skip-goodbye"\)\.addEventListener\("click", resetBooth\)/);
 });
 
-test("frame library supports search, pagination, and an accessible empty state", async () => {
+test("frame library renders the full scrollable catalogue without search or pagination", async () => {
   const [html, booth] = await Promise.all([read("booth.html"), read("booth.js")]);
-  assert.match(html, /id="frame-search" type="search" placeholder="Cari frame"/);
-  assert.match(html, /<span class="sr-only">Cari frame<\/span>/);
-  assert.match(booth, /const filteredFrames = query[\s\S]*?\.filter\(frame => frameDisplayName\(frame\)/);
-  assert.match(booth, /const pageCount = Math\.max\(1, Math\.ceil\(filteredFrames\.length \/ pageSize\)\)/);
-  assert.match(booth, /empty\.className = "frame-empty"[\s\S]*?Frame tidak ditemukan/);
-  assert.match(booth, /#frame-search"\)\.addEventListener\("input", event => \{ boothState\.frameQuery = event\.target\.value; boothState\.framePage = 0; renderFrames\(\); \}\)/);
+  assert.doesNotMatch(html, /id="frame-search"|id="frame-page-prev"|id="frame-page-next"/);
+  assert.match(booth, /boothState\.frames\.forEach\(frame => \{/);
+  assert.match(booth, /empty\.className = "frame-empty"[\s\S]*?Belum ada frame/);
+  assert.doesNotMatch(booth, /filteredFrames|framePageSize\(\)|#frame-search/);
 });
 
-test("frame selection is a touch-first catalogue with mirrored live two-strip preview", async () => {
+test("frame selection is a touch-first 3x3 catalogue with a camera-free two-strip preview", async () => {
   const [html, css, booth] = await Promise.all([read("booth.html"), read("booth.css"), read("booth.js")]);
   assert.match(html, /class="frame-catalog"[\s\S]*?class="frame-selection-preview"/);
+  assert.match(html, /class="frame-selection-preview"[\s\S]*?<\/aside>[\s\S]*?id="frame-continue"/);
   assert.match(html, /id="selected-frame-preview-sheet"/);
-  assert.match(html, /id="frame-mirror-toggle"[^>]+aria-pressed="false"/);
-  assert.match(booth, /thumb\.append\(createFrameStrip\(frame\), createFrameStrip\(frame\)\)/);
-  assert.match(booth, /sheet\.append\(createFrameStrip\(boothState\.selectedFrame, "selected-frame-strip"\), createFrameStrip\(boothState\.selectedFrame, "selected-frame-strip"\)\)/);
-  assert.match(booth, /#frame-mirror-toggle"\)\.addEventListener\("click"[\s\S]*?applyCameraTransform\(\)/);
-  assert.match(css, /\.frame-picker-panel \{[\s\S]*?grid-template-columns: minmax\(420px, 1\.08fr\) minmax\(360px, \.92fr\)/);
+  assert.match(booth, /thumb\.append\(\.\.\.Array\.from\(\{ length: copies \}, \(\) => createFrameStrip\(frame\)\)\)/);
+  assert.match(booth, /sheet\.append\(\.\.\.Array\.from\(\{ length: copies \}, \(\) => createFrameStrip\(boothState\.selectedFrame, "selected-frame-strip"\)\)\)/);
+  assert.doesNotMatch(html, /frame-mirror-toggle|camera-live-pill|frame-camera-video/);
+  assert.match(css, /Frame library is a full-screen workspace[\s\S]*?grid-template-columns: minmax\(360px, 36vw\) minmax\(0, 1fr\)/);
+  assert.match(css, /Final frame-picker layout: nine visible designs in a 3x3 grid[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);[\s\S]*?grid-auto-rows: calc\(\(100% - 28px\) \/ 3\)/);
+  assert.match(css, /\.frame-continue \{[\s\S]*?grid-column: 1 \/ -1;[\s\S]*?width: 100%;/);
+  assert.match(css, /\.frame-thumb-sheet \{[\s\S]*?background: transparent/);
   assert.match(css, /\.frame-option \{[\s\S]*?touch-action: manipulation/);
-  assert.match(css, /\.mirror-toggle \{[\s\S]*?min-height: 48px/);
 });
 
-test("session timer stays pending until a frame creates the real session", async () => {
+test("frame previews consume the same saved transforms, stickers, and print geometry as the renderer", async () => {
+  const [html, css, booth] = await Promise.all([read("booth.html"), read("booth.css"), read("booth.js")]);
+  assert.match(html, /booth\.css\?v=15/);
+  assert.match(html, /booth\.js\?v=23/);
+  assert.match(booth, /appearance\.frameSlotTransforms\?\.\[frame\.url\]/);
+  assert.match(booth, /appearance\.frameBackgroundTransforms\?\.\[frame\.url\]/);
+  assert.match(booth, /appearance\.frameStickers\?\.\[frame\.url\]/);
+  assert.match(booth, /const paperSizes = \{ "4x6": \[1200, 1800\], "5x7": \[1500, 2100\], "6x8": \[1800, 2400\], A4: \[2480, 3508\] \}/);
+  assert.match(booth, /devices\.printLayout === "full-photo" \? 1 : Math\.max\(1, Math\.min\(4, Number\(devices\.stripsPerSheet \|\| 2\)\)\)/);
+  assert.match(booth, /strip\.style\.aspectRatio = `\$\{geometry\.width\} \/ \$\{geometry\.height\}`/);
+  assert.match(booth, /strip\.className = `\$\{className\} booth-frame-strip`/);
+  assert.match(booth, /strip\.dataset\.frameDesign = JSON\.stringify\(\{/);
+  assert.match(booth, /frame-thumb-slots"} booth-frame-slots`/);
+  assert.match(booth, /frame-thumb-slot"} booth-frame-slot`/);
+  assert.match(booth, /applyPositionedLayerStyle\(slot, presentation\.slotTransforms\[index\]\)/);
+  assert.match(booth, /applyPositionedLayerStyle\(image, \{ \.\.\.sticker, z:/);
+  assert.match(booth, /frameDesignVersion: boothState\.config\.frameDesignVersion \|\| null/);
+  assert.match(booth, /Clean white[\s\S]*?style: "#f4f4f0"/);
+  assert.match(booth, /Party night[\s\S]*?linear-gradient\(#231c39,#7a5d8a\)/);
+  assert.match(css, /\.frame-thumb-slots,[\s\S]*?\.selected-frame-slots \{[\s\S]*?inset: 0;[\s\S]*?display: block;/);
+  assert.match(css, /Gallery and detail preview share one frame renderer[\s\S]*?\.booth-frame-slots \.booth-frame-slot \{[\s\S]*?background: rgba\(20,23,31,\.86\);/);
+  assert.match(css, /\.frame-thumb-sheet \.booth-frame-strip \{[\s\S]*?height: 100%;[\s\S]*?flex: 0 0 auto;/);
+});
+
+test("capture progress places accepted photos inside the original selected frame", async () => {
+  const [html, css, booth] = await Promise.all([read("booth.html"), read("booth.css"), read("booth.js")]);
+  assert.match(html, /PREVIEW FRAME[\s\S]*?id="capture-frame-progress"[\s\S]*?id="slot-strip" aria-hidden="true" hidden/);
+  assert.match(booth, /function createFrameStrip\(frame, className = "frame-thumb", slotPhotos = null\)/);
+  assert.match(booth, /const photo = slotPhotos\?\.\[index \+ 1\][\s\S]*?image\.className = "booth-frame-slot-photo"/);
+  assert.match(booth, /framePreview\.append\(createFrameStrip\(boothState\.selectedFrame, "capture-progress-strip", boothState\.photos\)\)/);
+  assert.match(css, /Live progress uses the selected print frame[\s\S]*?\.capture-frame-progress \{[\s\S]*?height: clamp\(230px, 38vh, 390px\);/);
+  assert.match(css, /\.booth-frame-slot-photo \{[\s\S]*?object-fit: cover;/);
+});
+
+test("session timer starts when frame selection opens and keeps the server deadline", async () => {
   const [html, booth] = await Promise.all([read("booth.html"), read("booth.js")]);
   assert.match(html, /id="session-time-label">MULAI SETELAH FRAME/);
   assert.match(html, /id="session-countdown">--:--/);
-  assert.match(booth, /function enterFrameSelection\(\) \{[\s\S]*?#session-countdown"\)\.textContent = "--:--"/);
   assert.match(booth, /function startSessionTimer\(\) \{[\s\S]*?#session-time-label"\)\.textContent = "WAKTU SESI"/);
-  assert.match(booth, /async function createSession\(\)[\s\S]*?startSessionTimer\(\)/);
+  assert.match(booth, /async function enterFrameSelection\(\)[\s\S]*?\/api\/booth\/sessions[\s\S]*?startSessionTimer\(\)/);
+  assert.match(booth, /async function createSession\(\)[\s\S]*?\/api\/sessions\/\$\{boothState\.session\.id\}\/frame/);
+  const confirmFrame = booth.slice(booth.indexOf("async function createSession"), booth.indexOf("async function runShotCountdown"));
+  assert.doesNotMatch(confirmFrame, /startSessionTimer\(\)/);
 });
 
 test("capture confirmation stays concise and admin access is welcome-only", async () => {
@@ -134,6 +171,7 @@ test("voucher, confirmation, and a single accessible review modal are wired to t
   assert.doesNotMatch(html, /id="capture-instruction"|Mengambil foto|Tetap diam sebentar/);
   assert.doesNotMatch(booth, /capture-instruction|Mengambil foto|Tetap diam sebentar/);
   assert.match(booth, /function setPhotoReviewVisible\(visible\)[\s\S]*?#capture-hud"\)\.hidden = visible/);
+  assert.match(booth, /if \(!visible\) \$\("#review-photo-image"\)\.removeAttribute\("src"\)/);
   assert.match(booth, /setPhotoReviewVisible\(true\)/);
   assert.match(css, /\/\* Photo review is one focused, touch-first modal\.[\s\S]*?\.photo-review\{position:absolute;z-index:25;inset:0/);
   assert.match(css, /\.review-actions \.touch-button\{[\s\S]*?min-height:66px/);
@@ -141,6 +179,7 @@ test("voucher, confirmation, and a single accessible review modal are wired to t
   assert.match(html, /class="shot-countdown-badge" id="countdown-overlay" aria-live="polite" hidden/);
   assert.doesNotMatch(html, /class="countdown-overlay"/);
   assert.match(css, /\.shot-countdown-badge\{position:absolute;z-index:20;top:108px;left:50%;[\s\S]*?pointer-events:none\}/);
+  assert.match(css, /Keep accepted shots visible as progress[\s\S]*?\.capture-screen:not\(\.is-reviewing\) \.slot-progress \{[\s\S]*?width: max-content;[\s\S]*?\.slot-cell \{[\s\S]*?aspect-ratio: 4 \/ 3;/);
   assert.match(booth, /async function runShotCountdown\(\)[\s\S]*?const overlay = \$\("#countdown-overlay"\); overlay\.hidden = false/);
   assert.match(booth, /if \(boothState\.currentSlot < boothState\.session\.rules\.photoSlots\)[\s\S]*?runShotCountdown\(\)/);
 });

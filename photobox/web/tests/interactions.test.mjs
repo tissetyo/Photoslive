@@ -36,7 +36,9 @@ test("interaction inventory has no active control with unknown wiring", () => {
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const summary = JSON.parse(result.stdout);
-  assert.equal(summary.controls, 478);
+  // The customer frame picker intentionally removed search, two pagination
+  // arrows, and the camera mirror control in favor of the scrollable gallery.
+  assert.equal(summary.controls, 474);
   assert.equal(summary.unknownControls.length, 0);
   assert.equal(summary.classifications.unknown, 0);
   assert.equal(summary.classifications.wired + summary.classifications.unavailable, summary.controls);

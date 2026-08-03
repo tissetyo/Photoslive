@@ -28,6 +28,7 @@ test("scoped booth token rejects tampering and expiry", async () => {
 test("public booth hardware scope only allows customer-flow controller routes", () => {
   assert.equal(boothControllerPathAllowed("/api/devices"), true);
   assert.equal(boothControllerPathAllowed("/api/sessions/local_123/capture"), true);
+  assert.equal(boothControllerPathAllowed("/api/sessions/local_123/frame"), true);
   assert.equal(boothControllerPathAllowed("/api/booth/print"), true);
   assert.equal(boothControllerPathAllowed("/api/settings"), false);
   assert.equal(boothControllerPathAllowed("/api/storage/cleanup"), false);
