@@ -7,7 +7,7 @@
     <title>Photoslive Booth</title>
     <link rel="icon" href="/icons/camera.svg" />
     <link rel="manifest" href="/app.webmanifest" />
-    <link rel="stylesheet" href="/booth.css?v=9" />
+    <link rel="stylesheet" href="/booth.css?v=15" />
   </head>
   <body>
     <div class="booth-app" id="booth-app" data-screen="welcome">
@@ -31,20 +31,17 @@
         </section>
 
         <section class="booth-screen frame-screen" data-booth-screen="frames" aria-label="Pilih desain foto">
-          <div class="live-camera-layer"><video class="live-camera-image" id="frame-camera-video" autoplay muted playsinline aria-label="Preview kamera perangkat"></video><img class="live-camera-image" id="frame-camera-image" alt="Preview kamera controller" /><div class="camera-fallback" id="frame-camera-fallback"><img src="/icons/camera.svg" alt="" /><b>Menghubungkan kamera…</b><span id="frame-camera-status">Izinkan akses kamera saat diminta</span></div></div>
-          <div class="frame-screen-shade"></div>
           <div class="frame-picker-content">
             <div class="frame-picker-panel">
               <div class="frame-catalog">
-                <div class="frame-picker-head"><div><small>PILIH DESAIN FOTO</small><b id="frame-choice-label">Pilih satu frame</b></div><div class="frame-head-actions"><label class="frame-search"><img src="/icons/search.svg" alt="" /><span class="sr-only">Cari frame</span><input id="frame-search" type="search" placeholder="Cari frame" autocomplete="off" /></label><span class="frame-page-count" id="frame-page-count">1 dari 1</span></div></div>
-                <div class="frame-browser"><button class="frame-page-button" id="frame-page-prev" aria-label="Halaman frame sebelumnya"><img src="/icons/chevron-left.svg" alt="" /></button><div class="frame-list" id="frame-list"></div><button class="frame-page-button" id="frame-page-next" aria-label="Halaman frame berikutnya"><img src="/icons/chevron-right.svg" alt="" /></button></div>
+                <div class="frame-picker-head"><div><small>PILIH DESAIN FOTO</small><b id="frame-choice-label">Pilih satu frame</b></div></div>
+                <div class="frame-list" id="frame-list"></div>
               </div>
               <aside class="frame-selection-preview" aria-labelledby="selected-frame-preview-title">
-                <div class="frame-preview-head"><div><small>PREVIEW HASIL CETAK</small><b id="selected-frame-preview-title">Dua strip dalam satu lembar</b></div><div class="frame-preview-actions"><span class="live-pill" id="camera-live-pill"><i></i><span id="camera-live-label">MENGHUBUNGKAN</span></span><button class="mirror-toggle" id="frame-mirror-toggle" type="button" aria-pressed="false"><img src="/icons/refresh-cw.svg" alt="" /><span>Cerminkan</span></button></div></div>
+                <h2 class="sr-only" id="selected-frame-preview-title">Preview frame pilihan</h2>
                 <div class="selected-frame-preview-sheet" id="selected-frame-preview-sheet" aria-live="polite"></div>
-                <p class="frame-preview-note">Preview menampilkan dua strip yang dicetak berdampingan pada satu lembar.</p>
               </aside>
-              <button class="touch-button primary-touch frame-continue" id="frame-continue" disabled>Lanjutkan dengan frame ini <img src="/icons/arrow-right.svg" alt="" /></button>
+              <button class="touch-button primary-touch frame-continue" id="frame-continue" disabled>Pilih frame ini <img src="/icons/arrow-right.svg" alt="" /></button>
             </div>
           </div>
         </section>
@@ -60,7 +57,7 @@
           <div class="shot-countdown-badge" id="countdown-overlay" aria-live="polite" hidden><strong id="shot-countdown">15</strong><span id="countdown-slot-label">Foto 1 dari 3</span></div>
 
           <div class="capture-hud" id="capture-hud">
-            <div class="slot-progress"><div><small>HASIL FOTO</small><b id="capture-progress-label">Foto 1 dari 3</b></div><div class="slot-strip" id="slot-strip"></div></div>
+            <div class="slot-progress"><div><small>PREVIEW FRAME</small><b id="capture-progress-label">Foto 1 dari 3</b></div><div class="capture-frame-progress" id="capture-frame-progress" aria-label="Preview hasil foto di dalam frame pilihan"></div><div class="slot-strip" id="slot-strip" aria-hidden="true" hidden></div></div>
           </div>
 
           <div class="photo-review" id="photo-review" role="dialog" aria-modal="true" aria-labelledby="review-title" hidden><div class="review-modal"><div class="review-photo"><img id="review-photo-image" alt="Hasil foto terbaru" /></div><div class="review-copy"><p class="eyebrow">FOTO <span id="review-slot-number">1</span></p><h2 id="review-title">Pakai foto ini?</h2><p class="sr-only" id="review-attempt-detail">Foto dapat diambil ulang.</p><div class="review-actions"><button class="touch-button secondary-touch" id="retake-photo"><img src="/icons/refresh-cw.svg" alt="" />Ambil ulang</button><button class="touch-button primary-touch" id="accept-photo">Gunakan foto <img src="/icons/circle-check.svg" alt="" /></button></div></div></div></div>
@@ -82,6 +79,6 @@
 
     <dialog class="customer-dialog goodbye-dialog" id="goodbye-dialog"><div class="dialog-body goodbye-body"><div class="goodbye-animation"><span>✦</span><span>♥</span><span>✦</span></div><p class="eyebrow">TERIMA KASIH</p><h2 id="goodbye-title">Sampai jumpa lagi!</h2><p id="goodbye-copy">Hasilmu sedang diproses. Jangan lupa ambil cetakanmu.</p><div class="goodbye-timer"><span>Kembali ke layar utama dalam</span><b id="goodbye-countdown">15</b><small>detik</small></div><button class="touch-button secondary-touch light full-touch goodbye-skip" id="skip-goodbye">Lewati dan kembali sekarang</button></div></dialog>
 
-    <script src="/booth.js?v=17" defer></script>
+    <script src="/booth.js?v=23" defer></script>
   </body>
 </html>

@@ -294,7 +294,8 @@ main { width: 100%; max-width: 1560px; margin: 0 auto; padding: var(--space-8) v
 .print-slot-grid span img { width: 22px; height: 22px; }
 .print-paper { position: relative; width: min(100%, 210px); aspect-ratio: 2 / 3; justify-self: center; padding: 12px; background: #fff; box-shadow: 0 12px 28px rgba(20, 23, 28, .16); }
 .print-sheet-strips { --strip-count: 2; height: 100%; display: grid; grid-template-columns: repeat(var(--strip-count), minmax(0, 1fr)); gap: 12px; }
-.photo-strip { position: relative; min-width: 0; overflow: hidden; display: flex; flex-direction: column; padding: 8px 8px 0; border: 1px solid #e0e2e7; background: var(--frame-art, #fff); background-color: #fff; }
+.photo-strip { position: relative; min-width: 0; overflow: hidden; display: flex; flex-direction: column; padding: 8px 8px 0; border: 1px solid #e0e2e7; background: #fff; }
+.frame-template-artwork { position: absolute; z-index: 0; inset: 0; background-position: center; background-size: cover!important; background-repeat: no-repeat!important; }
 .photo-strip-slots { position: relative; min-height: 0; flex: 1; display: block; }
 .photo-strip-slots span { position: absolute; aspect-ratio: 1 / 1; min-height: 0; display: grid; place-items: center; overflow: hidden; border: 2px solid rgba(255,255,255,.88); background: linear-gradient(145deg, rgba(217,214,255,.94), rgba(119,112,220,.92) 58%, rgba(51,54,83,.94)); box-shadow: 0 1px 5px rgba(20,23,28,.18); }
 .photo-strip.frame-layout-single { padding: 8px; }

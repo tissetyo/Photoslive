@@ -531,6 +531,15 @@ class LocalFirstTests(unittest.TestCase):
             value = db.execute("SELECT value_json FROM local_state WHERE key = 'settings_version'").fetchone()[0]
         self.assertEqual(json.loads(value), 9)
 
+    def test_new_booth_access_methods_require_admin_opt_in(self):
+        payment = server.load_settings()["payment"]
+        self.assertFalse(payment["qrisEnabled"])
+        self.assertFalse(payment["voucherEnabled"])
+
+        updated = server.save_settings({"payment": {"qrisEnabled": True, "voucherEnabled": True}})
+        self.assertTrue(updated["payment"]["qrisEnabled"])
+        self.assertTrue(updated["payment"]["voucherEnabled"])
+
     def test_device_selection_is_mirrored_to_sqlite_and_survives_settings_damage(self):
         selected = {
             "preferredCamera": "/dev/video2",
@@ -603,6 +612,45 @@ class LocalFirstTests(unittest.TestCase):
             uploaded = db.execute("SELECT uploaded_at FROM photo_files WHERE id = ?", (file_record["id"],)).fetchone()[0]
         self.assertIsNotNone(uploaded)
 
+    def test_booth_preview_and_print_freeze_the_same_frame_design_contract(self):
+        transforms = [
+            {"x": 42, "y": 24, "width": 70, "rotation": -4, "opacity": 90, "z": 2},
+            {"x": 58, "y": 68, "width": 82, "rotation": 3, "opacity": 100, "z": 3},
+        ]
+        background = {"zoom": 135, "x": 38, "y": 62}
+        stickers = [{"url": "/uploads/sticker/logo.png", "x": 50, "y": 91, "size": 24, "rotation": 2, "opacity": 85, "z": 8}]
+        server.save_settings({
+            "booth": {"photoSlotsPerSession": 2},
+            "appearance": {
+                "activeFrame": "contract-frame",
+                "framePhotoSlots": {"contract-frame": 2},
+                "frameBackgroundTransforms": {"contract-frame": background},
+                "frameSlotTransforms": {"contract-frame": transforms},
+                "frameStickers": {"contract-frame": stickers},
+            },
+            "devices": {"paperSize": "4x6", "printLayout": "photo-strip-vertical", "stripsPerSheet": 2},
+        })
+
+        preview_config = server.booth_config()
+        self.assertEqual(preview_config["frameDesignVersion"], server.frame_design_version(server.load_settings()))
+        self.assertEqual(preview_config["devices"]["printLayout"], "photo-strip-vertical")
+        self.assertEqual(preview_config["appearance"]["frameSlotTransforms"]["contract-frame"], transforms)
+        self.assertEqual(preview_config["appearance"]["frameBackgroundTransforms"]["contract-frame"], background)
+        self.assertEqual(preview_config["appearance"]["frameStickers"]["contract-frame"], stickers)
+
+        with mock.patch.object(server, "storage_safety", return_value={"blocked": False, "warning": False, "message": "Penyimpanan siap"}):
+            session = server.create_photo_session("contract-frame")
+        with sqlite3.connect(server.DB_PATH) as db:
+            frozen = json.loads(db.execute("SELECT frame_config_json FROM photo_sessions WHERE id = ?", (session["id"],)).fetchone()[0])
+        self.assertEqual(frozen["slotTransforms"], transforms)
+        self.assertEqual(frozen["backgroundTransform"], background)
+        self.assertEqual(frozen["stickers"], stickers)
+        self.assertEqual((frozen["paperSize"], frozen["printLayout"], frozen["stripsPerSheet"]), ("4x6", "photo-strip-vertical", 2))
+
+        server.save_settings({"appearance": {"frameBackgroundTransforms": {"contract-frame": {"zoom": 150, "x": 40, "y": 60}}}})
+        with self.assertRaisesRegex(ValueError, "Desain frame berubah di admin"):
+            server.create_photo_session("contract-frame", expected_frame_design_version=preview_config["frameDesignVersion"])
+
     def test_active_session_and_selected_capture_survive_controller_restart(self):
         server.save_settings({"booth": {"photoSlotsPerSession": 1}, "appearance": {"framePhotoSlots": {"clean-white": 1}}})
         with mock.patch.object(server, "storage_safety", return_value={"blocked": False, "warning": False, "message": "Penyimpanan siap"}):
@@ -617,6 +665,21 @@ class LocalFirstTests(unittest.TestCase):
         self.assertTrue((server.photo_root() / capture["path"]).is_file())
         completed = server.complete_photo_session(session["id"])
         self.assertEqual(completed["status"], "completed")
+
+    def test_frame_selection_updates_reserved_session_without_resetting_deadline(self):
+        server.save_settings({"appearance": {"framePhotoSlots": {"clean-white": 3, "party-night": 2}}})
+        with mock.patch.object(server, "storage_safety", return_value={"blocked": False, "warning": False, "message": "Penyimpanan siap"}):
+            reserved = server.create_photo_session("clean-white", consent={"accepted": True})
+        version = server.frame_design_version(server.load_settings())
+        updated = server.update_photo_session_frame(reserved["id"], "party-night", version)
+
+        self.assertEqual(updated["frameId"], "party-night")
+        self.assertEqual(updated["rules"]["photoSlots"], 2)
+        self.assertEqual(updated["deadlineAt"], reserved["deadlineAt"])
+
+        self.register_selected_capture(updated, slot_index=1)
+        with self.assertRaisesRegex(ValueError, "setelah pengambilan foto dimulai"):
+            server.update_photo_session_frame(reserved["id"], "clean-white", version)
 
     def test_offline_session_captures_renders_and_queues_without_cloud(self):
         server.save_settings({"booth": {"photoSlotsPerSession": 1}, "appearance": {"framePhotoSlots": {"clean-white": 1}}})
@@ -1206,6 +1269,11 @@ class LocalFirstTests(unittest.TestCase):
             self.assertEqual(warning["state"], "warning")
             self.assertFalse(warning["blocked"])
             self.assertIn("kurang dari 20%", warning["message"])
+        with mock.patch.object(server, "disk_metrics", return_value={"totalBytes": 228 * 1024**3, "usedBytes": 206 * 1024**3, "freeBytes": 22 * 1024**3, "usedPercent": 90.4}):
+            large_disk_warning = server.storage_safety(server.photo_root())
+            self.assertEqual(large_disk_warning["state"], "warning")
+            self.assertFalse(large_disk_warning["blocked"])
+            self.assertIn("kurang dari 20%", large_disk_warning["message"])
 
     def test_signed_offline_policy_transitions_and_disables_qris_offline(self):
         base = 1_800_000_000.0

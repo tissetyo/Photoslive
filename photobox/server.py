@@ -142,8 +142,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "maintenanceMode": False,
     },
     "payment": {
-        "qrisEnabled": True,
-        "voucherEnabled": True,
+        # New booths start with free access. Operators must explicitly enable
+        # each paid/access method from the admin panel after it is configured.
+        "qrisEnabled": False,
+        "voucherEnabled": False,
         "price": 35000,
         "currency": "IDR",
         "provider": "Not configured",
@@ -1908,6 +1910,26 @@ def frame_config_snapshot(settings: dict[str, Any], frame_id: str) -> dict[str, 
     }
 
 
+def frame_design_version(settings: dict[str, Any]) -> str:
+    appearance = settings.get("appearance") if isinstance(settings.get("appearance"), dict) else {}
+    devices = settings.get("devices") if isinstance(settings.get("devices"), dict) else {}
+    contract = {
+        "appearance": {
+            key: appearance.get(key)
+            for key in (
+                "activeFrame", "framePhotoSlots", "frameBackgroundTransforms",
+                "frameSlotTransforms", "frameStickers", "frameLayoutModes",
+            )
+        },
+        "devices": {
+            key: devices.get(key)
+            for key in ("paperSize", "printLayout", "stripsPerSheet", "printQuality")
+        },
+    }
+    encoded = json.dumps(contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _paper_pixels(paper_size: str) -> tuple[int, int]:
     return {
         "4x6": (1200, 1800),
@@ -2148,7 +2170,11 @@ def disk_metrics(path: Path | None = None) -> dict[str, Any]:
 def storage_safety(path: Path | None = None) -> dict[str, Any]:
     metrics = disk_metrics(path)
     free_percent = (metrics["freeBytes"] / metrics["totalBytes"] * 100) if metrics["totalBytes"] else 0
-    blocked = metrics["freeBytes"] < MINIMUM_FREE_STORAGE_BYTES or free_percent < 10
+    # Percentage alone is not a useful hard stop on larger disks: a machine can
+    # have tens of GiB available while sitting just below 10%. Preserve the
+    # percentage thresholds as operator warnings, but block capture only when
+    # the absolute reserve required for photos and compositor output is gone.
+    blocked = metrics["freeBytes"] < MINIMUM_FREE_STORAGE_BYTES
     warning = blocked or free_percent < 20
     return {
         "state": "critical" if blocked else ("warning" if warning else "ready"),
@@ -2453,7 +2479,7 @@ def reset_e2e_sessions() -> dict[str, int]:
     return {"cancelled": max(0, int(cursor.rowcount or 0))}
 
 
-def create_photo_session(frame_id: str | None = None, consent: dict[str, Any] | None = None) -> dict[str, Any]:
+def create_photo_session(frame_id: str | None = None, consent: dict[str, Any] | None = None, expected_frame_design_version: str | None = None) -> dict[str, Any]:
     session_id = f"SES-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
     # Public download URLs are bearer capabilities. Keep at least 128 bits of
     # cryptographic randomness in the URL instead of the previous 64-bit
@@ -2461,6 +2487,8 @@ def create_photo_session(frame_id: str | None = None, consent: dict[str, Any] | 
     token = uuid.uuid4().hex
     created_at = datetime.now(timezone.utc)
     settings = load_settings()
+    if expected_frame_design_version and not secrets.compare_digest(str(expected_frame_design_version), frame_design_version(settings)):
+        raise ValueError("Desain frame berubah di admin. Pilih ulang frame sebelum memulai sesi")
     booth = settings["booth"]
     appearance = settings["appearance"]
     devices = settings["devices"]
@@ -2519,6 +2547,45 @@ def create_photo_session(frame_id: str | None = None, consent: dict[str, Any] | 
         },
         "slots": [{"index": index, "status": "pending", "attempts": [], "selectedFileId": None} for index in range(1, photo_slots + 1)],
     }
+
+
+def update_photo_session_frame(session_id: str, frame_id: str, expected_frame_design_version: str | None = None) -> dict[str, Any]:
+    clean_session_id = str(session_id or "").strip()
+    selected_frame = str(frame_id or "").strip()
+    if not clean_session_id or not selected_frame:
+        raise ValueError("Sesi dan frame wajib dipilih")
+    settings = load_settings()
+    if expected_frame_design_version and not secrets.compare_digest(str(expected_frame_design_version), frame_design_version(settings)):
+        raise ValueError("Desain frame berubah di admin. Pilih ulang frame sebelum memulai sesi")
+    configured_slots = settings["appearance"].get("framePhotoSlots", {}).get(selected_frame, settings["booth"]["photoSlotsPerSession"])
+    photo_slots = max(1, min(8, int(configured_slots)))
+    frozen_frame_config = frame_config_snapshot(settings, selected_frame)
+    with sqlite3.connect(DB_PATH) as db:
+        row = db.execute(
+            "SELECT status, deadline_at, share_token FROM photo_sessions WHERE id = ?",
+            (clean_session_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Sesi foto tidak ditemukan")
+        if row[0] != "active":
+            raise ValueError("Sesi foto sudah tidak aktif")
+        if row[1] and datetime.now(timezone.utc) > datetime.fromisoformat(row[1]):
+            db.execute("UPDATE photo_sessions SET status = 'expired' WHERE id = ?", (clean_session_id,))
+            db.commit()
+            raise ValueError("Batas waktu sesi sudah habis")
+        capture_count = int(db.execute(
+            "SELECT COUNT(*) FROM photo_files WHERE session_id = ? AND file_kind = 'capture'",
+            (clean_session_id,),
+        ).fetchone()[0])
+        if capture_count:
+            raise ValueError("Frame tidak dapat diganti setelah pengambilan foto dimulai")
+        db.execute(
+            "UPDATE photo_sessions SET frame_id = ?, photo_slots = ?, frame_config_json = ? WHERE id = ?",
+            (selected_frame, photo_slots, json.dumps(frozen_frame_config), clean_session_id),
+        )
+        db.commit()
+    add_event("session", f"Frame sesi {clean_session_id} dipilih: {selected_frame}")
+    return session_summary(row[2]) or {"id": clean_session_id, "frameId": selected_frame, "status": "active"}
 
 
 def session_summary(token: str) -> dict[str, Any] | None:
@@ -3427,6 +3494,7 @@ def booth_config() -> dict[str, Any]:
             "maintenanceMode": bool(settings["booth"]["maintenanceMode"]),
         },
         "appearance": settings["appearance"],
+        "frameDesignVersion": frame_design_version(settings),
         "payment": {
             "qrisEnabled": bool(settings["payment"]["qrisEnabled"] and policy["qrisAllowed"]),
             "configuredQrisEnabled": bool(settings["payment"]["qrisEnabled"]),
@@ -3443,6 +3511,7 @@ def booth_config() -> dict[str, Any]:
             "cameraMirror": bool(settings["devices"]["cameraMirror"]),
             "cameraRotation": str(settings["devices"]["cameraRotation"]),
             "paperSize": settings["devices"]["paperSize"],
+            "printLayout": str(settings["devices"].get("printLayout") or "photo-strip-vertical"),
             "stripsPerSheet": int(settings["devices"]["stripsPerSheet"]),
             "printQuality": normalized_print_quality(settings["devices"].get("printQuality")),
         },
@@ -4957,7 +5026,22 @@ class ApiHandler(SimpleHTTPRequestHandler):
                 consent = payload.get("consent") if isinstance(payload.get("consent"), dict) else None
                 if not consent or consent.get("accepted") is not True or consent.get("version") != PHOTO_CONSENT_VERSION:
                     raise ValueError("Persetujuan pemrosesan foto diperlukan untuk memulai sesi")
-                return self.send_json({"session": create_photo_session(str(payload.get("frameId") or "").strip() or None, consent)}, HTTPStatus.CREATED)
+                return self.send_json({"session": create_photo_session(
+                    str(payload.get("frameId") or "").strip() or None,
+                    consent,
+                    str(payload.get("frameDesignVersion") or "").strip() or None,
+                )}, HTTPStatus.CREATED)
+            except (ValueError, json.JSONDecodeError) as exc:
+                return self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        frame_match = re.fullmatch(r"/api/sessions/([^/]+)/frame", path)
+        if frame_match:
+            try:
+                payload = self.read_json()
+                return self.send_json({"session": update_photo_session_frame(
+                    frame_match.group(1),
+                    str(payload.get("frameId") or ""),
+                    str(payload.get("frameDesignVersion") or "").strip() or None,
+                )})
             except (ValueError, json.JSONDecodeError) as exc:
                 return self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         if path == "/api/booth/client":

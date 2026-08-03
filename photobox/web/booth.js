@@ -13,6 +13,7 @@ const boothState = {
   frames: [],
   selectedFrame: null,
   session: null,
+  sessionStarting: false,
   currentSlot: 1,
   currentPhoto: null,
   photos: {},
@@ -25,8 +26,6 @@ const boothState = {
   sessionTimer: null,
   goodbyeTimer: null,
   expired: false,
-  framePage: 0,
-  frameQuery: "",
   accessMethod: null,
   printIncluded: false,
   voucherCode: "",
@@ -80,8 +79,8 @@ const BUILTIN_BACKGROUNDS = {
   "event-blue": "linear-gradient(145deg,#07182d,#167e9d)",
 };
 const BUILTIN_FRAMES = [
-  { name: "Clean white", url: "clean-white", builtin: true, style: "linear-gradient(#f5f5f3,#dadbdc)" },
-  { name: "Party night", url: "party-night", builtin: true, style: "linear-gradient(145deg,#171922,#9e83c4)" },
+  { name: "Clean white", url: "clean-white", builtin: true, style: "#f4f4f0" },
+  { name: "Party night", url: "party-night", builtin: true, style: "linear-gradient(#231c39,#7a5d8a)" },
 ];
 const FONT_FAMILIES = {
   system: "Inter,ui-sans-serif,system-ui,sans-serif", arial: "Arial,Helvetica,sans-serif",
@@ -248,6 +247,15 @@ async function boothWebRuntimeApi(path, options = {}) {
     syncWebSession("active");
     persistBrowserSession();
     return { session: webRuntimeSessionProjection(session) };
+  }
+  const frameMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/frame$/);
+  if (method === "POST" && frameMatch && boothState.session?.id === frameMatch[1]) {
+    const data = JSON.parse(options.body || "{}");
+    boothState.session.frameId = String(data.frameId || boothState.selectedFrame.url);
+    boothState.session.rules = { ...boothState.session.rules, ...webRuntimeRules() };
+    syncWebSession("active");
+    persistBrowserSession();
+    return { session: webRuntimeSessionProjection(boothState.session) };
   }
   const uploadMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/capture-upload$/);
   if (method === "POST" && uploadMatch && options.body instanceof Blob) {
@@ -576,7 +584,6 @@ function applyConfiguration() {
   boothState.frames = [...BUILTIN_FRAMES, ...(boothState.config.assets.frame || []).map(asset => ({ ...asset, builtin: false }))];
   boothState.selectedFrame = boothState.frames.find(frame => frame.url === appearance.activeFrame) || boothState.frames[0];
   boothState.cameraMirrored = Boolean(boothState.config.devices?.cameraMirror);
-  boothState.framePage = Math.max(0, Math.floor(boothState.frames.indexOf(boothState.selectedFrame) / framePageSize()));
   renderFrames();
 }
 
@@ -592,37 +599,103 @@ function frameSlots(frameUrl) {
   return Math.max(1, Math.min(8, Number(settings[frameUrl] || boothState.config.booth.photoSlotsPerSession || 1)));
 }
 
-function frameBackground(frame) {
-  return frame.builtin ? frame.style : `url("${frame.url}")`;
+function defaultFrameSlotTransforms(slotCount) {
+  const count = Math.max(1, Math.min(8, Number(slotCount || 1)));
+  const gap = 1.5;
+  const slotHeight = Math.min(28, (84 - gap * (count - 1)) / count);
+  const slotWidth = Math.min(88, slotHeight * 3);
+  return Array.from({ length: count }, (_, index) => ({
+    x: 50,
+    y: 3 + slotHeight / 2 + index * (slotHeight + gap),
+    width: slotWidth,
+    rotation: 0,
+    opacity: 100,
+    z: index + 1,
+  }));
 }
 
-function createFrameStrip(frame, className = "frame-thumb") {
+function framePrintGeometry() {
+  const paperSizes = { "4x6": [1200, 1800], "5x7": [1500, 2100], "6x8": [1800, 2400], A4: [2480, 3508] };
+  const devices = boothState.config?.devices || {};
+  const [paperWidth, height] = paperSizes[devices.paperSize] || paperSizes["4x6"];
+  const copies = devices.printLayout === "full-photo" ? 1 : Math.max(1, Math.min(4, Number(devices.stripsPerSheet || 2)));
+  return { width: Math.floor(paperWidth / copies), height, copies };
+}
+
+function framePresentation(frame) {
+  const appearance = boothState.config.appearance || {};
+  const slots = frameSlots(frame.url);
+  const configuredTransforms = appearance.frameSlotTransforms?.[frame.url];
+  return {
+    slots,
+    slotTransforms: Array.isArray(configuredTransforms) && configuredTransforms.length === slots
+      ? configuredTransforms
+      : defaultFrameSlotTransforms(slots),
+    backgroundTransform: appearance.frameBackgroundTransforms?.[frame.url] || { zoom: 100, x: 50, y: 50 },
+    stickers: Array.isArray(appearance.frameStickers?.[frame.url]) ? appearance.frameStickers[frame.url] : [],
+  };
+}
+
+function applyPositionedLayerStyle(element, transform, sizeKey = "width") {
+  element.style.left = `${Number(transform.x ?? 50)}%`;
+  element.style.top = `${Number(transform.y ?? 50)}%`;
+  element.style.width = `${Number(transform[sizeKey] || (sizeKey === "size" ? 30 : 84))}%`;
+  element.style.opacity = String(Number(transform.opacity ?? 100) / 100);
+  element.style.zIndex = String(Number(transform.z || 1));
+  element.style.transform = `translate(-50%,-50%) rotate(${Number(transform.rotation || 0)}deg)`;
+}
+
+function appendFrameArtwork(strip, frame, transform) {
+  const artwork = document.createElement("span");
+  artwork.className = "booth-frame-artwork";
+  if (frame.builtin) artwork.style.background = frame.style;
+  else artwork.style.backgroundImage = `url("${frame.url}")`;
+  artwork.style.backgroundPosition = `${Number(transform.x ?? 50)}% ${Number(transform.y ?? 50)}%`;
+  artwork.style.transform = `scale(${Math.max(100, Number(transform.zoom || 100)) / 100})`;
+  artwork.style.transformOrigin = `${Number(transform.x ?? 50)}% ${Number(transform.y ?? 50)}%`;
+  strip.append(artwork);
+}
+
+function createFrameStrip(frame, className = "frame-thumb", slotPhotos = null) {
   const strip = document.createElement("span");
-  strip.className = className;
-  strip.style.backgroundImage = frameBackground(frame);
+  strip.className = `${className} booth-frame-strip`;
+  const presentation = framePresentation(frame);
+  const geometry = framePrintGeometry();
+  strip.dataset.frameDesign = JSON.stringify({
+    frame: frame.url,
+    geometry,
+    slots: presentation.slotTransforms,
+    background: presentation.backgroundTransform,
+    stickers: presentation.stickers,
+  });
+  strip.style.aspectRatio = `${geometry.width} / ${geometry.height}`;
+  appendFrameArtwork(strip, frame, presentation.backgroundTransform);
   const slots = document.createElement("span");
-  slots.className = className === "selected-frame-strip" ? "selected-frame-slots" : "frame-thumb-slots";
-  slots.style.gridTemplateRows = `repeat(${frameSlots(frame.url)},1fr)`;
-  for (let index = 0; index < frameSlots(frame.url); index += 1) {
+  slots.className = `${className === "selected-frame-strip" ? "selected-frame-slots" : "frame-thumb-slots"} booth-frame-slots`;
+  for (let index = 0; index < presentation.slots; index += 1) {
     const slot = document.createElement("span");
-    if (className === "selected-frame-strip") {
-      slot.className = "selected-frame-slot";
-      const video = document.createElement("video");
-      video.className = "selected-frame-camera-video";
-      video.autoplay = true;
-      video.muted = true;
-      video.playsInline = true;
-      video.setAttribute("aria-hidden", "true");
+    slot.className = `${className === "selected-frame-strip" ? "selected-frame-slot" : "frame-thumb-slot"} booth-frame-slot`;
+    applyPositionedLayerStyle(slot, presentation.slotTransforms[index]);
+    const photo = slotPhotos?.[index + 1];
+    if (photo?.url) {
       const image = document.createElement("img");
-      image.className = "selected-frame-camera-image";
-      image.alt = "";
-      const placeholder = document.createElement("span");
-      placeholder.className = "selected-frame-camera-placeholder";
-      slot.append(video, image, placeholder);
+      image.className = "booth-frame-slot-photo";
+      image.src = photo.url;
+      image.alt = `Foto ${index + 1} di dalam frame`;
+      slot.append(image);
     }
     slots.append(slot);
   }
   strip.append(slots);
+  presentation.stickers.forEach((sticker, index) => {
+    const image = document.createElement("img");
+    image.className = "booth-frame-sticker";
+    image.src = sticker.url;
+    image.alt = "";
+    image.setAttribute("aria-hidden", "true");
+    applyPositionedLayerStyle(image, { ...sticker, z: Number(sticker.z || 10 + index) }, "size");
+    strip.append(image);
+  });
   return strip;
 }
 
@@ -630,50 +703,34 @@ function frameDisplayName(frame) {
   return frame.name.replace(/^\d+-/, "").replace(/\.(png|jpe?g|webp)$/i, "").replace(/[_-]+/g, " ").trim();
 }
 
-function framePageSize() {
-  return window.matchMedia("(orientation: portrait)").matches ? 4 : 6;
-}
-
 function renderFrames() {
   const list = $("#frame-list");
   list.innerHTML = "";
-  const pageSize = framePageSize();
-  const query = boothState.frameQuery.trim().toLocaleLowerCase("id-ID");
-  const filteredFrames = query
-    ? boothState.frames.filter(frame => frameDisplayName(frame).toLocaleLowerCase("id-ID").includes(query))
-    : boothState.frames;
-  const pageCount = Math.max(1, Math.ceil(filteredFrames.length / pageSize));
-  boothState.framePage = Math.max(0, Math.min(boothState.framePage, pageCount - 1));
-  const visibleFrames = filteredFrames.slice(boothState.framePage * pageSize, (boothState.framePage + 1) * pageSize);
-  list.style.setProperty("--frame-page-size", pageSize);
-  if (!visibleFrames.length) {
+  if (!boothState.frames.length) {
     const empty = document.createElement("div");
     empty.className = "frame-empty";
-    empty.innerHTML = '<img src="/icons/images.svg" alt="" /><b>Frame tidak ditemukan</b><span>Coba kata kunci lain.</span>';
+    empty.innerHTML = '<img src="/icons/images.svg" alt="" /><b>Belum ada frame</b>';
     list.append(empty);
   }
-  visibleFrames.forEach(frame => {
+  boothState.frames.forEach(frame => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `frame-option ${frame.url === boothState.selectedFrame?.url ? "is-selected" : ""}`;
     button.dataset.frameUrl = frame.url;
     const thumb = document.createElement("span"); thumb.className = "frame-thumb-sheet";
-    thumb.append(createFrameStrip(frame), createFrameStrip(frame));
+    const copies = framePrintGeometry().copies;
+    thumb.append(...Array.from({ length: copies }, () => createFrameStrip(frame)));
     const check = document.createElement("span"); check.className = "frame-check"; check.innerHTML = '<img src="/icons/circle-check.svg" alt="Dipilih" />';
     const title = document.createElement("strong"); title.textContent = frameDisplayName(frame);
-    const meta = document.createElement("small"); meta.textContent = `${frameSlots(frame.url)} foto`;
-    thumb.append(check); button.append(thumb, title, meta); list.append(button);
+    thumb.append(check); button.append(thumb, title); list.append(button);
   });
-  $("#frame-page-count").textContent = `${boothState.framePage + 1} dari ${pageCount}`;
-  $("#frame-page-prev").disabled = !filteredFrames.length || boothState.framePage === 0;
-  $("#frame-page-next").disabled = !filteredFrames.length || boothState.framePage >= pageCount - 1;
   updateFrameSelection();
 }
 
 function updateFrameSelection() {
   $$(".frame-option").forEach(option => option.classList.toggle("is-selected", option.dataset.frameUrl === boothState.selectedFrame?.url));
-  $("#frame-choice-label").textContent = boothState.selectedFrame ? `${frameDisplayName(boothState.selectedFrame)} · ${frameSlots(boothState.selectedFrame.url)} foto` : "Pilih satu frame";
-  $("#frame-continue").disabled = !boothState.selectedFrame;
+  $("#frame-choice-label").textContent = boothState.selectedFrame ? frameDisplayName(boothState.selectedFrame) : "Pilih satu frame";
+  $("#frame-continue").disabled = !boothState.selectedFrame || boothState.sessionStarting || boothState.session?.status !== "active";
   renderSelectedFramePreview();
 }
 
@@ -684,36 +741,9 @@ function cameraTransform() {
 
 function applyCameraTransform() {
   const transform = cameraTransform();
-  [$("#frame-camera-video"), $("#capture-camera-video"), $("#frame-camera-image"), $("#capture-camera-image"), ...$$(".selected-frame-camera-video"), ...$$(".selected-frame-camera-image")]
+  [$("#capture-camera-video"), $("#capture-camera-image")]
     .filter(Boolean)
     .forEach(media => { media.style.transform = transform; });
-  const button = $("#frame-mirror-toggle");
-  if (button) {
-    button.setAttribute("aria-pressed", String(boothState.cameraMirrored));
-    button.classList.toggle("is-active", boothState.cameraMirrored);
-    const label = $("span", button);
-    if (label) label.textContent = boothState.cameraMirrored ? "Cermin aktif" : "Cerminkan";
-  }
-}
-
-function syncSelectedFramePreviewCamera() {
-  const videos = $$(".selected-frame-camera-video");
-  const images = $$(".selected-frame-camera-image");
-  const placeholders = $$(".selected-frame-camera-placeholder");
-  const hasStream = Boolean(boothState.cameraStream);
-  const hasImage = Boolean(boothState.previewUrl);
-  videos.forEach(video => {
-    video.srcObject = hasStream ? boothState.cameraStream : null;
-    video.classList.toggle("has-image", hasStream);
-    if (hasStream) video.play().catch(() => {});
-  });
-  images.forEach(image => {
-    if (hasImage) image.src = boothState.previewUrl;
-    else image.removeAttribute("src");
-    image.classList.toggle("has-image", !hasStream && hasImage);
-  });
-  placeholders.forEach(placeholder => { placeholder.hidden = hasStream || hasImage; });
-  applyCameraTransform();
 }
 
 function renderSelectedFramePreview() {
@@ -724,8 +754,8 @@ function renderSelectedFramePreview() {
     sheet.innerHTML = '<div class="selected-frame-empty">Pilih frame untuk melihat hasil cetak.</div>';
     return;
   }
-  sheet.append(createFrameStrip(boothState.selectedFrame, "selected-frame-strip"), createFrameStrip(boothState.selectedFrame, "selected-frame-strip"));
-  syncSelectedFramePreviewCamera();
+  const copies = framePrintGeometry().copies;
+  sheet.append(...Array.from({ length: copies }, () => createFrameStrip(boothState.selectedFrame, "selected-frame-strip")));
 }
 
 async function refreshCameraPreview() {
@@ -737,17 +767,14 @@ async function refreshCameraPreview() {
       if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || "Kamera belum tersedia"); }
       url = URL.createObjectURL(await response.blob());
     }
-    [$("#frame-camera-image"), $("#capture-camera-image")].forEach(image => { image.src = url; image.classList.add("has-image"); });
-    $("#frame-camera-fallback").hidden = true; $("#capture-camera-fallback").hidden = true;
-    $("#camera-live-pill").classList.remove("is-offline"); $("#camera-live-label").textContent = "KAMERA AKTIF";
+    const image = $("#capture-camera-image"); image.src = url; image.classList.add("has-image");
+    $("#capture-camera-fallback").hidden = true;
     if (boothState.previewUrl) URL.revokeObjectURL(boothState.previewUrl);
     boothState.previewUrl = url;
-    syncSelectedFramePreviewCamera();
     return true;
   } catch (error) {
-    $("#frame-camera-fallback").hidden = false; $("#capture-camera-fallback").hidden = false;
-    $("#frame-camera-status").textContent = error.message; $("#capture-camera-status").textContent = error.message;
-    $("#camera-live-pill").classList.add("is-offline"); $("#camera-live-label").textContent = "KAMERA BELUM TERHUBUNG";
+    $("#capture-camera-fallback").hidden = false;
+    $("#capture-camera-status").textContent = error.message;
     return false;
   }
 }
@@ -759,9 +786,8 @@ async function pollControllerPreview() {
       const inventory = await boothApi("/api/devices");
       const connected = (inventory.devices || []).some(device => device.kind === "camera" && device.status === "connected");
       if (!connected) {
-        $("#frame-camera-fallback").hidden = false; $("#capture-camera-fallback").hidden = false;
-        $("#frame-camera-status").textContent = "Kamera belum terhubung"; $("#capture-camera-status").textContent = "Kamera belum terhubung";
-        $("#camera-live-pill").classList.add("is-offline"); $("#camera-live-label").textContent = "KAMERA BELUM TERHUBUNG";
+        $("#capture-camera-fallback").hidden = false;
+        $("#capture-camera-status").textContent = "Kamera belum terhubung";
         clearTimeout(boothState.previewTimer);
         boothState.previewTimer = setTimeout(pollControllerPreview, 15000);
         return;
@@ -798,14 +824,12 @@ async function startBrowserCamera() {
       : { facingMode: { ideal: preferredFacingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } };
     boothState.cameraStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
   }
-  const videos = [$("#frame-camera-video"), $("#capture-camera-video")];
+  const videos = [$("#capture-camera-video")];
   videos.forEach(video => { video.srcObject = boothState.cameraStream; video.classList.add("has-image"); });
   await Promise.all(videos.map(video => video.play().catch(() => {})));
-  [$("#frame-camera-image"), $("#capture-camera-image")].forEach(image => image.classList.remove("has-image"));
-  $("#frame-camera-fallback").hidden = true; $("#capture-camera-fallback").hidden = true;
-  $("#camera-live-pill").classList.remove("is-offline"); $("#camera-live-label").textContent = "KAMERA PERANGKAT AKTIF";
+  $("#capture-camera-image").classList.remove("has-image");
+  $("#capture-camera-fallback").hidden = true;
   boothState.cameraMode = "browser";
-  syncSelectedFramePreviewCamera();
   const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
   boothState.cameraLabels = devices.filter(device => device.kind === "videoinput").map(device => device.label || "Kamera perangkat");
   reportClientCapabilities(boothState.cameraLabels);
@@ -819,14 +843,11 @@ async function startCameraPreview() {
   } catch (browserError) {
     if (!helperRuntimeActive() && !localControllerAvailable()) {
       boothState.cameraMode = null;
-      $("#frame-camera-status").textContent = `${browserError.message}. Izinkan kamera pada browser untuk melanjutkan.`;
-      $("#capture-camera-status").textContent = $("#frame-camera-status").textContent;
-      $("#camera-live-pill").classList.add("is-offline");
-      $("#camera-live-label").textContent = "IZIN KAMERA DIPERLUKAN";
+      $("#capture-camera-status").textContent = `${browserError.message}. Izinkan kamera pada browser untuk melanjutkan.`;
       return;
     }
     boothState.cameraMode = "controller";
-    $("#frame-camera-status").textContent = `${browserError.message}. Mencoba kamera Photoslive Helper…`;
+    $("#capture-camera-status").textContent = `${browserError.message}. Mencoba kamera Photoslive Helper…`;
     await pollControllerPreview();
     reportClientCapabilities();
   }
@@ -836,8 +857,7 @@ function stopCameraPreview() {
   clearTimeout(boothState.previewTimer); boothState.previewTimer = null;
   if (boothState.cameraStream) boothState.cameraStream.getTracks().forEach(track => track.stop());
   boothState.cameraStream = null; boothState.cameraMode = null;
-  [$("#frame-camera-video"), $("#capture-camera-video")].forEach(video => { video.srcObject = null; video.classList.remove("has-image"); });
-  syncSelectedFramePreviewCamera();
+  [$("#capture-camera-video")].forEach(video => { video.srcObject = null; video.classList.remove("has-image"); });
 }
 
 async function captureBrowserFrame() {
@@ -883,16 +903,23 @@ function renderSlotStrip() {
     strip.append(cell);
   }
   $("#capture-progress-label").textContent = `Foto ${Math.min(boothState.currentSlot, total)} dari ${total}`;
+  const framePreview = $("#capture-frame-progress");
+  framePreview.innerHTML = "";
+  if (boothState.selectedFrame) framePreview.append(createFrameStrip(boothState.selectedFrame, "capture-progress-strip", boothState.photos));
 }
 
 async function createSession() {
   try {
     $("#frame-continue").disabled = true;
-    const { session } = await boothApi("/api/booth/sessions", { method: "POST", body: JSON.stringify({ frameId: boothState.selectedFrame.url, consent: boothState.consent }) });
-    boothState.session = session; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false; rememberSession(session);
+    if (!boothState.session || boothState.session.status !== "active") throw new Error("Sesi belum siap. Tunggu sebentar lalu coba lagi.");
+    const { session } = await boothApi(`/api/sessions/${boothState.session.id}/frame`, { method: "POST", body: JSON.stringify({
+      frameId: boothState.selectedFrame.url,
+      frameDesignVersion: boothState.config.frameDesignVersion || null,
+    }) });
+    boothState.session = { ...boothState.session, ...session }; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false; rememberSession(boothState.session);
     setScreen("capture"); $(".capture-screen").classList.add("is-waiting"); $("#capture-ready-overlay").hidden = false;
     $("#camera-start").firstChild.textContent = "Mulai foto ";
-    renderSlotStrip(); startSessionTimer(); startCameraPreview();
+    renderSlotStrip(); startCameraPreview();
   } catch (error) { notice(error.message, "error"); $("#frame-continue").disabled = false; }
 }
 
@@ -915,6 +942,7 @@ function setPhotoReviewVisible(visible) {
   $("#photo-review").hidden = !visible;
   $("#capture-hud").hidden = visible;
   $(".capture-screen").classList.toggle("is-reviewing", visible);
+  if (!visible) $("#review-photo-image").removeAttribute("src");
 }
 
 async function captureCurrentSlot() {
@@ -996,13 +1024,27 @@ function showResult(compositeUrl = "") {
   $("#print-result").hidden = Number(boothState.config.booth.printsPerSession || 0) < 1;
 }
 
-function enterFrameSelection() {
+async function enterFrameSelection() {
   stopPaymentPolling();
   setScreen("frames");
-  $("#session-time-label").textContent = "MULAI SETELAH FRAME";
-  $("#session-countdown").textContent = "--:--";
-  $("#session-time").classList.add("is-pending");
-  startCameraPreview();
+  if (boothState.session?.status === "active") { startSessionTimer(); updateFrameSelection(); return; }
+  boothState.sessionStarting = true;
+  updateFrameSelection();
+  try {
+    const { session } = await boothApi("/api/booth/sessions", { method: "POST", body: JSON.stringify({
+      frameId: boothState.selectedFrame.url,
+      frameDesignVersion: boothState.config.frameDesignVersion || null,
+      consent: boothState.consent,
+    }) });
+    boothState.session = session; boothState.currentSlot = 1; boothState.photos = {}; boothState.expired = false; rememberSession(session);
+    startSessionTimer();
+  } catch (error) {
+    notice(error.message, "error");
+    setScreen("welcome");
+  } finally {
+    boothState.sessionStarting = false;
+    updateFrameSelection();
+  }
 }
 
 function stopPaymentPolling() {
@@ -1176,7 +1218,7 @@ function expireSession() {
 function resetBooth({ preserveRecovery = false } = {}) {
   clearInterval(boothState.goodbyeTimer); clearInterval(boothState.sessionTimer); stopPaymentPolling(); stopCameraPreview();
   if ($("#goodbye-dialog").open) $("#goodbye-dialog").close(); if ($("#print-dialog").open) $("#print-dialog").close(); if ($("#access-dialog").open) $("#access-dialog").close();
-  boothState.session = null; boothState.currentSlot = 1; boothState.currentPhoto = null; boothState.photos = {}; boothState.expired = false; boothState.accessMethod = null; boothState.printIncluded = false; boothState.voucherCode = ""; boothState.consent = null;
+  boothState.session = null; boothState.sessionStarting = false; boothState.currentSlot = 1; boothState.currentPhoto = null; boothState.photos = {}; boothState.expired = false; boothState.accessMethod = null; boothState.printIncluded = false; boothState.voucherCode = ""; boothState.consent = null;
   if (!preserveRecovery) {
     localStorage.removeItem(boothSessionRecoveryKey());
     boothDbDelete("state", browserSessionStorageKey()).catch(() => {});
@@ -1202,10 +1244,6 @@ function bindEvents() {
     openAccessGate();
   });
   $("#frame-list").addEventListener("click", event => { const option = event.target.closest(".frame-option"); if (!option) return; boothState.selectedFrame = boothState.frames.find(frame => frame.url === option.dataset.frameUrl); updateFrameSelection(); });
-  $("#frame-page-prev").addEventListener("click", () => { boothState.framePage -= 1; renderFrames(); });
-  $("#frame-page-next").addEventListener("click", () => { boothState.framePage += 1; renderFrames(); });
-  $("#frame-search").addEventListener("input", event => { boothState.frameQuery = event.target.value; boothState.framePage = 0; renderFrames(); });
-  $("#frame-mirror-toggle").addEventListener("click", () => { boothState.cameraMirrored = !boothState.cameraMirrored; applyCameraTransform(); });
   $("#frame-continue").addEventListener("click", createSession);
   $("#camera-start").addEventListener("click", runShotCountdown);
   $("#retake-photo").addEventListener("click", () => { setPhotoReviewVisible(false); runShotCountdown(); });

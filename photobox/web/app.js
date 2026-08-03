@@ -20,8 +20,8 @@ const defaults = {
     { name: "Event blue", url: "event-blue", builtin: true, style: "linear-gradient(145deg,#07182d,#167e9d)" },
   ],
   frame: [
-    { name: "Clean white", url: "clean-white", builtin: true, style: "linear-gradient(#eee,#ddd)" },
-    { name: "Party night", url: "party-night", builtin: true, style: "linear-gradient(135deg,#171922,#b99bdb)" },
+    { name: "Clean white", url: "clean-white", builtin: true, style: "#f4f4f0" },
+    { name: "Party night", url: "party-night", builtin: true, style: "linear-gradient(#231c39,#7a5d8a)" },
   ],
   logo: [
     { name: "Wordmark Photoslive", url: "text-logo", builtin: true },
@@ -1115,18 +1115,14 @@ function frameCanvas() {
   const paperSizes = { "4x6": [1200, 1800], "5x7": [1500, 2100], "6x8": [1800, 2400], A4: [2480, 3508] };
   const [paperWidth, height] = paperSizes[devices.paperSize] || paperSizes["4x6"];
   const strips = devices.printLayout === "full-photo" ? 1 : Math.max(1, Math.min(4, Number(devices.stripsPerSheet || 2)));
-  const width = Math.round(paperWidth / strips);
+  const width = Math.floor(paperWidth / strips);
   const divisor = ((a, b) => { while (b) [a, b] = [b, a % b]; return a; })(Math.round(width), Math.round(height));
   return { width, height, ratio: `${Math.round(width / divisor)}:${Math.round(height / divisor)}` };
 }
 
 function getFramePresentation(frameUrl = state.settings?.appearance?.activeFrame) {
   const appearance = state.settings.appearance;
-  const uploaded = state.assets.frame.map(item => {
-    const transform = appearance.frameBackgroundTransforms?.[item.url] || { zoom: 100, x: 50, y: 50 };
-    const size = Number(transform.zoom) === 100 ? "cover" : `${transform.zoom}% auto`;
-    return { ...item, style: `url('${item.url}') ${transform.x}% ${transform.y}% / ${size} no-repeat` };
-  });
+  const uploaded = state.assets.frame.map(item => ({ ...item, style: `url('${item.url}') center / cover no-repeat` }));
   const asset = [...defaults.frame, ...uploaded].find(item => item.url === frameUrl) || defaults.frame[0];
   const configuredSlots = Math.max(1, Math.min(8, Number(appearance.framePhotoSlots?.[frameUrl] || state.settings.booth.photoSlotsPerSession || 1)));
   const mode = appearance.frameLayoutModes?.[frameUrl] || "auto";
@@ -1134,7 +1130,8 @@ function getFramePresentation(frameUrl = state.settings?.appearance?.activeFrame
   const layout = mode === "single" || (mode === "auto" && slots === 1) ? "single" : "stacked";
   const slotTransforms = appearance.frameSlotTransforms?.[frameUrl] || defaultSlotTransforms(slots);
   const stickers = appearance.frameStickers?.[frameUrl] || [];
-  return { asset, configuredSlots, slots, mode, layout, slotTransforms, stickers };
+  const backgroundTransform = appearance.frameBackgroundTransforms?.[frameUrl] || { zoom: 100, x: 50, y: 50 };
+  return { asset, configuredSlots, slots, mode, layout, slotTransforms, stickers, backgroundTransform };
 }
 
 function defaultSlotTransforms(slots) {
@@ -1153,9 +1150,11 @@ function frameTemplateMarkup(frameUrl, options = {}) {
   const frame = getFramePresentation(frameUrl);
   const canvas = frameCanvas(frameUrl);
   const photoWidth = Math.max(60, Math.min(96, Number(state.settings.appearance.framePhotoWidths?.[frameUrl] || 86)));
+  const background = frame.backgroundTransform;
+  const artwork = `<div class="frame-template-artwork" style="background:${frame.asset.style};background-position:${Number(background.x ?? 50)}% ${Number(background.y ?? 50)}%!important;transform:scale(${Math.max(100, Number(background.zoom || 100)) / 100});transform-origin:${Number(background.x ?? 50)}% ${Number(background.y ?? 50)}%"></div>`;
   const cells = Array.from({ length: frame.slots }, (_, index) => `<span style="${slotTransformStyle(frame.slotTransforms[index] || defaultSlotTransforms(frame.slots)[index])}"><b>${index + 1}</b><img src="/icons/image.svg" alt="Slot foto ${index + 1}" /></span>`).join("");
   const stickers = frame.stickers.map(item => `<img class="frame-sticker" src="${item.url}" alt="Dekorasi frame" style="left:${item.x}%;top:${item.y}%;width:${item.size || 30}%;opacity:${Number(item.opacity ?? 100) / 100};z-index:${Number(item.z || 10)};transform:translate(-50%,-50%) rotate(${item.rotation || 0}deg)" />`).join("");
-  return `<div class="photo-strip frame-layout-${frame.layout}" style="--frame-art:${frame.asset.style};--frame-ratio:${canvas.width} / ${canvas.height};--photo-width:${photoWidth}%"><div class="photo-strip-slots" data-slots="${frame.slots}">${cells}</div>${stickers}</div>`;
+  return `<div class="photo-strip frame-layout-${frame.layout}" style="--frame-ratio:${canvas.width} / ${canvas.height};--photo-width:${photoWidth}%">${artwork}<div class="photo-strip-slots" data-slots="${frame.slots}">${cells}</div>${stickers}</div>`;
 }
 
 function framePreviewStripCount() {
@@ -1426,8 +1425,8 @@ async function renderFrameThumbnailImage(target, frameUrl) {
     context.drawImage(source, x, y, drawWidth, drawHeight);
   } else {
     const gradient = context.createLinearGradient(0, 0, width, height);
-    if (frameUrl === "party-night") { gradient.addColorStop(0, "#171922"); gradient.addColorStop(1, "#b99bdb"); }
-    else { gradient.addColorStop(0, "#f5f5f5"); gradient.addColorStop(1, "#d8d8d8"); }
+    if (frameUrl === "party-night") { gradient.addColorStop(0, "#231c39"); gradient.addColorStop(1, "#7a5d8a"); }
+    else { gradient.addColorStop(0, "#f4f4f0"); gradient.addColorStop(1, "#f4f4f0"); }
     context.fillStyle = gradient; context.fillRect(0, 0, width, height);
   }
   const layers = [
@@ -1555,7 +1554,7 @@ function updateFrameUploadPreview() {
   const preview = $("#frame-upload-preview");
   const stripsPerSheet = framePreviewStripCount();
   preview.style.aspectRatio = `${canvas.width * stripsPerSheet} / ${canvas.height}`;
-  const artworkStyle = `background:${pending.backgroundCss};transform:scale(${pending.zoom / 100});transform-origin:${pending.x}% ${pending.y}%`;
+  const artworkStyle = `background:${pending.backgroundCss};background-position:${pending.x}% ${pending.y}%!important;transform:scale(${pending.zoom / 100});transform-origin:${pending.x}% ${pending.y}%`;
   const slots = pending.slotTransforms.map((transform, index) => `<span class="frame-editor-element ${(pending.selected?.type === "slot" && pending.selected.index === index) || pending.selected?.type === "all-slots" ? "selected" : ""}" data-editor-type="slot" data-editor-index="${index}" style="${slotTransformStyle(transform)}"><b>${index + 1}</b><img src="/icons/image.svg" alt="Slot foto ${index + 1}" /></span>`).join("");
   const stickers = pending.stickers.map((item, index) => `<span class="frame-editor-sticker frame-editor-element ${pending.selected?.type === "sticker" && pending.selected.index === index ? "selected" : ""}" data-editor-type="sticker" data-editor-index="${index}" style="left:${item.x}%;top:${item.y}%;width:${item.size || 30}%;opacity:${Number(item.opacity ?? 100) / 100};z-index:${Number(item.z || 10 + index)};transform:translate(-50%,-50%) rotate(${item.rotation || 0}deg)"><img src="${item.url}" alt="Logo atau stiker ${index + 1}" /></span>`).join("");
   const editorStrip = `<div class="frame-editor-artwork" style="${artworkStyle}"></div><div class="photo-strip-slots modal-frame-slots" data-slots="${pending.slots}">${slots}</div>${stickers}`;
